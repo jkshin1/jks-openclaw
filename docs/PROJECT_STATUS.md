@@ -16,14 +16,15 @@ Do not promote a feature merely because a lower state passed.
 |---|---|---|
 | Gemma/LiteRT runtime | Physical accepted for the 4K GPU slice | Verified model import, streaming, cancellation, recovery, and natural `SEVERE` continuation passed on the Fold8. Natural `CRITICAL`, battery, fold/background, and 8K/16K remain unverified. Exact requested output length also failed in the sustained probe. |
 | Tool safety | Emulator verified | Manual Tool calling, typed validation, confirmation, execution interlock, and durable SQLite at-most-once claims are wired. This is not exactly-once execution. |
-| Local data foundation | Emulator verified, not product-wired | Room conversation/message/notification schema, DataStore settings, and Keystore AES-GCM vault passed 20 instrumentation tests. Chat history, summaries, notification capture, and provider credentials are not yet connected to the UI/runtime. |
+| Local data foundation | Emulator verified | Room conversation/message/notification schema, DataStore settings, and Keystore AES-GCM vault passed 20 instrumentation tests. Notification capture and provider credentials are still not connected to any UI or runtime path. |
+| Chat history | Emulator verified | Turns persist to Room and restore on launch; the history dialog switches, deletes one thread, and deletes all. Verified on the AVD by seeding the real database and driving the UI. **Bounded summaries are not implemented**: `replaceSummary` and `loadContext` exist and are tested, but nothing calls them, and no stored context is fed back into a turn. Turns remain stateless. |
 | CalendarContract tools | Emulator verified | Query, create, and update are scoped to one pinned writable calendar; confirmation, replay protection, change digest, permissions, and setup UI are implemented. Tests used a local AVD calendar. |
 | NAVER Calendar | **Not physically accepted** | The app has no direct NAVER login/API/CalDAV implementation. No real NAVER account, remote sync, Fold8, or Gemma calendar E2E receipt exists. |
 | Standard alarm tools | Emulator verified | `alarm_set` creates one-shot and repeating alarms through `AlarmClock.ACTION_SET_ALARM`; `alarm_next` reads `getNextAlarmClock()`. Both confirmed on the API 37 AVD from the app's own foreground. The platform offers no way to list, edit, or delete alarms, so no such tool exists. Not exercised through a real Gemma turn or on the Fold8. |
 | Diagnostics and thermal policy | Physical accepted for current slice | Content-free rotating diagnostics and evidence collection work. `NONE` through `SEVERE` continue, `CRITICAL` cooperatively cancels, and `EMERGENCY+` immediately cancels; the latter two branches lack natural physical evidence. |
 | Personal installation | Partially ready | Signing scripts exist, but a stable personal key and signed update-preservation receipt are still required. Play Store, AAB, and public CI are out of scope. |
 
-At this snapshot, host unit tests report 161 passes. API 37 instrumentation reports 51 tests: 50 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
+At this snapshot, host unit tests report 161 passes. API 37 instrumentation reports 60 tests: 59 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
 
 ## NAVER Calendar Qualification Gate
 
@@ -50,11 +51,23 @@ Next decision and acceptance steps:
 ## Next Milestones
 
 1. Resolve and qualify the NAVER Calendar transport above.
-2. Connect `ConversationRepository` to chat restore, bounded summaries, deletion, and settings UI.
+2. Add bounded conversation summaries and feed stored context back into a turn. Persistence,
+   restore, and deletion are done; summarization and context injection are not, and both need a
+   token budget decision first — the prompt cap is 2,048 bytes against a 4,096-token context.
 3. Add NAVER Maps travel time, Kakao notification capture/search, then web search. Android alarms
    are implemented; they still need a real Gemma tool-selection run and Fold8 evidence.
 4. Create and back up one personal signing key; verify `adb install -r` preserves model and data.
 5. Complete Fold8 fold/rotation/background, battery, offline, and natural `CRITICAL` validation.
+
+## Chat History Boundaries
+
+Stored: user prompts, assistant answers, and app-authored tool receipts. Not stored: the trusted
+per-turn preamble (its date and calendar describe one moment and would be wrong on restore), raw
+model thinking, and transient status notices such as thermal refusals.
+
+Everything lives in `noBackupFilesDir` and is excluded from cloud backup and device transfer.
+"전체 삭제" clears conversations and messages only; the action ledger is a separate database and is
+deliberately untouched, so erasing history can never re-enable an already-executed side effect.
 
 ## Alarm Platform Limits
 

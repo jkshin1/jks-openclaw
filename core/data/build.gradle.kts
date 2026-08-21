@@ -31,7 +31,9 @@ room {
 }
 
 dependencies {
-    implementation(libs.androidx.room.runtime)
+    // api, not implementation: PersonalEdgeDatabase extends RoomDatabase, so Room types are part
+    // of this module's public surface and consumers need them to hold or close the database.
+    api(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.coroutines.core)

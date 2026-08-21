@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,6 +41,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -47,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -89,6 +94,7 @@ class MainActivity : ComponentActivity() {
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
                 val pending by viewModel.confirmationCoordinator.pending.collectAsStateWithLifecycle()
                 val calendarSetup by viewModel.calendarSetup.collectAsStateWithLifecycle()
+                val chatHistory by viewModel.chatHistory.collectAsStateWithLifecycle()
 
                 // Calendar access and synced accounts can change while the app is backgrounded.
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -98,6 +104,7 @@ class MainActivity : ComponentActivity() {
                 PersonalEdgeScreen(
                     state = state,
                     calendarSetup = calendarSetup,
+                    chatHistory = chatHistory,
                     pendingConfirmation = pending,
                     onRequestCalendarPermission = {
                         requestCalendarPermissions.launch(
@@ -109,6 +116,12 @@ class MainActivity : ComponentActivity() {
                     },
                     onPinCalendar = viewModel::pinCalendar,
                     onUnpinCalendar = viewModel::unpinCalendar,
+                    onOpenHistory = viewModel::openHistory,
+                    onCloseHistory = viewModel::closeHistory,
+                    onNewConversation = viewModel::startNewConversation,
+                    onSwitchConversation = viewModel::switchConversation,
+                    onDeleteConversation = viewModel::deleteConversation,
+                    onDeleteAllConversations = viewModel::deleteAllConversations,
                     onPromptChange = viewModel::updatePrompt,
                     onImportModel = { openModelDocument.launch(arrayOf("application/octet-stream", "*/*")) },
                     onInspectModel = viewModel::inspectInstalledModel,
@@ -127,10 +140,17 @@ class MainActivity : ComponentActivity() {
 private fun PersonalEdgeScreen(
     state: PersonalEdgeUiState,
     calendarSetup: CalendarSetupState,
+    chatHistory: ChatHistoryState,
     pendingConfirmation: PendingConfirmation?,
     onRequestCalendarPermission: () -> Unit,
     onPinCalendar: (CalendarOption) -> Unit,
     onUnpinCalendar: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onCloseHistory: () -> Unit,
+    onNewConversation: () -> Unit,
+    onSwitchConversation: (String) -> Unit,
+    onDeleteConversation: (String) -> Unit,
+    onDeleteAllConversations: () -> Unit,
     onPromptChange: (String) -> Unit,
     onImportModel: () -> Unit,
     onInspectModel: () -> Unit,
@@ -149,16 +169,31 @@ private fun PersonalEdgeScreen(
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = "Personal Edge Agent",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = "LLM은 판단하고, Kotlin Runtime이 통제하며, Tool이 실행합니다.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Personal Edge Agent",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "LLM은 판단하고, Kotlin Runtime이 통제하며, Tool이 실행합니다.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // Both are disabled mid-turn: switching threads under a streaming answer would
+                // attribute it to the wrong conversation.
+                TextButton(onClick = onNewConversation, enabled = state.activeTurnId == null) {
+                    Text("새 대화")
+                }
+                TextButton(onClick = onOpenHistory, enabled = state.activeTurnId == null) {
+                    Text("기록")
+                }
+            }
 
             ModelStatusCard(
                 state = state,
@@ -209,6 +244,16 @@ private fun PersonalEdgeScreen(
         }
     }
 
+    if (chatHistory.visible) {
+        ConversationHistoryDialog(
+            history = chatHistory,
+            onDismiss = onCloseHistory,
+            onSwitch = onSwitchConversation,
+            onDelete = onDeleteConversation,
+            onDeleteAll = onDeleteAllConversations,
+        )
+    }
+
     if (pendingConfirmation != null) {
         AlertDialog(
             onDismissRequest = { onConfirmation(pendingConfirmation.actionId, false) },
@@ -240,6 +285,115 @@ private fun PersonalEdgeScreen(
             },
         )
     }
+}
+
+@Composable
+private fun ConversationHistoryDialog(
+    history: ChatHistoryState,
+    onDismiss: () -> Unit,
+    onSwitch: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onDeleteAll: () -> Unit,
+) {
+    var confirmingDeleteAll by rememberSaveable { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("대화 기록") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (history.conversations.isEmpty()) {
+                    Text(
+                        text = "저장된 대화가 없습니다.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    Text(
+                        text = "대화는 기기 안에만 저장되며 백업에 포함되지 않습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 320.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        items(history.conversations, key = ConversationSummaryUi::id) { conversation ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TextButton(
+                                    onClick = { onSwitch(conversation.id) },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(
+                                        text = if (conversation.id == history.activeConversationId) {
+                                            "✓ ${conversation.title}"
+                                        } else {
+                                            conversation.title
+                                        },
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+                                TextButton(onClick = { onDelete(conversation.id) }) {
+                                    Text("삭제", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                history.error?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
+                if (confirmingDeleteAll) {
+                    Text(
+                        text = "모든 대화를 지웁니다. 되돌릴 수 없습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (history.conversations.isEmpty()) {
+                TextButton(onClick = onDismiss) { Text("닫기") }
+            } else if (confirmingDeleteAll) {
+                TextButton(
+                    onClick = {
+                        confirmingDeleteAll = false
+                        onDeleteAll()
+                    },
+                ) {
+                    Text("모두 삭제", color = MaterialTheme.colorScheme.error)
+                }
+            } else {
+                // Two taps, because this is the one action in the dialog with no undo.
+                TextButton(onClick = { confirmingDeleteAll = true }) {
+                    Text("전체 삭제", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        dismissButton = {
+            if (history.conversations.isNotEmpty()) {
+                TextButton(
+                    onClick = {
+                        confirmingDeleteAll = false
+                        onDismiss()
+                    },
+                ) {
+                    Text("닫기")
+                }
+            }
+        },
+    )
 }
 
 @Composable

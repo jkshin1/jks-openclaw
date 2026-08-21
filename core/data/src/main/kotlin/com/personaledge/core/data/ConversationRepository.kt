@@ -43,6 +43,21 @@ class ConversationRepository(
     ): Flow<List<MessageEntity>> =
         messageDao.observe(conversationId, limit.coerceIn(1, MAX_MESSAGES_PER_READ))
 
+    /** One-shot read for the history list. Prefer [observeRecentConversations] for live UI. */
+    suspend fun recentConversations(
+        limit: Int = DEFAULT_CONVERSATION_PAGE,
+    ): List<ConversationEntity> = conversationDao.listRecent(limit.coerceIn(1, MAX_CONVERSATION_PAGE))
+
+    /** The thread to restore on launch, or null when nothing has been stored yet. */
+    suspend fun mostRecentConversation(): ConversationEntity? =
+        conversationDao.listRecent(1).firstOrNull()
+
+    suspend fun listMessages(
+        conversationId: String,
+        limit: Int = MAX_MESSAGES_PER_READ,
+    ): List<MessageEntity> =
+        messageDao.list(conversationId, limit.coerceIn(1, MAX_MESSAGES_PER_READ))
+
     suspend fun createConversation(title: String): String {
         val now = clock()
         val conversation = ConversationEntity(

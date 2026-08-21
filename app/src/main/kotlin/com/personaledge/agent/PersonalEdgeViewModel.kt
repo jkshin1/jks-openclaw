@@ -10,8 +10,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.personaledge.core.agent.AgentEvent
 import com.personaledge.core.agent.AgentFailureCode
+import com.personaledge.core.agent.AgentLoopLimits
 import com.personaledge.core.agent.ManualToolAgentController
 import com.personaledge.core.agent.ManualToolRegistry
+import com.personaledge.core.data.MessageRole
 import com.personaledge.core.diagnostics.DiagnosticBackend
 import com.personaledge.core.diagnostics.DiagnosticConfirmationOutcome
 import com.personaledge.core.diagnostics.DiagnosticErrorCode
@@ -48,11 +50,13 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class ModelUiStatus {
     CHECKING,
@@ -170,6 +174,10 @@ class PersonalEdgeViewModel(
     )
     val uiState: StateFlow<PersonalEdgeUiState> = _uiState.asStateFlow()
 
+    private val history = ChatHistoryCoordinator(container.conversations)
+    private val _chatHistory = MutableStateFlow(ChatHistoryState())
+    val chatHistory: StateFlow<ChatHistoryState> = _chatHistory.asStateFlow()
+
     private var verifiedModel: VerifiedInstalledModel? = null
     private var modelJob: Job? = null
     private var turnJob: Job? = null
@@ -178,6 +186,7 @@ class PersonalEdgeViewModel(
     private val thermalDirectiveSubscription: AutoCloseable
 
     init {
+        restoreConversation()
         thermalDirectiveSubscription = thermalMonitor.setDirectiveListener(::applyThermalObservation)
         viewModelScope.launch {
             var lastRecordedStatus: DiagnosticThermalStatus? = null
@@ -471,6 +480,89 @@ class PersonalEdgeViewModel(
         }.also(thermalInitialization.job::set)
     }
 
+    /**
+     * Restores the most recent thread so closing and reopening the app does not look like data
+     * loss. Only stored roles come back; transient status notices are not persisted.
+     */
+    private fun restoreConversation() {
+        viewModelScope.launch {
+            val restored = history.restoreMostRecent()
+            _chatHistory.update { state ->
+                state.copy(activeConversationId = restored.conversationId)
+            }
+            if (restored.entries.isNotEmpty()) {
+                _uiState.update { state -> state.copy(messages = restored.entries) }
+            }
+        }
+    }
+
+    fun openHistory() {
+        viewModelScope.launch {
+            _chatHistory.update { state ->
+                state.copy(visible = true, conversations = history.listConversations(), error = null)
+            }
+        }
+    }
+
+    fun closeHistory() {
+        _chatHistory.update { state -> state.copy(visible = false, error = null) }
+    }
+
+    /** Leaves the stored thread untouched; the next message creates a new one. */
+    fun startNewConversation() {
+        if (_uiState.value.activeTurnId != null) return
+        _chatHistory.update { state -> state.copy(activeConversationId = null, visible = false) }
+        _uiState.update { state -> state.copy(messages = emptyList()) }
+    }
+
+    fun switchConversation(conversationId: String) {
+        if (_uiState.value.activeTurnId != null) return
+        viewModelScope.launch {
+            val restored = history.switchTo(conversationId)
+            _chatHistory.update { state ->
+                state.copy(activeConversationId = restored.conversationId, visible = false)
+            }
+            _uiState.update { state -> state.copy(messages = restored.entries) }
+        }
+    }
+
+    fun deleteConversation(conversationId: String) {
+        if (_uiState.value.activeTurnId != null) return
+        viewModelScope.launch {
+            val deleted = history.delete(conversationId)
+            val clearedActive = deleted && _chatHistory.value.activeConversationId == conversationId
+            if (clearedActive) {
+                _uiState.update { state -> state.copy(messages = emptyList()) }
+            }
+            _chatHistory.update { state ->
+                state.copy(
+                    conversations = history.listConversations(),
+                    activeConversationId = if (clearedActive) null else state.activeConversationId,
+                    error = if (deleted) null else "대화를 삭제하지 못했습니다.",
+                )
+            }
+        }
+    }
+
+    /**
+     * Erases every stored transcript. The action ledger lives in a separate database and is
+     * deliberately untouched, so this cannot re-enable an already-executed side effect.
+     */
+    fun deleteAllConversations() {
+        if (_uiState.value.activeTurnId != null) return
+        viewModelScope.launch {
+            val deleted = history.deleteAll()
+            _uiState.update { state -> state.copy(messages = emptyList()) }
+            _chatHistory.update { state ->
+                state.copy(
+                    conversations = history.listConversations(),
+                    activeConversationId = null,
+                    error = if (deleted) null else "대화 기록을 모두 삭제하지 못했습니다.",
+                )
+            }
+        }
+    }
+
     private val _calendarSetup = MutableStateFlow(CalendarSetupState())
     val calendarSetup: StateFlow<CalendarSetupState> = _calendarSetup.asStateFlow()
 
@@ -632,6 +724,14 @@ class PersonalEdgeViewModel(
         turnJob = viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             val requestText = withTrustedTurnContext(prompt)
+            // The typed prompt is stored, never the derived preamble: the date and calendar in it
+            // describe the moment of the turn and would be wrong on restore.
+            val conversationId = history.ensureConversation(
+                activeConversationId = _chatHistory.value.activeConversationId,
+                firstPrompt = prompt,
+            )
+            _chatHistory.update { state -> state.copy(activeConversationId = conversationId) }
+            history.record(conversationId, MessageRole.USER, prompt)
             diagnostics.markPhase(DiagnosticPhase.TURN_PROCESSING)
             diagnostics.recordSafely(
                 DiagnosticEvent.TurnStarted(requestText.toByteArray(Charsets.UTF_8).size),
@@ -682,10 +782,20 @@ class PersonalEdgeViewModel(
                             assistantPhase++
                             val nextAssistantEntryId =
                                 "assistant-${turnId.value}-$assistantPhase"
-                            recordToolAndAdvanceAssistant(
+                            val finalizedAssistantText = recordToolAndAdvanceAssistant(
                                 toolName = event.toolName,
                                 currentAssistantEntryId = assistantEntryId,
                                 nextAssistantEntryId = nextAssistantEntryId,
+                            )
+                            history.record(
+                                conversationId,
+                                MessageRole.ASSISTANT,
+                                finalizedAssistantText,
+                            )
+                            history.record(
+                                conversationId,
+                                MessageRole.TOOL_RECEIPT,
+                                toolReceiptText(event.toolName),
                             )
                             assistantEntryId = nextAssistantEntryId
                         }
@@ -772,6 +882,15 @@ class PersonalEdgeViewModel(
                 removeMessageIfBlank(assistantEntryId)
                 addMessage(ChatRole.STATUS, "예기치 않은 오류로 요청을 중단했습니다.")
             } finally {
+                // NonCancellable so a cancelled or thermally stopped turn still keeps whatever the
+                // model had already produced; a partial answer is history, not garbage.
+                withContext(NonCancellable) {
+                    history.record(
+                        conversationId,
+                        MessageRole.ASSISTANT,
+                        currentMessageText(assistantEntryId),
+                    )
+                }
                 activeThermalTurn.compareAndSet(thermalTurn, null)
                 _uiState.update { state ->
                     if (state.activeTurnId == turnId) state.copy(activeTurnId = null) else state
@@ -847,11 +966,16 @@ class PersonalEdgeViewModel(
         else -> "확인된 Tool을 실행했습니다."
     }
 
+    private fun currentMessageText(id: String): String =
+        _uiState.value.messages.firstOrNull { entry -> entry.id == id }?.text.orEmpty()
+
+    /** Returns the assistant text being closed off, so the caller can persist it in order. */
     private fun recordToolAndAdvanceAssistant(
         toolName: String,
         currentAssistantEntryId: String,
         nextAssistantEntryId: String,
-    ) {
+    ): String {
+        val finalizedText = currentMessageText(currentAssistantEntryId)
         _uiState.update { state ->
             val transcript = state.messages.filterNot { entry ->
                 entry.id == currentAssistantEntryId && entry.text.isBlank()
@@ -867,6 +991,7 @@ class PersonalEdgeViewModel(
                 ),
             )
         }
+        return finalizedText
     }
 
     private fun removeMessageIfBlank(id: String) {
@@ -887,7 +1012,8 @@ class PersonalEdgeViewModel(
 
     private fun failureText(code: AgentFailureCode): String = when (code) {
         AgentFailureCode.BUSY -> "다른 요청이 진행 중입니다."
-        AgentFailureCode.DEADLINE_EXCEEDED -> "요청 제한 시간 60초를 초과했습니다."
+        AgentFailureCode.DEADLINE_EXCEEDED ->
+            "요청 제한 시간 ${AgentLoopLimits().deadlineMillis / 1_000}초를 초과했습니다."
         AgentFailureCode.UNKNOWN_TOOL -> "등록되지 않은 Tool 호출을 차단했습니다."
         AgentFailureCode.INVALID_TOOL_CALL -> "유효하지 않은 Tool 인자를 차단했습니다."
         AgentFailureCode.TOOL_NOT_EXECUTED -> "Tool 실행이 거절되었거나 만료되었습니다."

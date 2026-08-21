@@ -27,6 +27,9 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations ORDER BY updated_at_epoch_millis DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<ConversationEntity>>
 
+    @Query("SELECT * FROM conversations ORDER BY updated_at_epoch_millis DESC LIMIT :limit")
+    suspend fun listRecent(limit: Int): List<ConversationEntity>
+
     @Query("SELECT * FROM conversations WHERE id = :conversationId")
     suspend fun find(conversationId: String): ConversationEntity?
 
