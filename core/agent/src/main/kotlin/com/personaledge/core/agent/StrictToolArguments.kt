@@ -1,7 +1,15 @@
 package com.personaledge.core.agent
 
+import com.personaledge.core.tools.CalendarCreateEventParams
+import com.personaledge.core.tools.CalendarCreateEventResult
+import com.personaledge.core.tools.CalendarEventSummary
+import com.personaledge.core.tools.CalendarQueryParams
+import com.personaledge.core.tools.CalendarQueryResult
+import com.personaledge.core.tools.CalendarUpdateEventParams
+import com.personaledge.core.tools.CalendarUpdateEventResult
 import com.personaledge.core.tools.FakeArrivalNoticeParams
 import com.personaledge.core.tools.FakeArrivalNoticeResult
+import com.personaledge.core.tools.ToolParams
 
 internal enum class ToolArgumentsError {
     OVERSIZED,
@@ -14,47 +22,59 @@ internal enum class ToolArgumentsError {
     UNSAFE_TEXT,
 }
 
-internal sealed interface ToolArgumentsParseResult {
-    data class Valid(val params: FakeArrivalNoticeParams) : ToolArgumentsParseResult
+internal sealed interface ToolArgumentsParseResult<out P : ToolParams> {
+    data class Valid<P : ToolParams>(val params: P) : ToolArgumentsParseResult<P>
 
-    data class Invalid(val error: ToolArgumentsError) : ToolArgumentsParseResult
+    data class Invalid(val error: ToolArgumentsError) : ToolArgumentsParseResult<Nothing>
 }
 
-/** Strict, flat JSON parser for the single fake-tool contract used by the first vertical slice. */
-internal class FakeArrivalNoticeArgumentsParser(
+internal sealed interface FlatFieldsResult {
+    data class Valid(val fields: Map<String, String>) : FlatFieldsResult
+
+    data class Invalid(val error: ToolArgumentsError) : FlatFieldsResult
+}
+
+/**
+ * Strict, flat, string-only JSON reader shared by every registered tool contract.
+ *
+ * Values stay strings on purpose: LiteRT-LM hands arguments over as a parsed Map that is
+ * re-serialized here, so accepting JSON numbers would let a float round-trip silently change an
+ * identifier. Tools that need a number declare a decimal string and parse it themselves.
+ */
+internal class StrictToolArgumentsReader(
     private val maxArgumentBytes: Int,
 ) {
     init {
         require(maxArgumentBytes in 64..16_384)
     }
 
-    fun parse(json: String): ToolArgumentsParseResult {
+    fun read(
+        json: String,
+        allowedFields: Set<String>,
+        requiredFields: Set<String>,
+    ): FlatFieldsResult {
+        require(allowedFields.containsAll(requiredFields))
+
         if (json.length > maxArgumentBytes) {
-            return ToolArgumentsParseResult.Invalid(ToolArgumentsError.OVERSIZED)
+            return FlatFieldsResult.Invalid(ToolArgumentsError.OVERSIZED)
         }
         if (json.toByteArray(Charsets.UTF_8).size > maxArgumentBytes) {
-            return ToolArgumentsParseResult.Invalid(ToolArgumentsError.OVERSIZED)
+            return FlatFieldsResult.Invalid(ToolArgumentsError.OVERSIZED)
         }
 
         return try {
             val fields = FlatStringObjectParser(json).parse()
-            val unknown = fields.keys - REQUIRED_FIELDS
-            if (unknown.isNotEmpty()) {
-                ToolArgumentsParseResult.Invalid(ToolArgumentsError.UNKNOWN_FIELD)
-            } else if (!fields.keys.containsAll(REQUIRED_FIELDS)) {
-                ToolArgumentsParseResult.Invalid(ToolArgumentsError.MISSING_FIELD)
-            } else if (fields.values.any(::containsUnsafeModelText)) {
-                ToolArgumentsParseResult.Invalid(ToolArgumentsError.UNSAFE_TEXT)
-            } else {
-                ToolArgumentsParseResult.Valid(
-                    FakeArrivalNoticeParams(
-                        recipient = fields.getValue(RECIPIENT),
-                        message = fields.getValue(MESSAGE),
-                    ),
-                )
+            val unknown = fields.keys - allowedFields
+            when {
+                unknown.isNotEmpty() -> FlatFieldsResult.Invalid(ToolArgumentsError.UNKNOWN_FIELD)
+                !fields.keys.containsAll(requiredFields) ->
+                    FlatFieldsResult.Invalid(ToolArgumentsError.MISSING_FIELD)
+                fields.values.any(::containsUnsafeModelText) ->
+                    FlatFieldsResult.Invalid(ToolArgumentsError.UNSAFE_TEXT)
+                else -> FlatFieldsResult.Valid(fields)
             }
         } catch (failure: ParseFailure) {
-            ToolArgumentsParseResult.Invalid(failure.error)
+            FlatFieldsResult.Invalid(failure.error)
         }
     }
 
@@ -222,9 +242,6 @@ internal class FakeArrivalNoticeArgumentsParser(
             }
 
     private companion object {
-        const val RECIPIENT = "recipient"
-        const val MESSAGE = "message"
-        val REQUIRED_FIELDS = setOf(RECIPIENT, MESSAGE)
         val JSON_WHITESPACE = charArrayOf(' ', '\t', '\n', '\r')
         val HIGH_SURROGATE_RANGE = 0xD800..0xDBFF
         val LOW_SURROGATE_RANGE = 0xDC00..0xDFFF
@@ -233,7 +250,159 @@ internal class FakeArrivalNoticeArgumentsParser(
     }
 }
 
+/** Per-tool contracts. Each one names its own fields so no tool can read another's arguments. */
+internal class FakeArrivalNoticeArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<FakeArrivalNoticeParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, ALLOWED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                FakeArrivalNoticeParams(
+                    recipient = fields.fields.getValue(RECIPIENT),
+                    message = fields.fields.getValue(MESSAGE),
+                ),
+            )
+        }
+
+    private companion object {
+        const val RECIPIENT = "recipient"
+        const val MESSAGE = "message"
+        val ALLOWED_FIELDS = setOf(RECIPIENT, MESSAGE)
+    }
+}
+
+internal class CalendarQueryArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<CalendarQueryParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, ALLOWED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                CalendarQueryParams(
+                    start = fields.fields.getValue(START),
+                    end = fields.fields.getValue(END),
+                ),
+            )
+        }
+
+    private companion object {
+        const val START = "start"
+        const val END = "end"
+        val ALLOWED_FIELDS = setOf(START, END)
+    }
+}
+
+internal class CalendarCreateEventArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<CalendarCreateEventParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, REQUIRED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                CalendarCreateEventParams(
+                    title = fields.fields.getValue(TITLE),
+                    start = fields.fields.getValue(START),
+                    end = fields.fields.getValue(END),
+                    location = fields.fields[LOCATION],
+                ),
+            )
+        }
+
+    private companion object {
+        const val TITLE = "title"
+        const val START = "start"
+        const val END = "end"
+        const val LOCATION = "location"
+        val REQUIRED_FIELDS = setOf(TITLE, START, END)
+        val ALLOWED_FIELDS = REQUIRED_FIELDS + LOCATION
+    }
+}
+
+internal class CalendarUpdateEventArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<CalendarUpdateEventParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, REQUIRED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                CalendarUpdateEventParams(
+                    eventId = fields.fields.getValue(EVENT_ID),
+                    title = fields.fields[TITLE],
+                    start = fields.fields[START],
+                    end = fields.fields[END],
+                    location = fields.fields[LOCATION],
+                ),
+            )
+        }
+
+    private companion object {
+        const val EVENT_ID = "event_id"
+        const val TITLE = "title"
+        const val START = "start"
+        const val END = "end"
+        const val LOCATION = "location"
+        val REQUIRED_FIELDS = setOf(EVENT_ID)
+        val ALLOWED_FIELDS = REQUIRED_FIELDS + setOf(TITLE, START, END, LOCATION)
+    }
+}
+
+/**
+ * Encodes the trusted result the runtime reinjects.
+ *
+ * Only app-produced values reach these strings. Calendar text originates on the device rather
+ * than from the model, but it is still escaped and was already stripped of control-token
+ * delimiters by the tool, so it cannot break out of the Gemma tool-response template.
+ */
 internal object TrustedToolResultJson {
     fun encode(result: FakeArrivalNoticeResult): String =
         """{"simulated":${result.simulated}}"""
+
+    fun encode(result: CalendarQueryResult): String = buildString {
+        append("""{"events":[""")
+        result.events.forEachIndexed { index, event ->
+            if (index > 0) append(',')
+            append(encodeEvent(event))
+        }
+        append("""],"truncated":${result.truncated}}""")
+    }
+
+    fun encode(result: CalendarCreateEventResult): String = buildString {
+        append("""{"created":${result.created}""")
+        // The id is a string so the model copies it back verbatim into calendar_update_event.
+        result.eventId?.let { id -> append(""","event_id":${quote(id.toString())}""") }
+        append('}')
+    }
+
+    fun encode(result: CalendarUpdateEventResult): String = buildString {
+        append("""{"updated":${result.updated}""")
+        result.reason?.let { reason -> append(""","reason":${quote(reason)}""") }
+        append('}')
+    }
+
+    private fun encodeEvent(event: CalendarEventSummary): String = buildString {
+        append("""{"event_id":${quote(event.eventId.toString())}""")
+        append(""","title":${quote(event.title)}""")
+        append(""","start":${quote(event.start)}""")
+        append(""","end":${quote(event.end)}""")
+        append(""","all_day":${event.allDay}""")
+        event.location?.let { location -> append(""","location":${quote(location)}""") }
+        append('}')
+    }
+
+    private fun quote(value: String): String = buildString {
+        append('"')
+        value.forEach { character ->
+            when {
+                character == '"' -> append("\\\"")
+                character == '\\' -> append("\\\\")
+                character == '\n' -> append("\\n")
+                character == '\r' -> append("\\r")
+                character == '\t' -> append("\\t")
+                character.code < 0x20 -> append("\\u%04x".format(character.code))
+                else -> append(character)
+            }
+        }
+        append('"')
+    }
 }

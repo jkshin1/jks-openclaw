@@ -135,6 +135,7 @@ if (releaseSigningKeystore == null) {
 
 dependencies {
     implementation(project(":core:agent"))
+    implementation(project(":core:data"))
     implementation(project(":core:diagnostics"))
     implementation(platform(libs.kotlin.bom))
 

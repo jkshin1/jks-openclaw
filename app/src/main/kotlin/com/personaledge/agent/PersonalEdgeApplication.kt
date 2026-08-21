@@ -18,6 +18,9 @@ class PersonalEdgeApplication : Application() {
     private lateinit var recorder: DiagnosticRecorder
     private lateinit var channel: AppDiagnosticChannel
 
+    /** Created eagerly but resolved lazily; see [AppContainer]. */
+    val container: AppContainer by lazy { AppContainer(this) }
+
     override fun onCreate() {
         super.onCreate()
         recorder = runCatching { DiagnosticRecorder.create(this) }

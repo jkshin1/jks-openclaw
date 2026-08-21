@@ -10,9 +10,10 @@ import com.personaledge.core.llm.ModelEvent
 import com.personaledge.core.llm.TrustedToolResponse
 import com.personaledge.core.llm.TurnId
 import com.personaledge.core.llm.VerifiedInstalledModel
-import com.personaledge.core.tools.FakeArrivalNoticeResult
+import com.personaledge.core.tools.AgentTool
 import com.personaledge.core.tools.PreparationResult
 import com.personaledge.core.tools.ToolOrchestrator
+import com.personaledge.core.tools.ToolParams
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -72,7 +73,7 @@ sealed interface AgentEvent {
 }
 
 /**
- * Serial, confirmation-gated tool loop for the first manual fake-tool slice.
+ * Serial, confirmation-gated tool loop.
  *
  * The controller treats model output as untrusted until registry resolution, strict decoding,
  * tool validation and confirmation all succeed. It never retries a tool-response injection.
@@ -198,12 +199,45 @@ class ManualToolAgentController(
             val resolved = registry.resolve(call.name)
                 ?: abort(AgentFailureCode.UNKNOWN_TOOL)
             val trustedResponse = when (resolved) {
-                is RegisteredManualTool.FakeArrivalNotice -> executeFakeArrivalNotice(
+                is RegisteredManualTool.FakeArrivalNotice -> runTool(
                     active = active,
                     call = call,
-                    registered = resolved,
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
                     requestOrdinal = toolCallCount,
                     deadline = deadline,
+                    parse = { json -> FakeArrivalNoticeArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    encode = TrustedToolResultJson::encode,
+                )
+                is RegisteredManualTool.CalendarQuery -> runTool(
+                    active = active,
+                    call = call,
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
+                    requestOrdinal = toolCallCount,
+                    deadline = deadline,
+                    parse = { json -> CalendarQueryArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    encode = TrustedToolResultJson::encode,
+                )
+                is RegisteredManualTool.CalendarCreateEvent -> runTool(
+                    active = active,
+                    call = call,
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
+                    requestOrdinal = toolCallCount,
+                    deadline = deadline,
+                    parse = { json -> CalendarCreateEventArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    encode = TrustedToolResultJson::encode,
+                )
+                is RegisteredManualTool.CalendarUpdateEvent -> runTool(
+                    active = active,
+                    call = call,
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
+                    requestOrdinal = toolCallCount,
+                    deadline = deadline,
+                    parse = { json -> CalendarUpdateEventArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    encode = TrustedToolResultJson::encode,
                 )
             }
 
@@ -284,16 +318,22 @@ class ManualToolAgentController(
         return CompletedModelStep(finalToolCalls.orEmpty())
     }
 
-    private suspend fun executeFakeArrivalNotice(
+    /**
+     * One shared path for every registered tool: strict decode, prepare, confirm, execute, and
+     * encode a trusted result. Keeping it single-instance means a new tool cannot accidentally
+     * skip the orchestrator, and the reinjected payload is always app-authored.
+     */
+    private suspend fun <P : ToolParams, R : Any> runTool(
         active: ActiveTurn,
         call: LlmToolCall,
-        registered: RegisteredManualTool.FakeArrivalNotice,
+        tool: AgentTool<P, R>,
+        toolName: String,
         requestOrdinal: Int,
         deadline: Long,
+        parse: (String) -> ToolArgumentsParseResult<P>,
+        encode: (R) -> String,
     ): TrustedToolResponse {
-        val parsed = FakeArrivalNoticeArgumentsParser(limits.maxToolArgumentBytes)
-            .parse(call.argumentsJson)
-        val params = when (parsed) {
+        val params = when (val parsed = parse(call.argumentsJson)) {
             is ToolArgumentsParseResult.Valid -> parsed.params
             is ToolArgumentsParseResult.Invalid -> abort(AgentFailureCode.INVALID_TOOL_CALL)
         }
@@ -304,7 +344,7 @@ class ManualToolAgentController(
         }
         val prepared = try {
             orchestrator.prepare(
-                tool = registered.tool,
+                tool = tool,
                 params = params,
                 requestId = "${active.turnId.value}:tool:$requestOrdinal",
                 lifetimeMillis = remainingMillis.coerceAtMost(MAXIMUM_ACTION_LIFETIME_MILLIS),
@@ -321,7 +361,7 @@ class ManualToolAgentController(
 
         currentCoroutineContext().ensureActive()
         ensureBeforeDeadline(deadline)
-        val result: FakeArrivalNoticeResult = try {
+        val result: R = try {
             orchestrator.execute(action)
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -333,8 +373,8 @@ class ManualToolAgentController(
 
         return TrustedToolResponse(
             callId = call.id,
-            name = registered.definition.name,
-            payloadJson = TrustedToolResultJson.encode(result),
+            name = toolName,
+            payloadJson = encode(result),
         )
     }
 

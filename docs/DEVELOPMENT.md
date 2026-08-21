@@ -39,7 +39,7 @@ processing must use KSP (or AGP's legacy kapt only as a temporary fallback).
    ./gradlew test lint assembleDebug assembleRelease
    emulator -avd "$PERSONAL_EDGE_AVD_NAME"
    # Run this from a second shell; use the serial shown by `adb devices`.
-   ANDROID_SERIAL=emulator-5554 ./gradlew :core:llm:connectedDebugAndroidTest
+   ANDROID_SERIAL=emulator-5554 ./gradlew connectedDebugAndroidTest
    ```
 
 Android Studio should use JDK 17 for Gradle. Source and bytecode compatibility remain
@@ -137,8 +137,13 @@ The first app flow is deliberately manual:
 ```text
 OpenDocument URI → verified app-private artifact → LiteRT Conversation
 → final model Tool call → SDK Map normalization → strict Kotlin validation → confirmation dialog
-→ simulated fake Tool → trusted JSON ToolResponse → same conversation
+→ execution-time interlock → durable ledger claim → Tool execution
+→ trusted JSON ToolResponse → same conversation
 ```
+
+The registered tools are `calendar_query`, `calendar_create_event`, and `calendar_update_event`.
+Grant the calendar permission and pin a calendar in the app before using them; see
+[`CALENDAR.md`](CALENDAR.md) for the NAVER-over-CalDAV setup and the scope boundary.
 
 LiteRT automatic tool calling and raw thinking output are both disabled. A denied, expired,
 invalid, oversized, unknown, or cancelled Tool call is never executed or reinserted.
@@ -152,9 +157,18 @@ token count leaves insufficient room for the pinned 1,024-token final output. Lo
 memory will be added later through bounded summaries/retrieval instead of unbounded KV
 history.
 
+## Release builds
+
+Release APKs are signed with one fixed personal key so `adb install -r` can replace the installed
+app without discarding its data or the imported 3.66GB model. Create it once with
+`./scripts/create-release-keystore.sh`, then confirm every build with
+`./scripts/verify-release-signing.sh`. A partially configured key fails the build instead of
+silently producing an unsigned APK. Backup and device-replacement steps are in
+[`RELEASE_AND_BACKUP.md`](RELEASE_AND_BACKUP.md).
+
 ## Deferred tooling
 
 Bazel, NDK, and Git LFS are not required when consuming the pinned LiteRT-LM Maven AAR.
 Install them only if the runtime itself must be rebuilt or an NPU early-access path is
-approved. Room/Hilt versions are reserved in the version catalog but are intentionally
-not wired until the first inference/tool vertical slice is stable.
+approved. Room and DataStore are wired in `core:data`; Hilt remains reserved in the version
+catalog and is intentionally not wired.

@@ -13,10 +13,10 @@ Kotlin runtime = control
 Tool = execution
 ```
 
-The project should begin with one secure vertical slice: Compose text input, on-device
-inference, a fake typed tool, Kotlin validation, confirmation, execution, and result
-reinjection. Stable integrations should only be added after that loop is measurable on
-the Fold8.
+The project began with one secure vertical slice: Compose text input, on-device inference, a fake
+typed tool, Kotlin validation, confirmation, execution, and result reinjection. That loop now
+carries real calendar tools behind a durable ledger and an execution-time interlock. Further
+integrations should follow the same order: prove the safety machinery first, then attach a tool.
 
 ## Decisions encoded in this scaffold
 
@@ -32,19 +32,25 @@ the Fold8.
    size, and SHA-256 verification plus resumable/atomic installation.
 6. Accessibility automation is outside the Play-safe MVP. Kakao new-message and Samsung
    Clock UI automation belong in an explicit sideload-only experimental variant.
-7. The initial maximum output is 1,024 tokens, not 4,000. The fake-only loop starts with
-   two model steps, one Tool call, and a 60-second budget.
+7. The maximum output is 1,024 tokens, not 4,000. The fake-only loop started with two model
+   steps, one Tool call, and a 60-second budget; real calendar work needs a read followed by a
+   write, so the loop now allows two Tool calls across four steps within 120 seconds. Revisit
+   with physical-device latency receipts, not by feel.
 8. Raw model thinking is neither displayed nor persisted.
 9. Side-effecting tools are rejected unless the orchestrator holds the module-owned
-   `PersistentActionLedger` capability. The real atomic/process-persistent implementation
-   is intentionally deferred; test fakes do not become production registrations.
+   `PersistentActionLedger` capability. `SqliteActionLedger` now provides it: a dedicated
+   no-backup database, one IMMEDIATE transaction per claim, `synchronous=FULL` so a claim is
+   durable before the side effect, and fail-closed behavior on every fault. Retention and
+   capacity are bounded, and a full ledger refuses rather than evicting a live key. The
+   resulting guarantee is at-most-once.
 10. The trusted Kotlin workflow, never model output, owns the stable request ID used to
     derive idempotency keys across retries and process restarts.
 11. `LlmRuntime` accepts an opaque `VerifiedInstalledModel`, not a raw path. Model events,
     Tool calls, cancellation, and Tool responses are typed and bound to one turn ID.
-12. The shipped demonstration Tool is truthfully `READ_ONLY` because it performs no side
-    effect, but its `minimumConfirmation` raises the effective policy to explicit user
-    confirmation. It does not pretend that an in-process ledger is durable.
+12. The demonstration Tool is truthfully `READ_ONLY` because it performs no side effect, but its
+    `minimumConfirmation` raises the effective policy to explicit user confirmation. It is kept
+    as the confirmation-path fixture and is no longer registered in the shipped registry, which
+    now holds the three calendar tools.
 13. The model package can support up to 32K context, but the first Android runtime budget
     is 4,096 total input/output tokens. A 32K CPU session reached 10GB RSS and was killed
     by LMK on the 12GB API 37 test AVD during first decode. Larger 8K/16K/32K budgets stay
@@ -65,11 +71,28 @@ the Fold8.
     outputs, Tool arguments, confirmation material, paths, URIs, and raw serials cannot enter that
     schema. Raw app logcat and bugreports remain explicit sensitive opt-ins rather than default
     evidence.
+19. An `ExecutionInterlock` is evaluated twice: before the confirmation dialog, so the user is
+    never asked for an impossible action, and again immediately before the durable claim. It
+    re-checks runtime permissions, thermal state, and the pinned calendar, because all three can
+    change while a dialog is on screen. Blocking happens before the claim, so a blocked action
+    stays retryable instead of spending its idempotency key.
+20. Conversations, messages, captured notifications, settings, and third-party credentials live in
+    `core:data` under `noBackupFilesDir` — Room with exported schemas, a Preferences DataStore,
+    and an AndroidKeyStore AES-GCM vault. The action ledger is a separate database, so clearing
+    history can never reopen a replay window.
+21. Calendar tools reach only the one calendar pinned in settings. NAVER Calendar's Open API is
+    create-only, so it arrives through a CalDAV sync client as an ordinary `CalendarContract`
+    account; scoping keeps the agent out of every other synced calendar.
 
-## Required product decisions before external tools
+## Resolved product decisions
 
-- Distribution: private sideload only, Google Play, or separate product flavors.
-- Calendar primary: `CalendarContract` on the device or Google Calendar REST/OAuth.
+- Distribution: private sideload only, signed with one fixed personal key
+  (see [`RELEASE_AND_BACKUP.md`](RELEASE_AND_BACKUP.md)).
+- Calendar primary: device `CalendarContract`, with NAVER Calendar synced in over CalDAV
+  (see [`CALENDAR.md`](CALENDAR.md)).
+
+## Required product decisions before the remaining external tools
+
 - One web-search provider and its data-retention terms.
 - NAVER Maps and search credentials: APK embedding is not sufficient; use a narrow
   gateway when secrets must remain confidential.
@@ -90,6 +113,6 @@ Polestar control, always-on voice, multimodal input, and autonomous background w
 - peak resident/GPU memory, thermal state, and battery drain;
 - tool-selection accuracy and valid-argument rate in Korean;
 - zero confirmation bypasses and zero duplicate side effects;
-- an atomic execution-time thermal/safety interlock before enabling any real side-effecting Tool;
+- the execution-time thermal/permission/account interlock holds on the physical device;
 - cancellation, timeout, process-death, and interrupted-download recovery;
 - folded/unfolded, rotation, multi-window, and background/foreground behavior.

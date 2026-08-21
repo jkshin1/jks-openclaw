@@ -2,9 +2,9 @@
 
 Galaxy Z Fold8를 우선 대상으로 하는 on-device personal AI agent Android 프로젝트입니다.
 
-현재 단계는 **첫 보안 수직 슬라이스**입니다. 고정된 Gemma 4 E4B 모델을 앱 전용
-저장소에 검증 설치하고, 실제 LiteRT-LM 텍스트 스트리밍과 수동 Tool 확인 흐름을
-실행할 수 있습니다. 외부 서비스에 실제 메시지를 보내는 Tool은 아직 포함하지 않습니다.
+고정된 Gemma 4 E4B 모델을 앱 전용 저장소에 검증 설치하고, LiteRT-LM 텍스트 스트리밍과
+확인 게이트를 거친 수동 Tool 루프를 실행합니다. 현재 등록된 실제 Tool은 캘린더
+조회·등록·수정 세 가지이며, 설정에서 선택한 캘린더 하나만 읽고 씁니다.
 
 ## Baseline
 
@@ -17,8 +17,11 @@ Galaxy Z Fold8를 우선 대상으로 하는 on-device personal AI agent Android
 - Bounded, privacy-safe on-device diagnostics in the private no-backup directory
 - Android thermal guard: debug/release 모두 `NONE`~`SEVERE` 허용, `CRITICAL` 협력 취소, `EMERGENCY+` 즉시 중단
 - LiteRT-LM automatic tool calling disabled by policy
-- Fake arrival-notice Tool: SDK-normalized arguments → exact Kotlin field/type/limit
-  validation → confirmation → simulated execution → minimal trusted result reinjection
+- Tool 경로: SDK 정규화 인자 → 엄격한 Kotlin 필드/타입/한계 검증 → 확인 다이얼로그 →
+  실행 직전 인터록 재검사 → 영구 ledger 청구 → 실행 → 최소 신뢰 결과 재주입
+- `SqliteActionLedger`: `synchronous=FULL` 영구 청구로 프로세스 종료 후에도 중복 실행 차단
+- `core:data`: Room 대화/메시지/알림 + DataStore 설정 + Keystore AES-GCM 자격증명 보관소
+- 캘린더: 네이버 캘린더를 CalDAV로 기기에 동기화한 뒤, 선택한 캘린더 하나로만 범위 제한
 
 ## Start
 
@@ -30,18 +33,23 @@ export PERSONAL_EDGE_AVD_NAME=personal_edge_api37_model
 ./scripts/test-host-scripts.sh
 ./scripts/download-model.sh
 ./scripts/verify-model.sh
+./scripts/create-release-keystore.sh   # once; see docs/RELEASE_AND_BACKUP.md
 ./gradlew test lint assembleDebug assembleRelease
+./scripts/verify-release-signing.sh
 # Start the prepared AVD, then run the device test from a second shell.
 emulator -avd "$PERSONAL_EDGE_AVD_NAME"
-ANDROID_SERIAL=emulator-5554 ./gradlew :core:llm:connectedDebugAndroidTest
+ANDROID_SERIAL=emulator-5554 ./gradlew connectedDebugAndroidTest
 # On a physical device, use the exact serial from `adb devices -l`.
 ./scripts/collect-fold8-evidence.sh --serial DEVICE_SERIAL
 ```
 
 앱에서 `모델 가져오기`를 눌러 검증된 `models/gemma-4-E4B-it.litertlm`을 선택한 뒤
-`CPU로 로드` 또는 `GPU 시도`를 선택합니다. 모델은 APK에 포함되지 않으며, 선택한
+`CPU로 로드` 또는 `GPU 시도`를 선택합니다. 캘린더 카드에서 권한을 허용하고 사용할
+캘린더를 하나 선택해야 일정 Tool이 동작합니다. 모델은 APK에 포함되지 않으며, 선택한
 파일은 고정 revision/size/SHA-256을 통과해야만 LiteRT 런타임에 전달됩니다.
 
+캘린더 연동 방식과 안전장치는 [docs/CALENDAR.md](docs/CALENDAR.md), 개인 서명키와 백업
+절차는 [docs/RELEASE_AND_BACKUP.md](docs/RELEASE_AND_BACKUP.md),
 설계 검토와 보안/MVP 결정은 [docs/ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md),
 환경 구성과 실기기 확인 절차는 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), 실제 고정
 모델의 첫 실행 근거는 [docs/REAL_MODEL_SMOKE.md](docs/REAL_MODEL_SMOKE.md), 로컬 진단 로그와

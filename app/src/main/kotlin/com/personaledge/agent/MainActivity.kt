@@ -1,7 +1,10 @@
 package com.personaledge.agent
 
+import android.Manifest
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +25,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
@@ -35,6 +40,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -63,16 +71,44 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val requestCalendarPermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        val granted = grants[Manifest.permission.READ_CALENDAR] == true &&
+            grants[Manifest.permission.WRITE_CALENDAR] == true
+        // A denial that can no longer be re-prompted has to be resolved in system settings.
+        val canAskAgain = shouldShowRequestPermissionRationale(Manifest.permission.READ_CALENDAR) ||
+            shouldShowRequestPermissionRationale(Manifest.permission.WRITE_CALENDAR)
+        viewModel.onCalendarPermissionResult(granted = granted, canAskAgain = canAskAgain)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             PersonalEdgeAgentTheme {
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
                 val pending by viewModel.confirmationCoordinator.pending.collectAsStateWithLifecycle()
+                val calendarSetup by viewModel.calendarSetup.collectAsStateWithLifecycle()
+
+                // Calendar access and synced accounts can change while the app is backgrounded.
+                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                    viewModel.refreshCalendarSetup()
+                }
 
                 PersonalEdgeScreen(
                     state = state,
+                    calendarSetup = calendarSetup,
                     pendingConfirmation = pending,
+                    onRequestCalendarPermission = {
+                        requestCalendarPermissions.launch(
+                            arrayOf(
+                                Manifest.permission.READ_CALENDAR,
+                                Manifest.permission.WRITE_CALENDAR,
+                            ),
+                        )
+                    },
+                    onPinCalendar = viewModel::pinCalendar,
+                    onUnpinCalendar = viewModel::unpinCalendar,
                     onPromptChange = viewModel::updatePrompt,
                     onImportModel = { openModelDocument.launch(arrayOf("application/octet-stream", "*/*")) },
                     onInspectModel = viewModel::inspectInstalledModel,
@@ -90,7 +126,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PersonalEdgeScreen(
     state: PersonalEdgeUiState,
+    calendarSetup: CalendarSetupState,
     pendingConfirmation: PendingConfirmation?,
+    onRequestCalendarPermission: () -> Unit,
+    onPinCalendar: (CalendarOption) -> Unit,
+    onUnpinCalendar: () -> Unit,
     onPromptChange: (String) -> Unit,
     onImportModel: () -> Unit,
     onInspectModel: () -> Unit,
@@ -128,6 +168,13 @@ private fun PersonalEdgeScreen(
                 onInitializeGpu = onInitializeGpu,
             )
 
+            CalendarSetupCard(
+                setup = calendarSetup,
+                onRequestPermission = onRequestCalendarPermission,
+                onPinCalendar = onPinCalendar,
+                onUnpinCalendar = onUnpinCalendar,
+            )
+
             Conversation(
                 messages = state.messages,
                 modifier = Modifier.weight(1f),
@@ -143,7 +190,7 @@ private fun PersonalEdgeScreen(
                     modifier = Modifier.weight(1f),
                     enabled = state.modelStatus == ModelUiStatus.READY && state.activeTurnId == null,
                     label = { Text("온디바이스 요청") },
-                    placeholder = { Text("예: 아내에게 30분 뒤 도착 알림을 가짜로 시뮬레이션해줘") },
+                    placeholder = { Text("예: 내일 오후 3시에 치과 일정 넣어줘") },
                     maxLines = 4,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { if (state.canSend) onSend() }),
@@ -170,7 +217,7 @@ private fun PersonalEdgeScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(pendingConfirmation.preview.summary)
                     Text(
-                        text = "이 첫 수직 슬라이스는 실제 메시지를 보내지 않는 시뮬레이션입니다.",
+                        text = "확인한 내용 그대로 실행됩니다. 실행 직전에 권한·열 상태·캘린더를 다시 확인합니다.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -183,7 +230,7 @@ private fun PersonalEdgeScreen(
             },
             confirmButton = {
                 Button(onClick = { onConfirmation(pendingConfirmation.actionId, true) }) {
-                    Text("시뮬레이션 실행")
+                    Text("실행")
                 }
             },
             dismissButton = {
@@ -192,6 +239,112 @@ private fun PersonalEdgeScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun CalendarSetupCard(
+    setup: CalendarSetupState,
+    onRequestPermission: () -> Unit,
+    onPinCalendar: (CalendarOption) -> Unit,
+    onUnpinCalendar: () -> Unit,
+) {
+    val context = LocalContext.current
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "캘린더",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+
+            when {
+                !setup.permissionGranted -> {
+                    Text(
+                        text = "일정 조회·등록·수정에는 캘린더 권한이 필요합니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (setup.permissionPermanentlyDenied) {
+                        Text(
+                            text = "권한 요청이 차단되어 시스템 설정에서 직접 허용해야 합니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.fromParts("package", context.packageName, null),
+                                    ),
+                                )
+                            },
+                        ) {
+                            Text("앱 설정 열기")
+                        }
+                    } else {
+                        Button(onClick = onRequestPermission) {
+                            Text("캘린더 권한 허용")
+                        }
+                    }
+                }
+
+                setup.calendars.isEmpty() -> Text(
+                    text = "동기화된 캘린더가 없습니다. 네이버 캘린더는 Open API로 조회·수정할 수 " +
+                        "없으므로, CalDAV 동기화 앱으로 기기 캘린더에 추가한 뒤 다시 확인하세요.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+
+                else -> {
+                    Text(
+                        text = if (setup.pinnedCalendarId == null) {
+                            "사용할 캘린더를 하나 선택하세요. 선택한 캘린더 밖은 읽지도 쓰지도 않습니다."
+                        } else {
+                            "선택됨: ${setup.pinnedCalendarLabel.orEmpty()}"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        setup.calendars.forEach { option ->
+                            AssistChip(
+                                onClick = { onPinCalendar(option) },
+                                enabled = option.writable,
+                                label = {
+                                    Text(
+                                        if (option.id == setup.pinnedCalendarId) {
+                                            "✓ ${option.label} · ${option.accountName}"
+                                        } else {
+                                            "${option.label} · ${option.accountName}"
+                                        },
+                                    )
+                                },
+                                colors = AssistChipDefaults.assistChipColors(),
+                            )
+                        }
+                    }
+                    if (setup.pinnedCalendarId != null) {
+                        TextButton(onClick = onUnpinCalendar) {
+                            Text("선택 해제")
+                        }
+                    }
+                }
+            }
+
+            setup.error?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
     }
 }
 
@@ -295,7 +448,7 @@ private fun Conversation(
         if (messages.isEmpty()) {
             item {
                 Text(
-                    text = "모델을 검증·로드하면 텍스트 추론과 확인 기반 가짜 Tool 루프를 시험할 수 있습니다.",
+                    text = "모델을 검증·로드하고 캘린더를 선택하면 일정 조회·등록·수정을 요청할 수 있습니다.",
                     modifier = Modifier.padding(vertical = 20.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

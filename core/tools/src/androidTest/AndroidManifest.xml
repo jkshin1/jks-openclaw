@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Declared for the test APK only. The library itself stays permission-free so a consuming
+        app decides which capabilities it actually requests; the app module declares these.
+        grantRuntimePermission can only grant a permission the manifest declares.
+    -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+
+</manifest>

@@ -1,8 +1,11 @@
 package com.personaledge.agent
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.personaledge.core.agent.AgentEvent
@@ -30,8 +33,15 @@ import com.personaledge.core.llm.ModelStoreException
 import com.personaledge.core.llm.PinnedModelManifest
 import com.personaledge.core.llm.TurnId
 import com.personaledge.core.llm.VerifiedInstalledModel
-import com.personaledge.core.tools.InProcessActionLedger
+import com.personaledge.core.tools.CalendarAccount
+import com.personaledge.core.tools.CalendarCreateEventTool
+import com.personaledge.core.tools.CalendarQueryTool
+import com.personaledge.core.tools.CalendarUpdateEventTool
 import com.personaledge.core.tools.ToolOrchestrator
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
@@ -66,6 +76,32 @@ data class ChatEntry(
     val text: String,
 )
 
+data class CalendarOption(
+    val id: Long,
+    val label: String,
+    val accountName: String,
+    val writable: Boolean,
+)
+
+/**
+ * Which calendar the agent may touch.
+ *
+ * NAVER Calendar has no read/update Open API, so it appears here only once a CalDAV sync client
+ * has published it into `CalendarContract`. The list therefore shows whatever is synced, and the
+ * user pins the NAVER one; nothing outside the pinned calendar is ever read or written.
+ */
+data class CalendarSetupState(
+    val permissionGranted: Boolean = false,
+    val permissionPermanentlyDenied: Boolean = false,
+    val calendars: List<CalendarOption> = emptyList(),
+    val pinnedCalendarId: Long? = null,
+    val pinnedCalendarLabel: String? = null,
+    val error: String? = null,
+) {
+    val isReady: Boolean
+        get() = permissionGranted && pinnedCalendarId != null
+}
+
 data class PersonalEdgeUiState(
     val modelStatus: ModelUiStatus = ModelUiStatus.CHECKING,
     val modelProgress: Float? = null,
@@ -95,14 +131,28 @@ class PersonalEdgeViewModel(
         context = application,
         cpuThreadCount = Runtime.getRuntime().availableProcessors().coerceIn(1, 4),
     )
-    private val registry = ManualToolRegistry()
+    private val container = application.appContainer()
+    private val registry = ManualToolRegistry.forCalendar(
+        queryTool = CalendarQueryTool(container.scopedCalendar),
+        createEventTool = CalendarCreateEventTool(
+            gateway = container.scopedCalendar,
+            defaultCalendarId = container::pinnedCalendarId,
+        ),
+        updateEventTool = CalendarUpdateEventTool(container.scopedCalendar),
+    )
     val confirmationCoordinator = ConfirmationCoordinator(
         diagnostics = diagnostics,
         markPhase = diagnostics::markPhase,
     )
     private val orchestrator = ToolOrchestrator(
-        actionLedger = InProcessActionLedger(),
+        // Durable and process-persistent: side-effecting tools are refused without it.
+        actionLedger = container.actionLedger,
         userConfirmationGate = confirmationCoordinator,
+        executionInterlock = DeviceExecutionInterlock(
+            context = application,
+            thermalStatus = { thermalMonitor.observation.value.status },
+            pinnedCalendarId = container::pinnedCalendarId,
+        ),
     )
     private val controller = ManualToolAgentController(
         runtime = runtime,
@@ -416,6 +466,115 @@ class PersonalEdgeViewModel(
         }.also(thermalInitialization.job::set)
     }
 
+    private val _calendarSetup = MutableStateFlow(CalendarSetupState())
+    val calendarSetup: StateFlow<CalendarSetupState> = _calendarSetup.asStateFlow()
+
+    /**
+     * Re-reads permission state, the synced calendar list, and the pinned choice.
+     *
+     * Called whenever the screen resumes because the user can revoke calendar access or remove a
+     * synced account from outside the app.
+     */
+    fun refreshCalendarSetup() {
+        viewModelScope.launch {
+            val granted = hasCalendarReadPermission()
+            val settings = runCatching { container.settings.current() }.getOrNull()
+
+            if (!granted) {
+                _calendarSetup.value = CalendarSetupState(
+                    permissionGranted = false,
+                    pinnedCalendarId = settings?.defaultCalendarId,
+                    pinnedCalendarLabel = settings?.defaultCalendarLabel,
+                )
+                return@launch
+            }
+
+            val writableIds = runCatching { container.deviceCalendars.writableCalendars() }
+                .getOrDefault(emptyList())
+                .map(CalendarAccount::id)
+                .toSet()
+            val calendars = runCatching { container.deviceCalendars.syncedCalendars() }
+
+            _calendarSetup.value = CalendarSetupState(
+                permissionGranted = true,
+                calendars = calendars.getOrDefault(emptyList()).map { calendar ->
+                    CalendarOption(
+                        id = calendar.id,
+                        label = calendar.displayName.ifBlank { "(이름 없음)" },
+                        accountName = calendar.accountName,
+                        writable = calendar.id in writableIds,
+                    )
+                },
+                pinnedCalendarId = settings?.defaultCalendarId,
+                pinnedCalendarLabel = settings?.defaultCalendarLabel,
+                error = if (calendars.isFailure) "캘린더 목록을 읽지 못했습니다." else null,
+            )
+        }
+    }
+
+    fun onCalendarPermissionResult(granted: Boolean, canAskAgain: Boolean) {
+        _calendarSetup.update { state ->
+            state.copy(permissionPermanentlyDenied = !granted && !canAskAgain)
+        }
+        refreshCalendarSetup()
+    }
+
+    /** Only a writable calendar can be pinned; a read-only one would fail at execution time. */
+    fun pinCalendar(option: CalendarOption) {
+        if (!option.writable) {
+            _calendarSetup.update { state ->
+                state.copy(error = "이 캘린더에는 쓸 수 없습니다. 동기화 설정을 확인하세요.")
+            }
+            return
+        }
+        viewModelScope.launch {
+            runCatching { container.settings.setDefaultCalendar(option.id, option.label) }
+            refreshCalendarSetup()
+        }
+    }
+
+    fun unpinCalendar() {
+        viewModelScope.launch {
+            runCatching { container.settings.setDefaultCalendar(null, null) }
+            refreshCalendarSetup()
+        }
+    }
+
+    private fun hasCalendarReadPermission(): Boolean = ContextCompat.checkSelfPermission(
+        getApplication(),
+        Manifest.permission.READ_CALENDAR,
+    ) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Prepends today's date, the device time zone, and the pinned calendar.
+     *
+     * The model cannot resolve "내일 3시" without knowing today, and a wrong guess silently books
+     * the wrong day. Every value here is read from the device or from settings, never from model
+     * output, and the whole line is dropped rather than truncated if it would push the turn past
+     * the runtime's prompt budget.
+     */
+    private suspend fun withTrustedTurnContext(prompt: String): String {
+        val preamble = runCatching {
+            val zone = ZoneId.systemDefault()
+            val now = Instant.now().atZone(zone)
+            val calendarLabel = container.settings.current().defaultCalendarLabel
+            buildString {
+                append("[현재 ")
+                append(now.format(TURN_CONTEXT_FORMAT))
+                append(", 시간대 ")
+                append(zone.id)
+                if (calendarLabel != null) {
+                    append(", 캘린더 ")
+                    append(calendarLabel)
+                }
+                append("]\n")
+            }
+        }.getOrNull() ?: return prompt
+
+        if (preamble.toByteArray(Charsets.UTF_8).size > MAX_TURN_PREAMBLE_BYTES) return prompt
+        return preamble + prompt
+    }
+
     fun sendPrompt() {
         val snapshot = _uiState.value
         val prompt = snapshot.prompt.trim()
@@ -467,9 +626,10 @@ class PersonalEdgeViewModel(
 
         turnJob = viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
+            val requestText = withTrustedTurnContext(prompt)
             diagnostics.markPhase(DiagnosticPhase.TURN_PROCESSING)
             diagnostics.recordSafely(
-                DiagnosticEvent.TurnStarted(prompt.toByteArray(Charsets.UTF_8).size),
+                DiagnosticEvent.TurnStarted(requestText.toByteArray(Charsets.UTF_8).size),
             )
             var assistantPhase = 0
             var assistantEntryId = initialAssistantEntryId
@@ -487,7 +647,7 @@ class PersonalEdgeViewModel(
                 ) {
                     throw CancellationException("Thermal policy stopped the turn before registration.")
                 }
-                controller.runTurn(turnId, prompt).collect { event ->
+                controller.runTurn(turnId, requestText).collect { event ->
                     when (event) {
                         is AgentEvent.TextDelta -> {
                             if (event.text.isNotEmpty()) {
@@ -518,6 +678,7 @@ class PersonalEdgeViewModel(
                             val nextAssistantEntryId =
                                 "assistant-${turnId.value}-$assistantPhase"
                             recordToolAndAdvanceAssistant(
+                                toolName = event.toolName,
                                 currentAssistantEntryId = assistantEntryId,
                                 nextAssistantEntryId = nextAssistantEntryId,
                             )
@@ -671,7 +832,16 @@ class PersonalEdgeViewModel(
         }
     }
 
+    /** The label comes from the trusted registry name, never from model output. */
+    private fun toolReceiptText(toolName: String): String = when (toolName) {
+        CalendarQueryTool.NAME -> "캘린더에서 일정을 읽었습니다."
+        CalendarCreateEventTool.NAME -> "캘린더에 일정을 등록했습니다."
+        CalendarUpdateEventTool.NAME -> "캘린더 일정을 수정했습니다."
+        else -> "확인된 Tool을 실행했습니다."
+    }
+
     private fun recordToolAndAdvanceAssistant(
+        toolName: String,
         currentAssistantEntryId: String,
         nextAssistantEntryId: String,
     ) {
@@ -684,7 +854,7 @@ class PersonalEdgeViewModel(
                     ChatEntry(
                         id = UUID.randomUUID().toString(),
                         role = ChatRole.TOOL,
-                        text = "확인된 가짜 도착 알림 시뮬레이션을 실행했습니다.",
+                        text = toolReceiptText(toolName),
                     ),
                     ChatEntry(nextAssistantEntryId, ChatRole.ASSISTANT, ""),
                 ),
@@ -845,6 +1015,10 @@ class PersonalEdgeViewModel(
 
     companion object {
         val modelManifest = PinnedModelManifest.value
-        private const val MAX_PROMPT_BYTES = MAX_USER_PROMPT_BYTES
+        // The typed prompt shares the runtime budget with the trusted preamble prepended below.
+        private const val MAX_TURN_PREAMBLE_BYTES = 256
+        private const val MAX_PROMPT_BYTES = MAX_USER_PROMPT_BYTES - MAX_TURN_PREAMBLE_BYTES
+        private val TURN_CONTEXT_FORMAT: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd(E) HH:mm", Locale.KOREAN)
     }
 }

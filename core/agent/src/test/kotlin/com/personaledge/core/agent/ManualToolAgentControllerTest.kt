@@ -410,7 +410,7 @@ class ManualToolAgentControllerTest {
         val fixture = fixture(monotonicClock = clock::get)
         fixture.runtime.enqueueUser(
             flow {
-                clock.set(60_001L)
+                clock.set(AgentLoopLimits().deadlineMillis + 1)
                 emit(ModelEvent.Completed(turnId))
             },
         )
