@@ -28,6 +28,7 @@ class DeviceExecutionInterlock(
     private val thermalStatus: () -> DiagnosticThermalStatus,
     private val pinnedCalendarId: suspend () -> Long?,
     private val alarmGateway: AlarmGateway,
+    private val notificationGateway: StoredNotificationGateway,
 ) : ExecutionInterlock {
     private val applicationContext = context.applicationContext
 
@@ -60,7 +61,7 @@ class DeviceExecutionInterlock(
             reason = "캘린더 쓰기 권한이 없습니다. 설정에서 허용해 주세요.",
         ) ?: pinnedCalendarReason()
         ToolCapability.SCHEDULE_ALARM -> clockAppReason()
-        ToolCapability.READ_NOTIFICATIONS,
+        ToolCapability.READ_NOTIFICATIONS -> notificationCaptureReason()
         ToolCapability.POST_NOTIFICATIONS,
         ToolCapability.NETWORK,
         // Declared but not yet wired. Refusing keeps a future tool from shipping unchecked.
@@ -83,6 +84,19 @@ class DeviceExecutionInterlock(
      * The clock app can be disabled or uninstalled between preparation and execution, and
      * `ACTION_SET_ALARM` gives no result, so an unhandled intent would look like success.
      */
+    /**
+     * Two separate gates. Notification access can stay granted long after the user turns capture
+     * off, and reading a stale store in that state would leak messages the user asked to stop
+     * collecting.
+     */
+    private suspend fun notificationCaptureReason(): String? = when {
+        !notificationGateway.accessGranted() ->
+            "알림 접근 권한이 없습니다. 설정에서 허용해 주세요."
+        !notificationGateway.captureEnabled() ->
+            "알림 수집이 꺼져 있습니다. 설정에서 켜 주세요."
+        else -> null
+    }
+
     private suspend fun clockAppReason(): String? = try {
         if (alarmGateway.clockAppAvailable()) null else "알람을 처리할 시계 앱이 없습니다."
     } catch (_: Exception) {

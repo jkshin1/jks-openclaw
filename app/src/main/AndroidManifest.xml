@@ -40,6 +40,22 @@
             android:name="libOpenCL.so"
             android:required="false" />
 
+        <!--
+            Notification access is a broad grant: once given, this service sees every notification
+            on the device. Narrowing happens in code — a package allowlist plus a user setting
+            checked on every post. exported="true" with the system-only bind permission is what
+            lets NotificationManagerService bind it; no other app can.
+        -->
+        <service
+            android:name=".KakaoNotificationListenerService"
+            android:exported="true"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -35,7 +35,9 @@ dependencies {
     // of this module's public surface and consumers need them to hold or close the database.
     api(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
-    implementation(libs.androidx.datastore.preferences)
+    // api for the same reason as Room: SettingsRepository's constructor takes a
+    // DataStore<Preferences>, so the type is part of this module's public surface.
+    api(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.coroutines.core)
     ksp(libs.androidx.room.compiler)
 

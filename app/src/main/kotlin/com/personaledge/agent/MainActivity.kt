@@ -36,6 +36,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -95,16 +96,19 @@ class MainActivity : ComponentActivity() {
                 val pending by viewModel.confirmationCoordinator.pending.collectAsStateWithLifecycle()
                 val calendarSetup by viewModel.calendarSetup.collectAsStateWithLifecycle()
                 val chatHistory by viewModel.chatHistory.collectAsStateWithLifecycle()
+                val notificationSetup by viewModel.notificationSetup.collectAsStateWithLifecycle()
 
                 // Calendar access and synced accounts can change while the app is backgrounded.
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                     viewModel.refreshCalendarSetup()
+                    viewModel.refreshNotificationSetup()
                 }
 
                 PersonalEdgeScreen(
                     state = state,
                     calendarSetup = calendarSetup,
                     chatHistory = chatHistory,
+                    notificationSetup = notificationSetup,
                     pendingConfirmation = pending,
                     onRequestCalendarPermission = {
                         requestCalendarPermissions.launch(
@@ -122,6 +126,11 @@ class MainActivity : ComponentActivity() {
                     onSwitchConversation = viewModel::switchConversation,
                     onDeleteConversation = viewModel::deleteConversation,
                     onDeleteAllConversations = viewModel::deleteAllConversations,
+                    onOpenNotificationAccess = {
+                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                    },
+                    onSetNotificationCapture = viewModel::setNotificationCaptureEnabled,
+                    onDeleteCapturedNotifications = viewModel::deleteCapturedNotifications,
                     onPromptChange = viewModel::updatePrompt,
                     onImportModel = { openModelDocument.launch(arrayOf("application/octet-stream", "*/*")) },
                     onInspectModel = viewModel::inspectInstalledModel,
@@ -141,6 +150,7 @@ private fun PersonalEdgeScreen(
     state: PersonalEdgeUiState,
     calendarSetup: CalendarSetupState,
     chatHistory: ChatHistoryState,
+    notificationSetup: NotificationSetupState,
     pendingConfirmation: PendingConfirmation?,
     onRequestCalendarPermission: () -> Unit,
     onPinCalendar: (CalendarOption) -> Unit,
@@ -151,6 +161,9 @@ private fun PersonalEdgeScreen(
     onSwitchConversation: (String) -> Unit,
     onDeleteConversation: (String) -> Unit,
     onDeleteAllConversations: () -> Unit,
+    onOpenNotificationAccess: () -> Unit,
+    onSetNotificationCapture: (Boolean) -> Unit,
+    onDeleteCapturedNotifications: () -> Unit,
     onPromptChange: (String) -> Unit,
     onImportModel: () -> Unit,
     onInspectModel: () -> Unit,
@@ -208,6 +221,13 @@ private fun PersonalEdgeScreen(
                 onRequestPermission = onRequestCalendarPermission,
                 onPinCalendar = onPinCalendar,
                 onUnpinCalendar = onUnpinCalendar,
+            )
+
+            NotificationSetupCard(
+                setup = notificationSetup,
+                onOpenAccessSettings = onOpenNotificationAccess,
+                onSetCapture = onSetNotificationCapture,
+                onDeleteCaptured = onDeleteCapturedNotifications,
             )
 
             Conversation(
@@ -497,6 +517,71 @@ private fun CalendarSetupCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotificationSetupCard(
+    setup: NotificationSetupState,
+    onOpenAccessSettings: () -> Unit,
+    onSetCapture: (Boolean) -> Unit,
+    onDeleteCaptured: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "카카오톡 알림 수집",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "알림 접근을 허용하면 이 앱은 기기의 모든 알림을 보게 됩니다. " +
+                    "저장하는 것은 카카오톡 메시지 알림뿐이며, 기기 밖으로 나가지 않습니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (!setup.accessGranted) {
+                Button(onClick = onOpenAccessSettings) {
+                    Text("알림 접근 설정 열기")
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (setup.captureEnabled) "수집 중" else "수집 꺼짐",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = setup.captureEnabled,
+                        onCheckedChange = onSetCapture,
+                    )
+                }
+                Text(
+                    text = "저장됨 ${setup.storedCount}건 · ${setup.retentionDays}일 후 자동 삭제",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onOpenAccessSettings) {
+                        Text("접근 권한 관리")
+                    }
+                    if (setup.storedCount > 0) {
+                        TextButton(onClick = onDeleteCaptured) {
+                            Text("수집 기록 삭제", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
             }
         }
     }

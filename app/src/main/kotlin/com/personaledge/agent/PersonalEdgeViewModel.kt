@@ -13,6 +13,7 @@ import com.personaledge.core.agent.AgentFailureCode
 import com.personaledge.core.agent.AgentLoopLimits
 import com.personaledge.core.agent.ManualToolAgentController
 import com.personaledge.core.agent.ManualToolRegistry
+import com.personaledge.core.data.AgentSettings
 import com.personaledge.core.data.MessageRole
 import com.personaledge.core.diagnostics.DiagnosticBackend
 import com.personaledge.core.diagnostics.DiagnosticConfirmationOutcome
@@ -41,6 +42,7 @@ import com.personaledge.core.tools.CalendarAccount
 import com.personaledge.core.tools.CalendarCreateEventTool
 import com.personaledge.core.tools.CalendarQueryTool
 import com.personaledge.core.tools.CalendarUpdateEventTool
+import com.personaledge.core.tools.NotificationSearchTool
 import com.personaledge.core.tools.ToolOrchestrator
 import java.time.Instant
 import java.time.ZoneId
@@ -108,6 +110,20 @@ data class CalendarSetupState(
         get() = permissionGranted && pinnedCalendarId != null
 }
 
+/**
+ * Notification capture is off by default and stays off until both gates are open.
+ *
+ * [accessGranted] is a system-level grant that lets this app see every notification on the device;
+ * [captureEnabled] is the user's decision to actually store KakaoTalk messages. Showing them
+ * separately makes it obvious that revoking one does not revoke the other.
+ */
+data class NotificationSetupState(
+    val accessGranted: Boolean = false,
+    val captureEnabled: Boolean = false,
+    val storedCount: Long = 0,
+    val retentionDays: Int = AgentSettings.DEFAULT_NOTIFICATION_RETENTION_DAYS,
+)
+
 data class PersonalEdgeUiState(
     val modelStatus: ModelUiStatus = ModelUiStatus.CHECKING,
     val modelProgress: Float? = null,
@@ -147,6 +163,7 @@ class PersonalEdgeViewModel(
         updateEventTool = CalendarUpdateEventTool(container.scopedCalendar),
         alarmSetTool = AlarmSetTool(container.alarms),
         alarmNextTool = AlarmNextTool(container.alarms),
+        notificationSearchTool = NotificationSearchTool(container.notificationGateway),
     )
     val confirmationCoordinator = ConfirmationCoordinator(
         diagnostics = diagnostics,
@@ -161,6 +178,7 @@ class PersonalEdgeViewModel(
             thermalStatus = { thermalMonitor.observation.value.status },
             pinnedCalendarId = container::pinnedCalendarId,
             alarmGateway = container.alarms,
+            notificationGateway = container.notificationGateway,
         ),
     )
     private val controller = ManualToolAgentController(
@@ -560,6 +578,38 @@ class PersonalEdgeViewModel(
                     error = if (deleted) null else "대화 기록을 모두 삭제하지 못했습니다.",
                 )
             }
+        }
+    }
+
+    private val _notificationSetup = MutableStateFlow(NotificationSetupState())
+    val notificationSetup: StateFlow<NotificationSetupState> = _notificationSetup.asStateFlow()
+
+    /** Re-read on resume: notification access is granted outside this app and can be revoked there. */
+    fun refreshNotificationSetup() {
+        viewModelScope.launch {
+            val settings = runCatching { container.settings.current() }.getOrNull()
+            _notificationSetup.value = NotificationSetupState(
+                accessGranted = container.notificationGateway.accessGranted(),
+                captureEnabled = settings?.notificationCaptureEnabled ?: false,
+                storedCount = container.notificationGateway.storedCount(),
+                retentionDays = settings?.notificationRetentionDays
+                    ?: AgentSettings.DEFAULT_NOTIFICATION_RETENTION_DAYS,
+            )
+        }
+    }
+
+    fun setNotificationCaptureEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            runCatching { container.settings.setNotificationCaptureEnabled(enabled) }
+            refreshNotificationSetup()
+        }
+    }
+
+    /** Erases captured messages without touching the grant, so capture can continue afterwards. */
+    fun deleteCapturedNotifications() {
+        viewModelScope.launch {
+            container.notificationGateway.deleteAll()
+            refreshNotificationSetup()
         }
     }
 
@@ -963,6 +1013,7 @@ class PersonalEdgeViewModel(
         CalendarUpdateEventTool.NAME -> "캘린더 일정을 수정했습니다."
         AlarmSetTool.NAME -> "시계 앱에 알람 추가를 요청했습니다."
         AlarmNextTool.NAME -> "다음 알람 시각을 확인했습니다."
+        NotificationSearchTool.NAME -> "수집된 카카오톡 알림을 검색했습니다."
         else -> "확인된 Tool을 실행했습니다."
     }
 

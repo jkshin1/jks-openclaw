@@ -25,6 +25,8 @@ Galaxy Z Fold8를 우선 대상으로 하는 on-device personal AI agent Android
   CalDAV 미지원 때문에 별도 Fold8 qualification gate로 유지
 - 알람: 표준 `AlarmClock` 인텐트로 1회/반복 알람 생성, `getNextAlarmClock()`로 다음 알람 1건
   조회. 목록·수정·삭제는 공개 API가 없어 제공하지 않음
+- 카카오톡 알림 수집: 기본 꺼짐. 시스템 알림 접근 + 앱 설정 두 관문을 모두 통과해야 저장·검색되며,
+  카카오톡 메시지 알림만 보관합니다. 대화 이력이 아니라 수집된 알림의 로컬 캐시입니다
 
 ## Start
 

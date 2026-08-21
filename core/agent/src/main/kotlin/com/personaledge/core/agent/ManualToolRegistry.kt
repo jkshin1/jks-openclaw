@@ -7,6 +7,7 @@ import com.personaledge.core.tools.CalendarCreateEventTool
 import com.personaledge.core.tools.CalendarQueryTool
 import com.personaledge.core.tools.CalendarUpdateEventTool
 import com.personaledge.core.tools.FakeArrivalNoticeTool
+import com.personaledge.core.tools.NotificationSearchTool
 
 /**
  * Closed registry. A tool the model names but this map does not contain is never executed, and
@@ -54,6 +55,7 @@ class ManualToolRegistry private constructor(
             updateEventTool: CalendarUpdateEventTool,
             alarmSetTool: AlarmSetTool,
             alarmNextTool: AlarmNextTool,
+            notificationSearchTool: NotificationSearchTool,
         ): ManualToolRegistry = ManualToolRegistry(
             mapOf(
                 CalendarQueryTool.NAME to RegisteredManualTool.CalendarQuery(queryTool),
@@ -65,6 +67,9 @@ class ManualToolRegistry private constructor(
                 ),
                 AlarmSetTool.NAME to RegisteredManualTool.AlarmSet(alarmSetTool),
                 AlarmNextTool.NAME to RegisteredManualTool.AlarmNext(alarmNextTool),
+                NotificationSearchTool.NAME to RegisteredManualTool.NotificationSearch(
+                    notificationSearchTool,
+                ),
             ),
         )
     }
@@ -132,6 +137,16 @@ internal sealed interface RegisteredManualTool {
             parametersJsonSchema = ALARM_NEXT_SCHEMA,
         )
     }
+
+    data class NotificationSearch(
+        val tool: NotificationSearchTool,
+    ) : RegisteredManualTool {
+        override val definition = LlmToolDefinition(
+            name = tool.descriptor.name,
+            description = tool.descriptor.description,
+            parametersJsonSchema = NOTIFICATION_SEARCH_SCHEMA,
+        )
+    }
 }
 
 private const val FAKE_ARRIVAL_NOTICE_SCHEMA =
@@ -155,3 +170,8 @@ private const val ALARM_SET_SCHEMA =
 // The device exposes one next alarm, so there is nothing to select and no argument to take.
 private const val ALARM_NEXT_SCHEMA =
     """{"type":"object","properties":{},"required":[],"additionalProperties":false}"""
+
+// The description states the boundary explicitly: this is a local cache of notifications, not
+// KakaoTalk history, so an empty result means "nothing was captured", not "no messages exist".
+private const val NOTIFICATION_SEARCH_SCHEMA =
+    """{"type":"object","properties":{"query":{"type":"string","description":"Optional text to match against sender, room name, or message body. Omit to list the most recent captured notifications.","maxLength":60},"within_days":{"type":"string","description":"How many days back to search, as a decimal string from 1 to 30. Defaults to 3.","pattern":"^([1-9]|[12][0-9]|30)$"}},"required":[],"additionalProperties":false}"""

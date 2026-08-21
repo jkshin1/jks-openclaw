@@ -11,7 +11,10 @@ import com.personaledge.core.tools.CalendarQueryParams
 import com.personaledge.core.tools.CalendarQueryResult
 import com.personaledge.core.tools.CalendarUpdateEventParams
 import com.personaledge.core.tools.CalendarUpdateEventResult
+import com.personaledge.core.tools.CapturedMessageSummary
 import com.personaledge.core.tools.FakeArrivalNoticeParams
+import com.personaledge.core.tools.NotificationSearchParams
+import com.personaledge.core.tools.NotificationSearchResult
 import com.personaledge.core.tools.FakeArrivalNoticeResult
 import com.personaledge.core.tools.ToolParams
 
@@ -386,6 +389,27 @@ internal class AlarmNextArgumentsParser(maxArgumentBytes: Int) {
         }
 }
 
+internal class NotificationSearchArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<NotificationSearchParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, emptySet())) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                NotificationSearchParams(
+                    query = fields.fields[QUERY],
+                    withinDays = fields.fields[WITHIN_DAYS],
+                ),
+            )
+        }
+
+    private companion object {
+        const val QUERY = "query"
+        const val WITHIN_DAYS = "within_days"
+        val ALLOWED_FIELDS = setOf(QUERY, WITHIN_DAYS)
+    }
+}
+
 /**
  * Encodes the trusted result the runtime reinjects.
  *
@@ -428,9 +452,30 @@ internal object TrustedToolResultJson {
         append('}')
     }
 
+    fun encode(result: NotificationSearchResult): String = buildString {
+        append("""{"messages":[""")
+        result.messages.forEachIndexed { index, message ->
+            if (index > 0) append(',')
+            append(encodeMessage(message))
+        }
+        append("""],"truncated":${result.truncated}}""")
+    }
+
     fun encode(result: CalendarUpdateEventResult): String = buildString {
         append("""{"updated":${result.updated}""")
         result.reason?.let { reason -> append(""","reason":${quote(reason)}""") }
+        append('}')
+    }
+
+    private fun encodeMessage(message: CapturedMessageSummary): String = buildString {
+        append("""{"conversation":${quote(message.conversation)}""")
+        // Absent rather than empty: the platform states a sender only for MessagingStyle posts,
+        // and an empty string would read as an unnamed person.
+        message.sender?.takeIf(String::isNotBlank)?.let { sender ->
+            append(""","sender":${quote(sender)}""")
+        }
+        append(""","text":${quote(message.text)}""")
+        append(""","received_at":${quote(message.receivedAt)}""")
         append('}')
     }
 

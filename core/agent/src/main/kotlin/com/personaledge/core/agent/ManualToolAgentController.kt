@@ -259,6 +259,18 @@ class ManualToolAgentController(
                     parse = { json -> AlarmNextArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
                     encode = TrustedToolResultJson::encode,
                 )
+                is RegisteredManualTool.NotificationSearch -> runTool(
+                    active = active,
+                    call = call,
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
+                    requestOrdinal = toolCallCount,
+                    deadline = deadline,
+                    parse = { json ->
+                        NotificationSearchArgumentsParser(limits.maxToolArgumentBytes).parse(json)
+                    },
+                    encode = TrustedToolResultJson::encode,
+                )
             }
 
             currentCoroutineContext().ensureActive()

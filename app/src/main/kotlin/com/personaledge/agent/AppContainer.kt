@@ -2,6 +2,7 @@ package com.personaledge.agent
 
 import android.app.Application
 import com.personaledge.core.data.ConversationRepository
+import com.personaledge.core.data.NotificationRepository
 import com.personaledge.core.data.PersonalEdgeDatabase
 import com.personaledge.core.data.SecretVault
 import com.personaledge.core.data.SettingsRepository
@@ -26,6 +27,17 @@ class AppContainer(application: Application) {
     val database: PersonalEdgeDatabase by lazy { PersonalEdgeDatabase.open(application) }
 
     val conversations: ConversationRepository by lazy { ConversationRepository(database) }
+
+    val notifications: NotificationRepository by lazy { NotificationRepository(database) }
+
+    /** Read side of the capture store, plus the two gates the interlock re-checks. */
+    val notificationGateway: StoredNotificationGateway by lazy {
+        StoredNotificationGateway(
+            context = application,
+            notifications = notifications,
+            settings = settings,
+        )
+    }
 
     val secretVault: SecretVault by lazy { SecretVault.create(application) }
 

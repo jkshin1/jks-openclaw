@@ -21,10 +21,11 @@ Do not promote a feature merely because a lower state passed.
 | CalendarContract tools | Emulator verified | Query, create, and update are scoped to one pinned writable calendar; confirmation, replay protection, change digest, permissions, and setup UI are implemented. Tests used a local AVD calendar. |
 | NAVER Calendar | **Not physically accepted** | The app has no direct NAVER login/API/CalDAV implementation. No real NAVER account, remote sync, Fold8, or Gemma calendar E2E receipt exists. |
 | Standard alarm tools | Emulator verified | `alarm_set` creates one-shot and repeating alarms through `AlarmClock.ACTION_SET_ALARM`; `alarm_next` reads `getNextAlarmClock()`. Both confirmed on the API 37 AVD from the app's own foreground. The platform offers no way to list, edit, or delete alarms, so no such tool exists. Not exercised through a real Gemma turn or on the Fold8. |
+| Kakao notification capture | Emulator verified, one gap | Listener binds, non-allowlisted posts are ignored, capture is off by default behind two gates, and search/retention/erasure are covered. Text is stripped of control tokens and invisible formatting before storage. **The accept path for com.kakao.talk itself is not end-to-end verified**: a test cannot post as another package, so real capture is a Fold8 check. |
 | Diagnostics and thermal policy | Physical accepted for current slice | Content-free rotating diagnostics and evidence collection work. `NONE` through `SEVERE` continue, `CRITICAL` cooperatively cancels, and `EMERGENCY+` immediately cancels; the latter two branches lack natural physical evidence. |
 | Personal installation | Partially ready | Signing scripts exist, but a stable personal key and signed update-preservation receipt are still required. Play Store, AAB, and public CI are out of scope. |
 
-At this snapshot, host unit tests report 161 passes. API 37 instrumentation reports 60 tests: 59 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
+At this snapshot, host unit tests report 171 passes. API 37 instrumentation reports 79 tests: 78 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
 
 ## NAVER Calendar Qualification Gate
 
@@ -54,8 +55,9 @@ Next decision and acceptance steps:
 2. Add bounded conversation summaries and feed stored context back into a turn. Persistence,
    restore, and deletion are done; summarization and context injection are not, and both need a
    token budget decision first — the prompt cap is 2,048 bytes against a 4,096-token context.
-3. Add NAVER Maps travel time, Kakao notification capture/search, then web search. Android alarms
-   are implemented; they still need a real Gemma tool-selection run and Fold8 evidence.
+3. Add NAVER Maps travel time, then web search; both are blocked on a credential-handling
+   decision. Android alarms and Kakao notification capture are implemented and still need a real
+   Gemma tool-selection run and Fold8 evidence.
 4. Create and back up one personal signing key; verify `adb install -r` preserves model and data.
 5. Complete Fold8 fold/rotation/background, battery, offline, and natural `CRITICAL` validation.
 
@@ -68,6 +70,18 @@ model thinking, and transient status notices such as thermal refusals.
 Everything lives in `noBackupFilesDir` and is excluded from cloud backup and device transfer.
 "전체 삭제" clears conversations and messages only; the action ledger is a separate database and is
 deliberately untouched, so erasing history can never re-enable an already-executed side effect.
+
+## Notification Capture Boundaries
+
+Notification access lets this app see every notification on the device. Two gates narrow it: the
+system grant, and a `notificationCaptureEnabled` setting that is off by default and re-read on
+every post. The interlock re-checks both before any read, so turning capture off also stops the
+existing store from being searched.
+
+Captured data is a local cache of notifications, never chat history — it cannot see muted rooms,
+messages from before the feature was enabled, or hidden previews. Never describe it as reading
+KakaoTalk. There is no send path and none is planned. Details are in
+[`NOTIFICATIONS.md`](NOTIFICATIONS.md).
 
 ## Alarm Platform Limits
 
