@@ -29,6 +29,8 @@ data class ToolDescriptor(
     val risk: ToolRisk,
     /** A tool may strengthen, but never weaken, the risk-derived requirement. */
     val minimumConfirmation: ConfirmationRequirement = ConfirmationRequirement.NotRequired,
+    /** Runtime preconditions the [ExecutionInterlock], not the tool itself, must re-verify. */
+    val requiredCapabilities: Set<ToolCapability> = emptySet(),
 )
 
 enum class ToolRisk {
@@ -63,6 +65,8 @@ class PreparedAction<P : ToolParams, R : Any> internal constructor(
     val confirmation: ConfirmationRequirement,
     val parameterDigest: String,
     val idempotencyKey: String,
+    val requiredCapabilities: Set<ToolCapability>,
+    val risk: ToolRisk,
     internal val canonicalInput: CanonicalToolInput,
     internal val tool: AgentTool<P, R>,
     internal val permit: ExecutionPermit,

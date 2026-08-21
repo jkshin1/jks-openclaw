@@ -32,6 +32,7 @@ rootProject.name = "personal-edge-agent"
 
 include(":app")
 include(":core:agent")
+include(":core:data")
 include(":core:llm")
 include(":core:tools")
 include(":core:diagnostics")

@@ -35,6 +35,7 @@ class ToolOrchestrator(
     private val userConfirmationGate: UserConfirmationGate = UserConfirmationGate { false },
     private val strongAuthenticationGate: StrongAuthenticationGate =
         StrongAuthenticationGate { false },
+    private val executionInterlock: ExecutionInterlock = CapabilityFreeInterlock(),
     private val confirmationPolicy: ConfirmationPolicy = ConfirmationPolicy(),
     private val clock: () -> Long = System::currentTimeMillis,
     private val idFactory: () -> String = { UUID.randomUUID().toString() },
@@ -56,6 +57,19 @@ class ToolOrchestrator(
             )
         }
 
+        val capabilities = tool.descriptor.requiredCapabilities
+        val preparationDecision = executionInterlock.evaluate(
+            InterlockRequest(
+                toolName = tool.descriptor.name,
+                risk = tool.descriptor.risk,
+                requiredCapabilities = capabilities,
+                phase = InterlockPhase.PREPARE,
+            ),
+        )
+        if (preparationDecision is InterlockDecision.Block) {
+            return PreparationResult.Rejected(preparationDecision.reason)
+        }
+
         return when (val validation = tool.validateAndCanonicalize(params)) {
             is ValidationResult.Invalid -> PreparationResult.Rejected(validation.reason)
             is ValidationResult.Valid -> {
@@ -75,6 +89,8 @@ class ToolOrchestrator(
                         ),
                         parameterDigest = parameterDigest,
                         idempotencyKey = sha256("$requestId|${tool.descriptor.name}|$canonicalParams"),
+                        requiredCapabilities = capabilities,
+                        risk = tool.descriptor.risk,
                         canonicalInput = canonicalInput,
                         tool = tool,
                         permit = ExecutionPermit(actionId),
@@ -92,6 +108,23 @@ class ToolOrchestrator(
         check(clock() <= action.expiresAtEpochMillis) { "Prepared action expired." }
         check(authorize(action)) { "Required confirmation or strong authentication failed." }
         check(clock() <= action.expiresAtEpochMillis) { "Prepared action expired during authorization." }
+
+        // Permissions, thermal state, and target accounts can all change while the confirmation
+        // dialog is on screen, so the preparation-time decision is never reused here.
+        val decision = executionInterlock.evaluate(
+            InterlockRequest(
+                toolName = action.toolName,
+                risk = action.risk,
+                requiredCapabilities = action.requiredCapabilities,
+                phase = InterlockPhase.EXECUTE,
+            ),
+        )
+        check(decision is InterlockDecision.Allow) {
+            (decision as InterlockDecision.Block).reason
+        }
+
+        // Claimed before the side effect, so an interrupted action is never retried. Blocking
+        // after this point would spend the key, which is why the interlock runs first.
         check(actionLedger.claim(action.idempotencyKey)) { "Action was already claimed." }
         check(clock() <= action.expiresAtEpochMillis) { "Prepared action expired while claiming it." }
 
