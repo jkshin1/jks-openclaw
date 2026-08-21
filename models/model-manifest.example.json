@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "repository": "litert-community/gemma-4-E4B-it-litert-lm",
+  "revision": "PIN_BEFORE_DOWNLOAD",
+  "file": "gemma-4-E4B-it.litertlm",
+  "downloadUrl": "PINNED_REVISION_URL",
+  "sizeBytes": 0,
+  "sha256": "RECORD_AFTER_DOWNLOAD",
+  "litertLmVersion": "0.16.1",
+  "contextTokens": 4096,
+  "maxOutputTokens": 1024
+}

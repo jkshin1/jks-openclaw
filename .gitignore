@@ -1,0 +1,49 @@
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Local toolchains and device state
+.android-sdk/
+.jdk/
+.kotlin/
+
+# Secrets and signing material
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.env
+.env.*
+secrets.properties
+key.properties
+keystore.properties
+google-services.json
+**/google-services.json
+credentials*.json
+service-account*.json
+client_secret*.json
+
+# Large on-device model artifacts
+models/*
+!models/README.md
+!models/model-manifest.example.json
+!models/model-manifest.json
+*.litertlm
+*.task
+*.safetensors
+
+# Reports and traces
+reports/
+traces/
+*.hprof
