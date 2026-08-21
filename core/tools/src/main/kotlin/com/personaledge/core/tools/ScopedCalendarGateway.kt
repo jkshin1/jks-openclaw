@@ -3,11 +3,10 @@ package com.personaledge.core.tools
 /**
  * Confines every calendar tool to the one calendar the user pinned in settings.
  *
- * NAVER Calendar arrives on the device through a CalDAV sync client, so it sits alongside whatever
- * else is synced — work accounts, shared family calendars, birthdays. Filtering here means a model
- * that guesses a calendar id or an event id cannot read or modify anything outside the pinned
- * calendar, no matter what it asks for. The scope is re-read on every call, so changing it in
- * settings takes effect immediately rather than at the next process start.
+ * CalendarContract can contain work accounts, shared family calendars, and birthdays. Filtering
+ * here means a model that guesses a calendar or event id cannot read or modify anything outside
+ * the pinned calendar. The scope is re-read on every call, so changing it in settings takes effect
+ * immediately rather than at the next process start.
  */
 class ScopedCalendarGateway(
     private val delegate: CalendarGateway,

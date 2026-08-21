@@ -1,36 +1,38 @@
-# Calendar: NAVER via CalDAV
+# Calendar: NAVER Qualification Through CalendarContract
 
 ## Why the device calendar, not the NAVER API
 
-NAVER Calendar is the calendar this app works with. It reaches the app through
-`CalendarContract`, not through NAVER's Open API, because the Open API cannot do the job:
+NAVER Calendar is the intended calendar. The implemented adapter uses Android
+`CalendarContract`, not NAVER's Open API, because the Open API cannot cover the full requirement:
 
-> [`naver/naver-openapi-guide`](https://github.com/naver/naver-openapi-guide/blob/master/ko/login/calendar-api/calendar-api.md)
+> [NAVER Calendar Open API](https://developers.naver.com/docs/login/calendar-api/calendar-api.md)
 > documents exactly one endpoint, `POST https://openapi.naver.com/calendar/createSchedule.json`,
 > described as "캘린더 일정 추가". There is no endpoint for reading, updating, or deleting a
 > schedule.
 
-Create-only would cover one third of the requirement (조회·등록·수정) and would still need OAuth
-and network access. NAVER does support CalDAV, so the workable path is to let a CalDAV sync client
-publish the NAVER calendar into the Android calendar provider, where all three operations work
-offline through a single local API.
+Create-only covers only one part of 조회·등록·수정 and still needs OAuth and network access.
+The `CalendarContract` tools can perform all three operations on a compatible writable calendar,
+but a supported way to publish a NAVER calendar there has **not** been established. NAVER's
+[official CalDAV help](https://help.naver.com/service/5620/contents/2426?lang=ko) explicitly says
+Android is unsupported. Current emulator tests use a local calendar, not a NAVER account.
 
-## One-time device setup
+## Qualification required on the Fold8
 
-1. Install a CalDAV sync client that creates an Android calendar account — DAVx⁵ is the usual
-   choice on Android.
-2. Add the NAVER account to it. NAVER's CalDAV endpoint and app-password requirements are
-   documented by NAVER; the same settings that work for iOS CalDAV work here.
-3. Let it sync at least once, and confirm the calendar is writable in the client.
-4. In this app: grant the calendar permission, then tap the NAVER calendar in the 캘린더 card.
+1. Check whether the official NAVER Calendar app exposes the NAVER account as a writable
+   `CalendarContract` calendar.
+2. If it does, grant calendar permission, pin only that row, and verify remote read/create/update
+   synchronization without exposing other accounts.
+3. If it does not, stop: do not label a local calendar or an unverified third-party CalDAV setup
+   as NAVER integration. Select and review a different personal-use adapter first.
 
-Until step 4 is done the calendar tools refuse to run. That is the interlock working, not a bug.
+Until a writable calendar is pinned, the calendar tools refuse to run. That is the interlock
+working, not a bug. Pinning alone proves only CalendarContract access, not NAVER identity or sync.
 
 ## The scope boundary
 
-CalDAV sync puts the NAVER calendar next to everything else on the device — work accounts, shared
-calendars, birthdays. `ScopedCalendarGateway` filters every read and write to the one pinned
-calendar:
+A compatible calendar provider may place several accounts together — work calendars, shared
+calendars, birthdays, and possibly the target calendar. `ScopedCalendarGateway` filters every read
+and write to the one pinned calendar:
 
 - `writableCalendars()` returns the pinned calendar or nothing;
 - `queryEvents()` drops rows from any other calendar before the model sees them;

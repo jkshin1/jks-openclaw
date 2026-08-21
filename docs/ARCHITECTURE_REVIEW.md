@@ -81,15 +81,16 @@ integrations should follow the same order: prove the safety machinery first, the
     and an AndroidKeyStore AES-GCM vault. The action ledger is a separate database, so clearing
     history can never reopen a replay window.
 21. Calendar tools reach only the one calendar pinned in settings. NAVER Calendar's Open API is
-    create-only, so it arrives through a CalDAV sync client as an ordinary `CalendarContract`
-    account; scoping keeps the agent out of every other synced calendar.
+    create-only, while NAVER officially marks Android CalDAV unsupported. The generic
+    `CalendarContract` adapter is implemented and scoped, but actual NAVER publication and sync
+    remain a Fold8 qualification gate.
 
 ## Resolved product decisions
 
 - Distribution: private sideload only, signed with one fixed personal key
   (see [`RELEASE_AND_BACKUP.md`](RELEASE_AND_BACKUP.md)).
-- Calendar primary: device `CalendarContract`, with NAVER Calendar synced in over CalDAV
-  (see [`CALENDAR.md`](CALENDAR.md)).
+- Calendar adapter: device `CalendarContract`; whether the official NAVER Calendar is exposed there
+  is unresolved (see [`CALENDAR.md`](CALENDAR.md)).
 
 ## Required product decisions before the remaining external tools
 

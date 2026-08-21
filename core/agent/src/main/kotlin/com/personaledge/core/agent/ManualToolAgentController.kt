@@ -239,6 +239,26 @@ class ManualToolAgentController(
                     parse = { json -> CalendarUpdateEventArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
                     encode = TrustedToolResultJson::encode,
                 )
+                is RegisteredManualTool.AlarmSet -> runTool(
+                    active = active,
+                    call = call,
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
+                    requestOrdinal = toolCallCount,
+                    deadline = deadline,
+                    parse = { json -> AlarmSetArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    encode = TrustedToolResultJson::encode,
+                )
+                is RegisteredManualTool.AlarmNext -> runTool(
+                    active = active,
+                    call = call,
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
+                    requestOrdinal = toolCallCount,
+                    deadline = deadline,
+                    parse = { json -> AlarmNextArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    encode = TrustedToolResultJson::encode,
+                )
             }
 
             currentCoroutineContext().ensureActive()

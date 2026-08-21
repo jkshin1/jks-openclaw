@@ -5,6 +5,8 @@ import com.personaledge.core.data.ConversationRepository
 import com.personaledge.core.data.PersonalEdgeDatabase
 import com.personaledge.core.data.SecretVault
 import com.personaledge.core.data.SettingsRepository
+import com.personaledge.core.tools.AlarmGateway
+import com.personaledge.core.tools.AndroidAlarmGateway
 import com.personaledge.core.tools.AndroidCalendarGateway
 import com.personaledge.core.tools.CalendarGateway
 import com.personaledge.core.tools.ScopedCalendarGateway
@@ -34,12 +36,18 @@ class AppContainer(application: Application) {
     val deviceCalendars: AndroidCalendarGateway by lazy { AndroidCalendarGateway(application) }
 
     /**
-     * What the tools see: only the pinned calendar. On this device that is NAVER Calendar as
-     * published into `CalendarContract` by a CalDAV sync client.
+     * What the tools see: only the pinned CalendarContract row. Whether that row can represent the
+     * user's NAVER calendar must be established separately on the physical device.
      */
     val scopedCalendar: CalendarGateway by lazy {
         ScopedCalendarGateway(deviceCalendars, ::pinnedCalendarId)
     }
+
+    /**
+     * The device clock. Alarms are created through the platform `AlarmClock` intent, so there is
+     * nothing to scope: the clock app owns the alarm list and exposes no way to read or edit it.
+     */
+    val alarms: AlarmGateway by lazy { AndroidAlarmGateway(application) }
 
     suspend fun pinnedCalendarId(): Long? = settings.settings.first().defaultCalendarId
 }

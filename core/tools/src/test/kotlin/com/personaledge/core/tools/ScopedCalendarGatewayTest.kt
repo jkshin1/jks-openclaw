@@ -8,8 +8,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * NAVER Calendar sits next to whatever else a CalDAV client syncs onto the device, so the scope is
- * the boundary that keeps the agent out of every other calendar.
+ * Several calendars can coexist on the device, so the scope is the boundary that keeps the agent
+ * out of every other calendar.
  */
 class ScopedCalendarGatewayTest {
     private val naverId = FakeCalendarGateway.NAVER_CALENDAR.id

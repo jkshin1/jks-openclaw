@@ -1,5 +1,9 @@
 package com.personaledge.core.agent
 
+import com.personaledge.core.tools.AlarmNextParams
+import com.personaledge.core.tools.AlarmNextResult
+import com.personaledge.core.tools.AlarmSetParams
+import com.personaledge.core.tools.AlarmSetResult
 import com.personaledge.core.tools.CalendarCreateEventParams
 import com.personaledge.core.tools.CalendarCreateEventResult
 import com.personaledge.core.tools.CalendarEventSummary
@@ -347,6 +351,41 @@ internal class CalendarUpdateEventArgumentsParser(maxArgumentBytes: Int) {
     }
 }
 
+internal class AlarmSetArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<AlarmSetParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, REQUIRED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                AlarmSetParams(
+                    time = fields.fields.getValue(TIME),
+                    label = fields.fields[LABEL],
+                    days = fields.fields[DAYS],
+                ),
+            )
+        }
+
+    private companion object {
+        const val TIME = "time"
+        const val LABEL = "label"
+        const val DAYS = "days"
+        val REQUIRED_FIELDS = setOf(TIME)
+        val ALLOWED_FIELDS = REQUIRED_FIELDS + setOf(LABEL, DAYS)
+    }
+}
+
+/** Accepts only the empty object, so a model cannot smuggle a filter this tool does not honor. */
+internal class AlarmNextArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<AlarmNextParams> =
+        when (val fields = reader.read(json, emptySet(), emptySet())) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(AlarmNextParams)
+        }
+}
+
 /**
  * Encodes the trusted result the runtime reinjects.
  *
@@ -371,6 +410,21 @@ internal object TrustedToolResultJson {
         append("""{"created":${result.created}""")
         // The id is a string so the model copies it back verbatim into calendar_update_event.
         result.eventId?.let { id -> append(""","event_id":${quote(id.toString())}""") }
+        append('}')
+    }
+
+    fun encode(result: AlarmSetResult): String = buildString {
+        // "requested", not "created": ACTION_SET_ALARM returns no result, so claiming creation
+        // would tell the model something this app cannot know.
+        append("""{"requested":${result.requested}""")
+        result.reason?.let { reason -> append(""","reason":${quote(reason)}""") }
+        result.nextAlarm?.let { next -> append(""","next_alarm":${quote(next)}""") }
+        append('}')
+    }
+
+    fun encode(result: AlarmNextResult): String = buildString {
+        append("""{"has_alarm":${result.hasAlarm}""")
+        result.triggerAt?.let { triggerAt -> append(""","trigger_at":${quote(triggerAt)}""") }
         append('}')
     }
 

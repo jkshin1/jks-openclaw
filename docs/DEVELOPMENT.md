@@ -143,7 +143,7 @@ OpenDocument URI → verified app-private artifact → LiteRT Conversation
 
 The registered tools are `calendar_query`, `calendar_create_event`, and `calendar_update_event`.
 Grant the calendar permission and pin a calendar in the app before using them; see
-[`CALENDAR.md`](CALENDAR.md) for the NAVER-over-CalDAV setup and the scope boundary.
+[`CALENDAR.md`](CALENDAR.md) for the scope boundary and unresolved NAVER transport gate.
 
 LiteRT automatic tool calling and raw thinking output are both disabled. A denied, expired,
 invalid, oversized, unknown, or cancelled Tool call is never executed or reinserted.

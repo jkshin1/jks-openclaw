@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import com.personaledge.core.diagnostics.DiagnosticThermalStatus
+import com.personaledge.core.tools.AlarmGateway
 import com.personaledge.core.tools.ExecutionInterlock
 import com.personaledge.core.tools.InterlockDecision
 import com.personaledge.core.tools.InterlockRequest
@@ -26,6 +27,7 @@ class DeviceExecutionInterlock(
     context: Context,
     private val thermalStatus: () -> DiagnosticThermalStatus,
     private val pinnedCalendarId: suspend () -> Long?,
+    private val alarmGateway: AlarmGateway,
 ) : ExecutionInterlock {
     private val applicationContext = context.applicationContext
 
@@ -57,7 +59,7 @@ class DeviceExecutionInterlock(
             permission = Manifest.permission.WRITE_CALENDAR,
             reason = "캘린더 쓰기 권한이 없습니다. 설정에서 허용해 주세요.",
         ) ?: pinnedCalendarReason()
-        ToolCapability.SCHEDULE_ALARM,
+        ToolCapability.SCHEDULE_ALARM -> clockAppReason()
         ToolCapability.READ_NOTIFICATIONS,
         ToolCapability.POST_NOTIFICATIONS,
         ToolCapability.NETWORK,
@@ -76,4 +78,14 @@ class DeviceExecutionInterlock(
 
     private suspend fun pinnedCalendarReason(): String? =
         if (pinnedCalendarId() == null) "설정에서 사용할 캘린더를 먼저 선택하세요." else null
+
+    /**
+     * The clock app can be disabled or uninstalled between preparation and execution, and
+     * `ACTION_SET_ALARM` gives no result, so an unhandled intent would look like success.
+     */
+    private suspend fun clockAppReason(): String? = try {
+        if (alarmGateway.clockAppAvailable()) null else "알람을 처리할 시계 앱이 없습니다."
+    } catch (_: Exception) {
+        "시계 앱을 확인하지 못했습니다."
+    }
 }

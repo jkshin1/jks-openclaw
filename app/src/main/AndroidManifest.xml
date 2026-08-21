@@ -2,12 +2,24 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-        The calendar tools read and write the one calendar pinned in settings. NAVER Calendar has
-        no read/update Open API, so it reaches this app through a CalDAV sync client that
-        publishes it into CalendarContract like any other account.
+        The calendar tools read and write the one calendar pinned in settings. CalendarContract
+        access is implemented, but actual NAVER publication on Android remains unqualified.
     -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+
+    <!-- Normal permission: creating an alarm goes through the clock app, not AlarmManager. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
+    <!--
+        Package visibility. Without this, queryIntentActivities cannot see the clock app on
+        API 30+, so the alarm tool could not tell "no clock app" from "not visible" up front.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+    </queries>
 
     <application
         android:name=".PersonalEdgeApplication"

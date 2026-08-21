@@ -296,8 +296,8 @@ private fun CalendarSetupCard(
                 }
 
                 setup.calendars.isEmpty() -> Text(
-                    text = "동기화된 캘린더가 없습니다. 네이버 캘린더는 Open API로 조회·수정할 수 " +
-                        "없으므로, CalDAV 동기화 앱으로 기기 캘린더에 추가한 뒤 다시 확인하세요.",
+                    text = "사용 가능한 기기 캘린더가 없습니다. NAVER 캘린더의 Android 연동은 " +
+                        "현재 검증되지 않았으므로 캘린더 안내 문서를 확인하세요.",
                     style = MaterialTheme.typography.bodySmall,
                 )
 

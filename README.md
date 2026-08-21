@@ -21,7 +21,10 @@ Galaxy Z Fold8를 우선 대상으로 하는 on-device personal AI agent Android
   실행 직전 인터록 재검사 → 영구 ledger 청구 → 실행 → 최소 신뢰 결과 재주입
 - `SqliteActionLedger`: `synchronous=FULL` 영구 청구로 프로세스 종료 후에도 중복 실행 차단
 - `core:data`: Room 대화/메시지/알림 + DataStore 설정 + Keystore AES-GCM 자격증명 보관소
-- 캘린더: 네이버 캘린더를 CalDAV로 기기에 동기화한 뒤, 선택한 캘린더 하나로만 범위 제한
+- 캘린더: 선택한 `CalendarContract` 캘린더 하나로 범위 제한. NAVER 실연동은 공식 Android
+  CalDAV 미지원 때문에 별도 Fold8 qualification gate로 유지
+- 알람: 표준 `AlarmClock` 인텐트로 1회/반복 알람 생성, `getNextAlarmClock()`로 다음 알람 1건
+  조회. 목록·수정·삭제는 공개 API가 없어 제공하지 않음
 
 ## Start
 
@@ -48,11 +51,13 @@ ANDROID_SERIAL=emulator-5554 ./gradlew connectedDebugAndroidTest
 캘린더를 하나 선택해야 일정 Tool이 동작합니다. 모델은 APK에 포함되지 않으며, 선택한
 파일은 고정 revision/size/SHA-256을 통과해야만 LiteRT 런타임에 전달됩니다.
 
-캘린더 연동 방식과 안전장치는 [docs/CALENDAR.md](docs/CALENDAR.md), 개인 서명키와 백업
+현재 완료·검증·남은 범위는 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md), 캘린더 연동
+한계와 안전장치는 [docs/CALENDAR.md](docs/CALENDAR.md), 개인 서명키와 백업
 절차는 [docs/RELEASE_AND_BACKUP.md](docs/RELEASE_AND_BACKUP.md),
 설계 검토와 보안/MVP 결정은 [docs/ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md),
 환경 구성과 실기기 확인 절차는 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), 실제 고정
 모델의 첫 실행 근거는 [docs/REAL_MODEL_SMOKE.md](docs/REAL_MODEL_SMOKE.md), 로컬 진단 로그와
-수집 절차는 [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md)를 참고하세요.
+수집 절차는 [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md), 알람 Tool의 플랫폼 한계는
+[docs/ALARM.md](docs/ALARM.md)를 참고하세요.
 LiteRT-LM이 Tool 인자를 raw JSON이 아닌 Map으로 노출하므로, 앱은 정규화 이후의
 필드·타입·중첩·크기를 엄격히 검사하지만 원문의 duplicate-key 부재는 증명하지 않습니다.

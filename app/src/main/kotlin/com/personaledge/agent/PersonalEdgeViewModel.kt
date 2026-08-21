@@ -33,6 +33,8 @@ import com.personaledge.core.llm.ModelStoreException
 import com.personaledge.core.llm.PinnedModelManifest
 import com.personaledge.core.llm.TurnId
 import com.personaledge.core.llm.VerifiedInstalledModel
+import com.personaledge.core.tools.AlarmNextTool
+import com.personaledge.core.tools.AlarmSetTool
 import com.personaledge.core.tools.CalendarAccount
 import com.personaledge.core.tools.CalendarCreateEventTool
 import com.personaledge.core.tools.CalendarQueryTool
@@ -86,9 +88,9 @@ data class CalendarOption(
 /**
  * Which calendar the agent may touch.
  *
- * NAVER Calendar has no read/update Open API, so it appears here only once a CalDAV sync client
- * has published it into `CalendarContract`. The list therefore shows whatever is synced, and the
- * user pins the NAVER one; nothing outside the pinned calendar is ever read or written.
+ * The list shows calendars published through `CalendarContract`; the user pins one and nothing
+ * outside it is read or written. Actual NAVER Calendar publication on Android is a separate,
+ * currently unresolved physical-device qualification gate.
  */
 data class CalendarSetupState(
     val permissionGranted: Boolean = false,
@@ -132,13 +134,15 @@ class PersonalEdgeViewModel(
         cpuThreadCount = Runtime.getRuntime().availableProcessors().coerceIn(1, 4),
     )
     private val container = application.appContainer()
-    private val registry = ManualToolRegistry.forCalendar(
+    private val registry = ManualToolRegistry.forDeviceTools(
         queryTool = CalendarQueryTool(container.scopedCalendar),
         createEventTool = CalendarCreateEventTool(
             gateway = container.scopedCalendar,
             defaultCalendarId = container::pinnedCalendarId,
         ),
         updateEventTool = CalendarUpdateEventTool(container.scopedCalendar),
+        alarmSetTool = AlarmSetTool(container.alarms),
+        alarmNextTool = AlarmNextTool(container.alarms),
     )
     val confirmationCoordinator = ConfirmationCoordinator(
         diagnostics = diagnostics,
@@ -152,6 +156,7 @@ class PersonalEdgeViewModel(
             context = application,
             thermalStatus = { thermalMonitor.observation.value.status },
             pinnedCalendarId = container::pinnedCalendarId,
+            alarmGateway = container.alarms,
         ),
     )
     private val controller = ManualToolAgentController(
@@ -837,6 +842,8 @@ class PersonalEdgeViewModel(
         CalendarQueryTool.NAME -> "캘린더에서 일정을 읽었습니다."
         CalendarCreateEventTool.NAME -> "캘린더에 일정을 등록했습니다."
         CalendarUpdateEventTool.NAME -> "캘린더 일정을 수정했습니다."
+        AlarmSetTool.NAME -> "시계 앱에 알람 추가를 요청했습니다."
+        AlarmNextTool.NAME -> "다음 알람 시각을 확인했습니다."
         else -> "확인된 Tool을 실행했습니다."
     }
 

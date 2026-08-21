@@ -12,10 +12,10 @@ import kotlinx.coroutines.withContext
 /**
  * `CalendarContract` view of whatever calendars are synced onto the device.
  *
- * NAVER Calendar has no read/update Open API, so it reaches this app the same way any other
- * account does: a CalDAV sync client publishes it into the system calendar provider, and it then
- * appears here as an ordinary account. Nothing in this class is NAVER-specific; the app pins the
- * account it may touch through [ScopedCalendarGateway].
+ * This adapter operates on calendars already published into the system provider. It does not
+ * establish that NAVER Calendar can be published on Android; that provider integration is a
+ * separate qualification gate. The app pins the account it may touch through
+ * [ScopedCalendarGateway].
  */
 class AndroidCalendarGateway(
     context: Context,

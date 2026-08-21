@@ -1,6 +1,8 @@
 package com.personaledge.core.agent
 
 import com.personaledge.core.llm.LlmToolDefinition
+import com.personaledge.core.tools.AlarmNextTool
+import com.personaledge.core.tools.AlarmSetTool
 import com.personaledge.core.tools.CalendarCreateEventTool
 import com.personaledge.core.tools.CalendarQueryTool
 import com.personaledge.core.tools.CalendarUpdateEventTool
@@ -36,15 +38,22 @@ class ManualToolRegistry private constructor(
 
     companion object {
         /**
-         * The calendar registry the app ships.
+         * The device registry the app ships.
          *
-         * The tools reach only the one calendar pinned in settings; on this device that is the
-         * NAVER calendar published into `CalendarContract` by a CalDAV sync client.
+         * Calendar tools reach only the one CalendarContract row pinned in settings; NAVER
+         * identity and remote synchronization must be qualified separately on the physical
+         * device. Alarm tools go through the platform `AlarmClock` intent, which can create an
+         * alarm but cannot list or edit existing ones.
+         *
+         * Listing every tool explicitly is the point: a tool absent from this map is never
+         * executed, whatever the model names.
          */
-        fun forCalendar(
+        fun forDeviceTools(
             queryTool: CalendarQueryTool,
             createEventTool: CalendarCreateEventTool,
             updateEventTool: CalendarUpdateEventTool,
+            alarmSetTool: AlarmSetTool,
+            alarmNextTool: AlarmNextTool,
         ): ManualToolRegistry = ManualToolRegistry(
             mapOf(
                 CalendarQueryTool.NAME to RegisteredManualTool.CalendarQuery(queryTool),
@@ -54,6 +63,8 @@ class ManualToolRegistry private constructor(
                 CalendarUpdateEventTool.NAME to RegisteredManualTool.CalendarUpdateEvent(
                     updateEventTool,
                 ),
+                AlarmSetTool.NAME to RegisteredManualTool.AlarmSet(alarmSetTool),
+                AlarmNextTool.NAME to RegisteredManualTool.AlarmNext(alarmNextTool),
             ),
         )
     }
@@ -101,6 +112,26 @@ internal sealed interface RegisteredManualTool {
             parametersJsonSchema = CALENDAR_UPDATE_EVENT_SCHEMA,
         )
     }
+
+    data class AlarmSet(
+        val tool: AlarmSetTool,
+    ) : RegisteredManualTool {
+        override val definition = LlmToolDefinition(
+            name = tool.descriptor.name,
+            description = tool.descriptor.description,
+            parametersJsonSchema = ALARM_SET_SCHEMA,
+        )
+    }
+
+    data class AlarmNext(
+        val tool: AlarmNextTool,
+    ) : RegisteredManualTool {
+        override val definition = LlmToolDefinition(
+            name = tool.descriptor.name,
+            description = tool.descriptor.description,
+            parametersJsonSchema = ALARM_NEXT_SCHEMA,
+        )
+    }
 }
 
 private const val FAKE_ARRIVAL_NOTICE_SCHEMA =
@@ -116,3 +147,11 @@ private const val CALENDAR_CREATE_EVENT_SCHEMA =
 
 private const val CALENDAR_UPDATE_EVENT_SCHEMA =
     """{"type":"object","properties":{"event_id":{"type":"string","description":"Event id exactly as returned by calendar_query","pattern":"^[1-9][0-9]{0,18}$"},"title":{"type":"string","description":"Optional replacement title; 1 to 120 characters","minLength":1,"maxLength":120},"start":{"type":"string","description":"Optional replacement start as local date-time","pattern":"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$"},"end":{"type":"string","description":"Optional replacement end as local date-time","pattern":"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$"},"location":{"type":"string","description":"Optional replacement place name; up to 200 characters","maxLength":200}},"required":["event_id"],"additionalProperties":false}"""
+
+// Weekday tokens rather than numbers: a number would have to encode a locale-dependent week start.
+private const val ALARM_SET_SCHEMA =
+    """{"type":"object","properties":{"time":{"type":"string","description":"Alarm time as 24-hour local HH:mm, for example 07:30","pattern":"^([01]\\d|2[0-3]):[0-5]\\d$"},"label":{"type":"string","description":"Optional alarm name; 1 to 60 characters","minLength":1,"maxLength":60},"days":{"type":"string","description":"Optional repeat days as comma-separated tokens from mon,tue,wed,thu,fri,sat,sun. Omit for a one-shot alarm.","pattern":"^(mon|tue|wed|thu|fri|sat|sun)(,(mon|tue|wed|thu|fri|sat|sun))*$"}},"required":["time"],"additionalProperties":false}"""
+
+// The device exposes one next alarm, so there is nothing to select and no argument to take.
+private const val ALARM_NEXT_SCHEMA =
+    """{"type":"object","properties":{},"required":[],"additionalProperties":false}"""
