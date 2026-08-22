@@ -22,10 +22,11 @@ Do not promote a feature merely because a lower state passed.
 | NAVER Calendar | **Not physically accepted** | The app has no direct NAVER login/API/CalDAV implementation. No real NAVER account, remote sync, Fold8, or Gemma calendar E2E receipt exists. |
 | Standard alarm tools | Emulator verified | `alarm_set` creates one-shot and repeating alarms through `AlarmClock.ACTION_SET_ALARM`; `alarm_next` reads `getNextAlarmClock()`. Both confirmed on the API 37 AVD from the app's own foreground. The platform offers no way to list, edit, or delete alarms, so no such tool exists. Not exercised through a real Gemma turn or on the Fold8. |
 | Kakao notification capture | Emulator verified, one gap | Listener binds, non-allowlisted posts are ignored, capture is off by default behind two gates, and search/retention/erasure are covered. Text is stripped of control tokens and invisible formatting before storage. **The accept path for com.kakao.talk itself is not end-to-end verified**: a test cannot post as another package, so real capture is a Fold8 check. |
+| Third-party credentials | Emulator verified, unused | Settings screen stores NAVER Maps and web-search keys into the Keystore AES-GCM vault. Values move one way: the UI reports presence only and cannot read a key back. **No tool consumes these yet** — Maps and web search are unimplemented, so this is groundwork, not a working integration. |
 | Diagnostics and thermal policy | Physical accepted for current slice | Content-free rotating diagnostics and evidence collection work. `NONE` through `SEVERE` continue, `CRITICAL` cooperatively cancels, and `EMERGENCY+` immediately cancels; the latter two branches lack natural physical evidence. |
 | Personal installation | Partially ready | Signing scripts exist, but a stable personal key and signed update-preservation receipt are still required. Play Store, AAB, and public CI are out of scope. |
 
-At this snapshot, host unit tests report 171 passes. API 37 instrumentation reports 79 tests: 78 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
+At this snapshot, host unit tests report 171 passes. API 37 instrumentation reports 88 tests: 87 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
 
 ## NAVER Calendar Qualification Gate
 
@@ -55,9 +56,11 @@ Next decision and acceptance steps:
 2. Add bounded conversation summaries and feed stored context back into a turn. Persistence,
    restore, and deletion are done; summarization and context injection are not, and both need a
    token budget decision first — the prompt cap is 2,048 bytes against a 4,096-token context.
-3. Add NAVER Maps travel time, then web search; both are blocked on a credential-handling
-   decision. Android alarms and Kakao notification capture are implemented and still need a real
-   Gemma tool-selection run and Fold8 evidence.
+3. Add NAVER Maps travel time, then web search. Credential handling is decided and built: keys are
+   entered in settings and stored in the Keystore vault, so what remains is the network client,
+   the tools themselves, and a NETWORK capability the interlock currently refuses. Android alarms
+   and Kakao notification capture are implemented and still need a real Gemma tool-selection run
+   and Fold8 evidence.
 4. Create and back up one personal signing key; verify `adb install -r` preserves model and data.
 5. Complete Fold8 fold/rotation/background, battery, offline, and natural `CRITICAL` validation.
 
@@ -70,6 +73,20 @@ model thinking, and transient status notices such as thermal refusals.
 Everything lives in `noBackupFilesDir` and is excluded from cloud backup and device transfer.
 "전체 삭제" clears conversations and messages only; the action ledger is a separate database and is
 deliberately untouched, so erasing history can never re-enable an already-executed side effect.
+
+## Credential Handling
+
+Third-party keys are typed by the user in settings and encrypted under a hardware-backed
+AndroidKeyStore AES-GCM key. The rules:
+
+- Values move one way. `CredentialStatus` carries presence and nothing else; there is no path that
+  returns a stored key to the UI.
+- The entry field uses plain `remember`, never `rememberSaveable` — saved instance state would
+  write the typed key to disk in the clear.
+- Rejection messages are app-authored and never echo what was typed.
+- Keys never enter diagnostics, logs, chat history, or a model prompt.
+- The key is device-bound and non-exportable, so a reinstall or new phone means re-entering the
+  credential. That is by design; see [`RELEASE_AND_BACKUP.md`](RELEASE_AND_BACKUP.md).
 
 ## Notification Capture Boundaries
 

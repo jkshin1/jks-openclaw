@@ -42,6 +42,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -54,6 +55,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personaledge.agent.ui.theme.PersonalEdgeAgentTheme
@@ -97,11 +101,13 @@ class MainActivity : ComponentActivity() {
                 val calendarSetup by viewModel.calendarSetup.collectAsStateWithLifecycle()
                 val chatHistory by viewModel.chatHistory.collectAsStateWithLifecycle()
                 val notificationSetup by viewModel.notificationSetup.collectAsStateWithLifecycle()
+                val credentials by viewModel.credentials.collectAsStateWithLifecycle()
 
                 // Calendar access and synced accounts can change while the app is backgrounded.
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                     viewModel.refreshCalendarSetup()
                     viewModel.refreshNotificationSetup()
+                    viewModel.refreshCredentials()
                 }
 
                 PersonalEdgeScreen(
@@ -109,6 +115,7 @@ class MainActivity : ComponentActivity() {
                     calendarSetup = calendarSetup,
                     chatHistory = chatHistory,
                     notificationSetup = notificationSetup,
+                    credentials = credentials,
                     pendingConfirmation = pending,
                     onRequestCalendarPermission = {
                         requestCalendarPermissions.launch(
@@ -131,6 +138,8 @@ class MainActivity : ComponentActivity() {
                     },
                     onSetNotificationCapture = viewModel::setNotificationCaptureEnabled,
                     onDeleteCapturedNotifications = viewModel::deleteCapturedNotifications,
+                    onStoreCredential = viewModel::storeCredential,
+                    onDeleteCredential = viewModel::deleteCredential,
                     onPromptChange = viewModel::updatePrompt,
                     onImportModel = { openModelDocument.launch(arrayOf("application/octet-stream", "*/*")) },
                     onInspectModel = viewModel::inspectInstalledModel,
@@ -151,6 +160,7 @@ private fun PersonalEdgeScreen(
     calendarSetup: CalendarSetupState,
     chatHistory: ChatHistoryState,
     notificationSetup: NotificationSetupState,
+    credentials: CredentialsState,
     pendingConfirmation: PendingConfirmation?,
     onRequestCalendarPermission: () -> Unit,
     onPinCalendar: (CalendarOption) -> Unit,
@@ -164,6 +174,8 @@ private fun PersonalEdgeScreen(
     onOpenNotificationAccess: () -> Unit,
     onSetNotificationCapture: (Boolean) -> Unit,
     onDeleteCapturedNotifications: () -> Unit,
+    onStoreCredential: (CredentialSlot, String) -> Unit,
+    onDeleteCredential: (CredentialSlot) -> Unit,
     onPromptChange: (String) -> Unit,
     onImportModel: () -> Unit,
     onInspectModel: () -> Unit,
@@ -228,6 +240,12 @@ private fun PersonalEdgeScreen(
                 onOpenAccessSettings = onOpenNotificationAccess,
                 onSetCapture = onSetNotificationCapture,
                 onDeleteCaptured = onDeleteCapturedNotifications,
+            )
+
+            CredentialsCard(
+                credentials = credentials,
+                onStore = onStoreCredential,
+                onDelete = onDeleteCredential,
             )
 
             Conversation(
@@ -517,6 +535,132 @@ private fun CalendarSetupCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CredentialsCard(
+    credentials: CredentialsState,
+    onStore: (CredentialSlot, String) -> Unit,
+    onDelete: (CredentialSlot) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "외부 서비스 키",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "키는 이 기기의 하드웨어 키로 암호화되어 저장되며, 저장 후에는 다시 볼 수 " +
+                    "없습니다. 백업·기기 이전에 포함되지 않으므로 재설치하면 다시 입력해야 합니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            credentials.statuses.forEach { status ->
+                CredentialRow(
+                    status = status,
+                    onStore = onStore,
+                    onDelete = onDelete,
+                )
+            }
+
+            credentials.error?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CredentialRow(
+    status: CredentialStatus,
+    onStore: (CredentialSlot, String) -> Unit,
+    onDelete: (CredentialSlot) -> Unit,
+) {
+    // Plain remember, never rememberSaveable: a saved-state bundle would write the typed key to
+    // disk in the clear, which is exactly what the vault exists to avoid.
+    var entry by remember(status.slot) { mutableStateOf("") }
+    var revealed by remember(status.slot) { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = status.slot.label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = if (status.stored) "저장됨" else "미설정",
+                style = MaterialTheme.typography.labelMedium,
+                color = if (status.stored) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = entry,
+                onValueChange = { value -> entry = value },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                label = { Text(if (status.stored) "새 값으로 교체" else status.slot.hint) },
+                // Masked by default so the key is not left on screen; the toggle is for checking
+                // a paste before saving, not for reading back a stored value.
+                visualTransformation = if (revealed) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                keyboardOptions = KeyboardOptions(
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Password,
+                ),
+                trailingIcon = {
+                    TextButton(onClick = { revealed = !revealed }) {
+                        Text(if (revealed) "숨기기" else "보기", style = MaterialTheme.typography.labelSmall)
+                    }
+                },
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    onStore(status.slot, entry)
+                    // Dropped as soon as it is handed over; nothing else retains it.
+                    entry = ""
+                    revealed = false
+                },
+                enabled = entry.isNotBlank(),
+            ) {
+                Text("저장")
+            }
+        }
+
+        if (status.stored) {
+            TextButton(onClick = { onDelete(status.slot) }) {
+                Text("삭제", color = MaterialTheme.colorScheme.error)
             }
         }
     }

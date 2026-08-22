@@ -124,6 +124,15 @@ data class NotificationSetupState(
     val retentionDays: Int = AgentSettings.DEFAULT_NOTIFICATION_RETENTION_DAYS,
 )
 
+/**
+ * Presence only. A typed value lives in the text field composable and nowhere else — not in this
+ * state, not in saved instance state, and never in diagnostics.
+ */
+data class CredentialsState(
+    val statuses: List<CredentialStatus> = emptyList(),
+    val error: String? = null,
+)
+
 data class PersonalEdgeUiState(
     val modelStatus: ModelUiStatus = ModelUiStatus.CHECKING,
     val modelProgress: Float? = null,
@@ -578,6 +587,42 @@ class PersonalEdgeViewModel(
                     error = if (deleted) null else "대화 기록을 모두 삭제하지 못했습니다.",
                 )
             }
+        }
+    }
+
+    private val _credentials = MutableStateFlow(CredentialsState())
+    val credentials: StateFlow<CredentialsState> = _credentials.asStateFlow()
+
+    fun refreshCredentials() {
+        viewModelScope.launch {
+            _credentials.value = CredentialsState(statuses = container.credentials.statuses())
+        }
+    }
+
+    /**
+     * Stores one credential. The value is used here and dropped; nothing retains it, and the
+     * rejection reason never contains what the user typed.
+     */
+    fun storeCredential(slot: CredentialSlot, value: String) {
+        viewModelScope.launch {
+            val error = when (val result = container.credentials.store(slot, value)) {
+                CredentialStoreResult.Stored -> null
+                is CredentialStoreResult.Rejected -> result.reason
+            }
+            _credentials.value = CredentialsState(
+                statuses = container.credentials.statuses(),
+                error = error,
+            )
+        }
+    }
+
+    fun deleteCredential(slot: CredentialSlot) {
+        viewModelScope.launch {
+            val deleted = container.credentials.delete(slot)
+            _credentials.value = CredentialsState(
+                statuses = container.credentials.statuses(),
+                error = if (deleted) null else "키를 삭제하지 못했습니다.",
+            )
         }
     }
 

@@ -1,6 +1,7 @@
 package com.personaledge.agent
 
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -8,7 +9,6 @@ import com.personaledge.core.tools.AlarmDay
 import com.personaledge.core.tools.AlarmOutcome
 import com.personaledge.core.tools.AlarmRequest
 import com.personaledge.core.tools.AndroidAlarmGateway
-import java.io.FileInputStream
 import java.time.Instant
 import java.time.ZoneId
 import kotlinx.coroutines.delay
@@ -117,10 +117,17 @@ class AlarmForegroundRequestTest {
         gateway.nextAlarm()
     }
 
+    /**
+     * Drains and closes the shell output.
+     *
+     * The descriptor must be consumed through AutoCloseInputStream: wrapping the raw
+     * FileDescriptor leaves the ParcelFileDescriptor unowned, and a read can then fail with
+     * EBADF once it is collected.
+     */
     private fun shell(command: String) {
-        FileInputStream(
-            instrumentation.uiAutomation.executeShellCommand(command).fileDescriptor,
-        ).use { stream -> stream.readBytes() }
+        ParcelFileDescriptor
+            .AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+            .use { stream -> stream.readBytes() }
     }
 
     private companion object {

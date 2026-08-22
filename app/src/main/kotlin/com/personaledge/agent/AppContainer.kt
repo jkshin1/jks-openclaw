@@ -41,6 +41,8 @@ class AppContainer(application: Application) {
 
     val secretVault: SecretVault by lazy { SecretVault.create(application) }
 
+    val credentials: CredentialSettings by lazy { CredentialSettings(secretVault) }
+
     /** The one durable ledger. Side-effecting tools are refused without it. */
     val actionLedger: SqliteActionLedger by lazy { SqliteActionLedger.open(application) }
 
