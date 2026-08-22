@@ -9,7 +9,17 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 apk_path="${1:-$project_root/app/build/outputs/apk/release/app-release.apk}"
 sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
 
+unsigned_apk_path="${apk_path%.apk}-unsigned.apk"
+
 if [[ ! -f "$apk_path" ]]; then
+    # AGP names the artifact app-release-unsigned.apk when no signing config applies, so its
+    # presence means the build ran and produced something that cannot be installed.
+    if [[ -f "$unsigned_apk_path" ]]; then
+        echo "FAIL The release build produced an unsigned APK: $unsigned_apk_path" >&2
+        echo "Create the fixed personal key first: ./scripts/create-release-keystore.sh" >&2
+        echo "See docs/RELEASE_AND_BACKUP.md for why the key must be stable." >&2
+        exit 1
+    fi
     echo "APK not found: $apk_path" >&2
     echo "Run: ./gradlew :app:assembleRelease" >&2
     exit 1

@@ -55,6 +55,10 @@ The verifier fails if the APK is unsigned, is signed with the shared Android deb
 lacks an APK Signature Scheme v2 signature. Record the printed SHA-256 in your notes: every later
 build must show the same value.
 
+Without a key configured, the build still succeeds but names its output
+`app-release-unsigned.apk`, which cannot be installed. The verifier recognises that artifact and
+says so rather than claiming the build never ran.
+
 ```bash
 adb -s DEVICE_SERIAL install -r app/build/outputs/apk/release/app-release.apk
 ```
