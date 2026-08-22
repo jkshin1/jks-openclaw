@@ -8,6 +8,14 @@
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
 
+    <!--
+        Outbound requests go only to the two NAVER hosts the transport allows, over HTTPS, with
+        redirects refused. ACCESS_NETWORK_STATE lets the interlock refuse a tool while offline
+        instead of failing after the request.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Normal permission: creating an alarm goes through the clock app, not AlarmManager. -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 

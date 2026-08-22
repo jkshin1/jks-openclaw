@@ -24,6 +24,9 @@ kotlin {
 }
 
 dependencies {
+    // Gson rather than org.json: the platform JSON classes are stubbed in host unit tests, and
+    // the response-parsing rules are worth testing on the host rather than only on a device.
+    implementation(libs.gson)
     implementation(libs.kotlinx.coroutines.core)
     testImplementation(libs.junit4)
     testImplementation(libs.kotlinx.coroutines.test)

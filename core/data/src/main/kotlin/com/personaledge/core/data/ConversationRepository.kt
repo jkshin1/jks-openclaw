@@ -48,6 +48,9 @@ class ConversationRepository(
         limit: Int = DEFAULT_CONVERSATION_PAGE,
     ): List<ConversationEntity> = conversationDao.listRecent(limit.coerceIn(1, MAX_CONVERSATION_PAGE))
 
+    suspend fun findConversation(conversationId: String): ConversationEntity? =
+        conversationDao.find(conversationId)
+
     /** The thread to restore on launch, or null when nothing has been stored yet. */
     suspend fun mostRecentConversation(): ConversationEntity? =
         conversationDao.listRecent(1).firstOrNull()

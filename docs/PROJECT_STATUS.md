@@ -22,11 +22,13 @@ Do not promote a feature merely because a lower state passed.
 | NAVER Calendar | **Not physically accepted** | The app has no direct NAVER login/API/CalDAV implementation. No real NAVER account, remote sync, Fold8, or Gemma calendar E2E receipt exists. |
 | Standard alarm tools | Emulator verified | `alarm_set` creates one-shot and repeating alarms through `AlarmClock.ACTION_SET_ALARM`; `alarm_next` reads `getNextAlarmClock()`. Both confirmed on the API 37 AVD from the app's own foreground. The platform offers no way to list, edit, or delete alarms, so no such tool exists. Not exercised through a real Gemma turn or on the Fold8. |
 | Kakao notification capture | Emulator verified, one gap | Listener binds, non-allowlisted posts are ignored, capture is off by default behind two gates, and search/retention/erasure are covered. Text is stripped of control tokens and invisible formatting before storage. **The accept path for com.kakao.talk itself is not end-to-end verified**: a test cannot post as another package, so real capture is a Fold8 check. |
-| Third-party credentials | Emulator verified, unused | Settings screen stores NAVER Maps and web-search keys into the Keystore AES-GCM vault. Values move one way: the UI reports presence only and cannot read a key back. **No tool consumes these yet** — Maps and web search are unimplemented, so this is groundwork, not a working integration. |
+| Third-party credentials | Emulator verified | Settings screen stores four keys — an NCP pair for maps and a Developers pair for search — into the Keystore AES-GCM vault. Values move one way: the UI reports presence only and cannot read a key back. Read per request by the network gateways. |
+| Route estimate and web search | Implemented, **never called live** | `route_estimate` (geocode + directions) and `web_search` go through one transport pinned to two NAVER hosts, HTTPS only, no redirects, bounded time and body. Request construction, response parsing, and every transport refusal are covered by host tests against recorded shapes. **No live request has been made** — that needs real credentials and is a Fold8 step. Treat "the recorded shape matches production" as an assumption. |
+| Conversation summaries | Emulator verified, **model path unproven** | After a turn, a thread with 10+ unsummarized messages is compressed on the tool-free budget (`maxSteps = 1`, so a tool call aborts before anything is prepared and no dialog can appear in the background). The stored summary is injected into the next turn's preamble within a 480-byte cap. Threshold logic, prompt construction, and storage are tested; the **actual model summary has never been generated**, so quality and added latency are unmeasured. |
 | Diagnostics and thermal policy | Physical accepted for current slice | Content-free rotating diagnostics and evidence collection work. `NONE` through `SEVERE` continue, `CRITICAL` cooperatively cancels, and `EMERGENCY+` immediately cancels; the latter two branches lack natural physical evidence. |
 | Personal installation | Partially ready | Signing scripts exist, but a stable personal key and signed update-preservation receipt are still required. Play Store, AAB, and public CI are out of scope. |
 
-At this snapshot, host unit tests report 171 passes. API 37 instrumentation reports 88 tests: 87 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
+At this snapshot, host unit tests report 209 passes. API 37 instrumentation reports 96 tests: 95 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
 
 ## NAVER Calendar Qualification Gate
 
@@ -52,17 +54,25 @@ Next decision and acceptance steps:
 
 ## Next Milestones
 
-1. Resolve and qualify the NAVER Calendar transport above.
-2. Add bounded conversation summaries and feed stored context back into a turn. Persistence,
-   restore, and deletion are done; summarization and context injection are not, and both need a
-   token budget decision first — the prompt cap is 2,048 bytes against a 4,096-token context.
-3. Add NAVER Maps travel time, then web search. Credential handling is decided and built: keys are
-   entered in settings and stored in the Keystore vault, so what remains is the network client,
-   the tools themselves, and a NETWORK capability the interlock currently refuses. Android alarms
-   and Kakao notification capture are implemented and still need a real Gemma tool-selection run
-   and Fold8 evidence.
-4. Create and back up one personal signing key; verify `adb install -r` preserves model and data.
-5. Complete Fold8 fold/rotation/background, battery, offline, and natural `CRITICAL` validation.
+Every feature on the MVP list is now implemented. What remains cannot be finished from a
+development machine — each item needs the physical Fold8, real credentials, or the owner's own
+password.
+
+1. **Create and back up the personal signing key.** `./scripts/create-release-keystore.sh` prompts
+   for a password only the owner should choose, so this cannot be done for them. Until it is run,
+   `assembleRelease` produces an unsigned APK that cannot be installed. Then verify that
+   `adb install -r` preserves the imported model and app data across an update.
+2. **Qualify the NAVER Calendar transport** (see the gate below). The CalendarContract adapter
+   works against any writable calendar; whether a NAVER calendar can be published there on Android
+   is unresolved.
+3. **Make the first live network calls.** Enter real NAVER keys and confirm the recorded response
+   shapes match production for geocoding, directions, and web search.
+4. **Run a real Gemma tool-selection pass on the Fold8.** No tool has yet been chosen by the actual
+   model — every tool test drives the orchestrator directly. Korean tool selection, argument
+   validity, confirmation, denial, replay, and process-death recovery all need device evidence.
+   The same run produces the first real conversation summary, whose quality and latency cost are
+   currently unmeasured.
+5. **Complete Fold8 fold/rotation/background, battery, offline, and natural `CRITICAL` validation.**
 
 ## Chat History Boundaries
 
@@ -73,6 +83,13 @@ model thinking, and transient status notices such as thermal refusals.
 Everything lives in `noBackupFilesDir` and is excluded from cloud backup and device transfer.
 "전체 삭제" clears conversations and messages only; the action ledger is a separate database and is
 deliberately untouched, so erasing history can never re-enable an already-executed side effect.
+
+## Network Boundaries
+
+One transport, two allowed hosts, HTTPS only, no redirects, bounded time and body. Web search
+results are hostile third-party text that reaches a model prompt; they are data because a tool
+result cannot invoke a tool and every side effect needs confirmation, not because any filter makes
+them safe. Details in [`NETWORK.md`](NETWORK.md).
 
 ## Credential Handling
 

@@ -12,20 +12,27 @@ enum class CredentialSlot(
     val label: String,
     val hint: String,
 ) {
+    // Two different NAVER consoles issue two unrelated key pairs: Cloud Platform for maps,
+    // Developers for search. Mixing them up is the likeliest setup mistake, so the labels say which.
     NAVER_MAP_CLIENT_ID(
         key = SecretKeyName.NAVER_MAP_CLIENT_ID,
-        label = "네이버 지도 Client ID",
-        hint = "네이버 클라우드 플랫폼 애플리케이션의 Client ID",
+        label = "네이버 지도 Key ID (클라우드 플랫폼)",
+        hint = "NCP 애플리케이션의 Client ID",
     ),
     NAVER_MAP_CLIENT_SECRET(
         key = SecretKeyName.NAVER_MAP_CLIENT_SECRET,
-        label = "네이버 지도 Client Secret",
-        hint = "같은 애플리케이션의 Client Secret",
+        label = "네이버 지도 Key (클라우드 플랫폼)",
+        hint = "같은 NCP 애플리케이션의 Client Secret",
     ),
-    WEB_SEARCH_API_KEY(
-        key = SecretKeyName.WEB_SEARCH_API_KEY,
-        label = "웹 검색 API 키",
-        hint = "사용할 검색 제공자의 API 키",
+    NAVER_SEARCH_CLIENT_ID(
+        key = SecretKeyName.NAVER_SEARCH_CLIENT_ID,
+        label = "네이버 검색 Client ID (개발자센터)",
+        hint = "developers.naver.com 애플리케이션의 Client ID",
+    ),
+    NAVER_SEARCH_CLIENT_SECRET(
+        key = SecretKeyName.NAVER_SEARCH_CLIENT_SECRET,
+        label = "네이버 검색 Client Secret (개발자센터)",
+        hint = "같은 개발자센터 애플리케이션의 Client Secret",
     ),
 }
 

@@ -15,6 +15,11 @@ import com.personaledge.core.tools.CapturedMessageSummary
 import com.personaledge.core.tools.FakeArrivalNoticeParams
 import com.personaledge.core.tools.NotificationSearchParams
 import com.personaledge.core.tools.NotificationSearchResult
+import com.personaledge.core.tools.RouteEstimateParams
+import com.personaledge.core.tools.RouteEstimateResult
+import com.personaledge.core.tools.WebSearchHit
+import com.personaledge.core.tools.WebSearchParams
+import com.personaledge.core.tools.WebSearchResult
 import com.personaledge.core.tools.FakeArrivalNoticeResult
 import com.personaledge.core.tools.ToolParams
 
@@ -410,6 +415,45 @@ internal class NotificationSearchArgumentsParser(maxArgumentBytes: Int) {
     }
 }
 
+internal class RouteEstimateArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<RouteEstimateParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, REQUIRED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                RouteEstimateParams(
+                    origin = fields.fields[ORIGIN],
+                    destination = fields.fields.getValue(DESTINATION),
+                ),
+            )
+        }
+
+    private companion object {
+        const val ORIGIN = "origin"
+        const val DESTINATION = "destination"
+        val REQUIRED_FIELDS = setOf(DESTINATION)
+        val ALLOWED_FIELDS = REQUIRED_FIELDS + ORIGIN
+    }
+}
+
+internal class WebSearchArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<WebSearchParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, ALLOWED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                WebSearchParams(query = fields.fields.getValue(QUERY)),
+            )
+        }
+
+    private companion object {
+        const val QUERY = "query"
+        val ALLOWED_FIELDS = setOf(QUERY)
+    }
+}
+
 /**
  * Encodes the trusted result the runtime reinjects.
  *
@@ -459,6 +503,24 @@ internal object TrustedToolResultJson {
             append(encodeMessage(message))
         }
         append("""],"truncated":${result.truncated}}""")
+    }
+
+    fun encode(result: RouteEstimateResult): String = buildString {
+        append("""{"origin":${quote(result.origin)}""")
+        append(""","destination":${quote(result.destination)}""")
+        append(""","duration_minutes":${result.durationMinutes}""")
+        append(""","distance_km":${quote(result.distanceKilometres)}}""")
+    }
+
+    fun encode(result: WebSearchResult): String = buildString {
+        append("""{"results":[""")
+        result.hits.forEachIndexed { index, hit ->
+            if (index > 0) append(',')
+            append("""{"title":${quote(hit.title)}""")
+            append(""","link":${quote(hit.link)}""")
+            append(""","snippet":${quote(hit.snippet)}}""")
+        }
+        append("]}")
     }
 
     fun encode(result: CalendarUpdateEventResult): String = buildString {

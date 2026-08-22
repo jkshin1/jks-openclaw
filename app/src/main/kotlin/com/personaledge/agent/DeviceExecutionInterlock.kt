@@ -3,6 +3,8 @@ package com.personaledge.agent
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.core.content.ContextCompat
 import com.personaledge.core.diagnostics.DiagnosticThermalStatus
 import com.personaledge.core.tools.AlarmGateway
@@ -62,10 +64,9 @@ class DeviceExecutionInterlock(
         ) ?: pinnedCalendarReason()
         ToolCapability.SCHEDULE_ALARM -> clockAppReason()
         ToolCapability.READ_NOTIFICATIONS -> notificationCaptureReason()
-        ToolCapability.POST_NOTIFICATIONS,
-        ToolCapability.NETWORK,
+        ToolCapability.NETWORK -> networkReason()
         // Declared but not yet wired. Refusing keeps a future tool from shipping unchecked.
-        -> "이 기능은 아직 사용할 수 없습니다."
+        ToolCapability.POST_NOTIFICATIONS -> "이 기능은 아직 사용할 수 없습니다."
     }
 
     private fun permissionReason(permission: String, reason: String): String? =
@@ -95,6 +96,26 @@ class DeviceExecutionInterlock(
         !notificationGateway.captureEnabled() ->
             "알림 수집이 꺼져 있습니다. 설정에서 켜 주세요."
         else -> null
+    }
+
+    /**
+     * Refuses while offline rather than letting the request time out.
+     *
+     * This checks reachability, not credentials: each network tool verifies its own key during
+     * validation, because a missing key is a settings problem with a different remedy.
+     */
+    private fun networkReason(): String? {
+        val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
+            ?: return "네트워크 상태를 확인할 수 없습니다."
+        val capabilities = connectivity.activeNetwork
+            ?.let(connectivity::getNetworkCapabilities)
+            ?: return "네트워크에 연결되어 있지 않습니다."
+
+        return if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            null
+        } else {
+            "네트워크에 연결되어 있지 않습니다."
+        }
     }
 
     private suspend fun clockAppReason(): String? = try {

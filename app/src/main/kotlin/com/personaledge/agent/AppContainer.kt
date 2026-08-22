@@ -4,13 +4,23 @@ import android.app.Application
 import com.personaledge.core.data.ConversationRepository
 import com.personaledge.core.data.NotificationRepository
 import com.personaledge.core.data.PersonalEdgeDatabase
+import com.personaledge.core.data.SecretKeyName
 import com.personaledge.core.data.SecretVault
 import com.personaledge.core.data.SettingsRepository
 import com.personaledge.core.tools.AlarmGateway
 import com.personaledge.core.tools.AndroidAlarmGateway
 import com.personaledge.core.tools.AndroidCalendarGateway
 import com.personaledge.core.tools.CalendarGateway
+import com.personaledge.core.tools.HttpTransport
+import com.personaledge.core.tools.NAVER_ALLOWED_HOSTS
+import com.personaledge.core.tools.NaverSearchCredentials
+import com.personaledge.core.tools.NaverRouteGateway
+import com.personaledge.core.tools.NaverWebSearchGateway
+import com.personaledge.core.tools.NcpCredentials
+import com.personaledge.core.tools.RouteGateway
 import com.personaledge.core.tools.ScopedCalendarGateway
+import com.personaledge.core.tools.UrlHttpTransport
+import com.personaledge.core.tools.WebSearchGateway
 import com.personaledge.core.tools.SqliteActionLedger
 import kotlinx.coroutines.flow.first
 
@@ -42,6 +52,33 @@ class AppContainer(application: Application) {
     val secretVault: SecretVault by lazy { SecretVault.create(application) }
 
     val credentials: CredentialSettings by lazy { CredentialSettings(secretVault) }
+
+    /** The only outbound network surface, pinned to the two NAVER hosts this app talks to. */
+    val httpTransport: HttpTransport by lazy { UrlHttpTransport(NAVER_ALLOWED_HOSTS) }
+
+    val routes: RouteGateway by lazy {
+        NaverRouteGateway(httpTransport) {
+            // Read per request, so deleting a key in settings takes effect immediately and the
+            // plaintext lives only for the duration of the call.
+            val keyId = secretVault.read(SecretKeyName.NAVER_MAP_CLIENT_ID)
+            val key = secretVault.read(SecretKeyName.NAVER_MAP_CLIENT_SECRET)
+            if (keyId == null || key == null) null else NcpCredentials(keyId, key)
+        }
+    }
+
+    val webSearch: WebSearchGateway by lazy {
+        NaverWebSearchGateway(httpTransport) {
+            val clientId = secretVault.read(SecretKeyName.NAVER_SEARCH_CLIENT_ID)
+            val clientSecret = secretVault.read(SecretKeyName.NAVER_SEARCH_CLIENT_SECRET)
+            if (clientId == null || clientSecret == null) {
+                null
+            } else {
+                NaverSearchCredentials(clientId, clientSecret)
+            }
+        }
+    }
+
+    suspend fun defaultOriginLabel(): String? = settings.settings.first().defaultOriginLabel
 
     /** The one durable ledger. Side-effecting tools are refused without it. */
     val actionLedger: SqliteActionLedger by lazy { SqliteActionLedger.open(application) }

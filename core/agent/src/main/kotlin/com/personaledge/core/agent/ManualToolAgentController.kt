@@ -85,6 +85,20 @@ class ManualToolAgentController(
     private val limits: AgentLoopLimits = AgentLoopLimits(),
     private val monotonicClockMillis: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
+    /**
+     * Budget for a turn that must not touch a tool.
+     *
+     * `maxSteps = 1` is what enforces it: the loop aborts as soon as a completed step contains a
+     * tool call, before the tool is prepared, so no confirmation dialog can appear behind a
+     * background summarization and no side effect is possible.
+     */
+    val toolFreeLimits: AgentLoopLimits = AgentLoopLimits(
+        maxSteps = 1,
+        deadlineMillis = limits.deadlineMillis,
+        maxOutputTokens = TOOL_FREE_OUTPUT_TOKENS,
+        maxToolCalls = 1,
+        maxToolArgumentBytes = limits.maxToolArgumentBytes,
+    )
     val toolDefinitions: List<LlmToolDefinition>
         get() = registry.definitions
 
@@ -105,6 +119,7 @@ class ManualToolAgentController(
     fun runTurn(
         turnId: TurnId,
         prompt: String,
+        turnLimits: AgentLoopLimits = limits,
     ): Flow<AgentEvent> = flow {
         if (!isValidTurnId(turnId)) {
             emit(AgentEvent.Failure(turnId, AgentFailureCode.INVALID_TURN))
@@ -120,8 +135,8 @@ class ManualToolAgentController(
         }
 
         try {
-            withTimeout(limits.deadlineMillis) {
-                processTurn(active, prompt)
+            withTimeout(turnLimits.deadlineMillis) {
+                processTurn(active, prompt, turnLimits)
             }
         } catch (_: TimeoutCancellationException) {
             cancelRuntimeOnce(active)
@@ -156,9 +171,10 @@ class ManualToolAgentController(
     private suspend fun FlowCollector<AgentEvent>.processTurn(
         active: ActiveTurn,
         prompt: String,
+        turnLimits: AgentLoopLimits,
     ) {
         val startedAt = monotonicClockMillis()
-        val deadline = saturatedAdd(startedAt, limits.deadlineMillis)
+        val deadline = saturatedAdd(startedAt, turnLimits.deadlineMillis)
         val seenCallIds = mutableSetOf<String>()
         var stepCount = 0
         var toolCallCount = 0
@@ -170,7 +186,7 @@ class ManualToolAgentController(
             currentCoroutineContext().ensureActive()
             ensureBeforeDeadline(deadline)
             stepCount++
-            if (stepCount > limits.maxSteps) {
+            if (stepCount > turnLimits.maxSteps) {
                 abort(AgentFailureCode.STEP_LIMIT_EXCEEDED)
             }
 
@@ -183,12 +199,12 @@ class ManualToolAgentController(
             if (step.toolCalls.size != 1) {
                 abort(AgentFailureCode.INVALID_MODEL_SEQUENCE)
             }
-            if (stepCount >= limits.maxSteps) {
+            if (stepCount >= turnLimits.maxSteps) {
                 abort(AgentFailureCode.STEP_LIMIT_EXCEEDED)
             }
 
             toolCallCount++
-            if (toolCallCount > limits.maxToolCalls) {
+            if (toolCallCount > turnLimits.maxToolCalls) {
                 abort(AgentFailureCode.TOOL_CALL_LIMIT_EXCEEDED)
             }
             val call = step.toolCalls.single()
@@ -206,7 +222,7 @@ class ManualToolAgentController(
                     toolName = resolved.definition.name,
                     requestOrdinal = toolCallCount,
                     deadline = deadline,
-                    parse = { json -> FakeArrivalNoticeArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    parse = { json -> FakeArrivalNoticeArgumentsParser(turnLimits.maxToolArgumentBytes).parse(json) },
                     encode = TrustedToolResultJson::encode,
                 )
                 is RegisteredManualTool.CalendarQuery -> runTool(
@@ -216,7 +232,7 @@ class ManualToolAgentController(
                     toolName = resolved.definition.name,
                     requestOrdinal = toolCallCount,
                     deadline = deadline,
-                    parse = { json -> CalendarQueryArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    parse = { json -> CalendarQueryArgumentsParser(turnLimits.maxToolArgumentBytes).parse(json) },
                     encode = TrustedToolResultJson::encode,
                 )
                 is RegisteredManualTool.CalendarCreateEvent -> runTool(
@@ -226,7 +242,7 @@ class ManualToolAgentController(
                     toolName = resolved.definition.name,
                     requestOrdinal = toolCallCount,
                     deadline = deadline,
-                    parse = { json -> CalendarCreateEventArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    parse = { json -> CalendarCreateEventArgumentsParser(turnLimits.maxToolArgumentBytes).parse(json) },
                     encode = TrustedToolResultJson::encode,
                 )
                 is RegisteredManualTool.CalendarUpdateEvent -> runTool(
@@ -236,7 +252,7 @@ class ManualToolAgentController(
                     toolName = resolved.definition.name,
                     requestOrdinal = toolCallCount,
                     deadline = deadline,
-                    parse = { json -> CalendarUpdateEventArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    parse = { json -> CalendarUpdateEventArgumentsParser(turnLimits.maxToolArgumentBytes).parse(json) },
                     encode = TrustedToolResultJson::encode,
                 )
                 is RegisteredManualTool.AlarmSet -> runTool(
@@ -246,7 +262,7 @@ class ManualToolAgentController(
                     toolName = resolved.definition.name,
                     requestOrdinal = toolCallCount,
                     deadline = deadline,
-                    parse = { json -> AlarmSetArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    parse = { json -> AlarmSetArgumentsParser(turnLimits.maxToolArgumentBytes).parse(json) },
                     encode = TrustedToolResultJson::encode,
                 )
                 is RegisteredManualTool.AlarmNext -> runTool(
@@ -256,7 +272,27 @@ class ManualToolAgentController(
                     toolName = resolved.definition.name,
                     requestOrdinal = toolCallCount,
                     deadline = deadline,
-                    parse = { json -> AlarmNextArgumentsParser(limits.maxToolArgumentBytes).parse(json) },
+                    parse = { json -> AlarmNextArgumentsParser(turnLimits.maxToolArgumentBytes).parse(json) },
+                    encode = TrustedToolResultJson::encode,
+                )
+                is RegisteredManualTool.RouteEstimate -> runTool(
+                    active = active,
+                    call = call,
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
+                    requestOrdinal = toolCallCount,
+                    deadline = deadline,
+                    parse = { json -> RouteEstimateArgumentsParser(turnLimits.maxToolArgumentBytes).parse(json) },
+                    encode = TrustedToolResultJson::encode,
+                )
+                is RegisteredManualTool.WebSearch -> runTool(
+                    active = active,
+                    call = call,
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
+                    requestOrdinal = toolCallCount,
+                    deadline = deadline,
+                    parse = { json -> WebSearchArgumentsParser(turnLimits.maxToolArgumentBytes).parse(json) },
                     encode = TrustedToolResultJson::encode,
                 )
                 is RegisteredManualTool.NotificationSearch -> runTool(
@@ -267,7 +303,7 @@ class ManualToolAgentController(
                     requestOrdinal = toolCallCount,
                     deadline = deadline,
                     parse = { json ->
-                        NotificationSearchArgumentsParser(limits.maxToolArgumentBytes).parse(json)
+                        NotificationSearchArgumentsParser(turnLimits.maxToolArgumentBytes).parse(json)
                     },
                     encode = TrustedToolResultJson::encode,
                 )
@@ -483,6 +519,7 @@ class ManualToolAgentController(
     ) : RuntimeException(null, null, false, false)
 
     private companion object {
+        const val TOOL_FREE_OUTPUT_TOKENS = 256
         const val MAX_TURN_ID_CHARACTERS = 128
         const val MAX_CALL_ID_CHARACTERS = 128
         const val MINIMUM_ACTION_LIFETIME_MILLIS = 1_000L

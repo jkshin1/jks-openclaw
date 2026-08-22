@@ -20,7 +20,8 @@ import kotlinx.coroutines.withContext
 enum class SecretKeyName(internal val fileName: String) {
     NAVER_MAP_CLIENT_ID("naver-map-client-id.bin"),
     NAVER_MAP_CLIENT_SECRET("naver-map-client-secret.bin"),
-    WEB_SEARCH_API_KEY("web-search-api-key.bin"),
+    NAVER_SEARCH_CLIENT_ID("naver-search-client-id.bin"),
+    NAVER_SEARCH_CLIENT_SECRET("naver-search-client-secret.bin"),
 }
 
 /**
@@ -101,11 +102,17 @@ class SecretVault internal constructor(
         withContext(ioDispatcher) { secretFile(name).delete() }
     }
 
-    /** Clears every stored credential. The KeyStore key itself is left for the next write. */
+    /**
+     * Clears every stored credential.
+     *
+     * Deletes the whole directory's contents rather than the known names, so a credential slot
+     * removed in a later version cannot leave an orphaned ciphertext behind. The KeyStore key
+     * itself is left in place for the next write.
+     */
     suspend fun clear() {
         mutex.withLock {
             withContext(ioDispatcher) {
-                SecretKeyName.entries.forEach { name -> secretFile(name).delete() }
+                directory.listFiles()?.forEach { file -> file.delete() }
             }
         }
     }

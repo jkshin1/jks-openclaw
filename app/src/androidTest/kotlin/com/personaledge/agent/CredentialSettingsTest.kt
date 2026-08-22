@@ -52,12 +52,12 @@ class CredentialSettingsTest {
     fun aStoredKeyIsReportedAsPresentWithoutRevealingIt() = runBlocking {
         assertEquals(
             CredentialStoreResult.Stored,
-            settings.store(CredentialSlot.WEB_SEARCH_API_KEY, "placeholder-value-1"),
+            settings.store(CredentialSlot.NAVER_SEARCH_CLIENT_ID, "placeholder-value-1"),
         )
 
-        assertEquals(listOf(CredentialSlot.WEB_SEARCH_API_KEY), storedSlots())
+        assertEquals(listOf(CredentialSlot.NAVER_SEARCH_CLIENT_ID), storedSlots())
         // The status carries presence and nothing else; there is no field to leak the value.
-        val status = settings.statuses().single { it.slot == CredentialSlot.WEB_SEARCH_API_KEY }
+        val status = settings.statuses().single { it.slot == CredentialSlot.NAVER_SEARCH_CLIENT_ID }
         assertTrue(status.stored)
     }
 
@@ -73,27 +73,27 @@ class CredentialSettingsTest {
 
     @Test
     fun storingAgainOverAnExistingKeySucceeds() = runBlocking {
-        settings.store(CredentialSlot.WEB_SEARCH_API_KEY, "placeholder-first")
+        settings.store(CredentialSlot.NAVER_SEARCH_CLIENT_ID, "placeholder-first")
 
         assertEquals(
             CredentialStoreResult.Stored,
-            settings.store(CredentialSlot.WEB_SEARCH_API_KEY, "placeholder-second"),
+            settings.store(CredentialSlot.NAVER_SEARCH_CLIENT_ID, "placeholder-second"),
         )
-        assertEquals(listOf(CredentialSlot.WEB_SEARCH_API_KEY), storedSlots())
+        assertEquals(listOf(CredentialSlot.NAVER_SEARCH_CLIENT_ID), storedSlots())
     }
 
     @Test
     fun surroundingWhitespaceFromAPasteIsTrimmedRatherThanRejected() = runBlocking {
         assertEquals(
             CredentialStoreResult.Stored,
-            settings.store(CredentialSlot.WEB_SEARCH_API_KEY, "  placeholder-value-3\n"),
+            settings.store(CredentialSlot.NAVER_SEARCH_CLIENT_ID, "  placeholder-value-3\n"),
         )
-        assertTrue(storedSlots().contains(CredentialSlot.WEB_SEARCH_API_KEY))
+        assertTrue(storedSlots().contains(CredentialSlot.NAVER_SEARCH_CLIENT_ID))
     }
 
     @Test
     fun aPasteThatCaughtSurroundingTextIsRejected() = runBlocking {
-        val result = settings.store(CredentialSlot.WEB_SEARCH_API_KEY, "Client Secret placeholder")
+        val result = settings.store(CredentialSlot.NAVER_SEARCH_CLIENT_ID, "Client Secret placeholder")
 
         assertEquals("공백이 포함되어 있습니다. 키만 붙여넣었는지 확인하세요.", rejection(result))
         assertTrue(storedSlots().isEmpty())
@@ -101,19 +101,19 @@ class CredentialSettingsTest {
 
     @Test
     fun blankOversizedAndControlCharacterInputAreRejected() = runBlocking {
-        assertEquals("값을 입력하세요.", rejection(settings.store(CredentialSlot.WEB_SEARCH_API_KEY, "   ")))
+        assertEquals("값을 입력하세요.", rejection(settings.store(CredentialSlot.NAVER_SEARCH_CLIENT_ID, "   ")))
         assertEquals(
             "키가 너무 깁니다. 붙여넣은 내용을 확인하세요.",
             rejection(
                 settings.store(
-                    CredentialSlot.WEB_SEARCH_API_KEY,
+                    CredentialSlot.NAVER_SEARCH_CLIENT_ID,
                     "a".repeat(CredentialSettings.MAX_CREDENTIAL_CHARACTERS + 1),
                 ),
             ),
         )
         assertEquals(
             "사용할 수 없는 문자가 포함되어 있습니다.",
-            rejection(settings.store(CredentialSlot.WEB_SEARCH_API_KEY, "placeholder\u0007value")),
+            rejection(settings.store(CredentialSlot.NAVER_SEARCH_CLIENT_ID, "placeholder\u0007value")),
         )
         assertTrue(storedSlots().isEmpty())
     }
@@ -122,7 +122,7 @@ class CredentialSettingsTest {
     fun aRejectionNeverEchoesTheValue() = runBlocking {
         val secretish = "placeholder value with spaces"
 
-        val reason = rejection(settings.store(CredentialSlot.WEB_SEARCH_API_KEY, secretish))
+        val reason = rejection(settings.store(CredentialSlot.NAVER_SEARCH_CLIENT_ID, secretish))
 
         assertFalse(reason.contains("placeholder"))
     }

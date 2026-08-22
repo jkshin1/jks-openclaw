@@ -43,6 +43,8 @@ import com.personaledge.core.tools.CalendarCreateEventTool
 import com.personaledge.core.tools.CalendarQueryTool
 import com.personaledge.core.tools.CalendarUpdateEventTool
 import com.personaledge.core.tools.NotificationSearchTool
+import com.personaledge.core.tools.RouteEstimateTool
+import com.personaledge.core.tools.WebSearchTool
 import com.personaledge.core.tools.ToolOrchestrator
 import java.time.Instant
 import java.time.ZoneId
@@ -173,6 +175,11 @@ class PersonalEdgeViewModel(
         alarmSetTool = AlarmSetTool(container.alarms),
         alarmNextTool = AlarmNextTool(container.alarms),
         notificationSearchTool = NotificationSearchTool(container.notificationGateway),
+        routeEstimateTool = RouteEstimateTool(
+            gateway = container.routes,
+            defaultOrigin = container::defaultOriginLabel,
+        ),
+        webSearchTool = WebSearchTool(container.webSearch),
     )
     val confirmationCoordinator = ConfirmationCoordinator(
         diagnostics = diagnostics,
@@ -202,12 +209,14 @@ class PersonalEdgeViewModel(
     val uiState: StateFlow<PersonalEdgeUiState> = _uiState.asStateFlow()
 
     private val history = ChatHistoryCoordinator(container.conversations)
+    private val summarizer = ConversationSummarizer(container.conversations)
     private val _chatHistory = MutableStateFlow(ChatHistoryState())
     val chatHistory: StateFlow<ChatHistoryState> = _chatHistory.asStateFlow()
 
     private var verifiedModel: VerifiedInstalledModel? = null
     private var modelJob: Job? = null
     private var turnJob: Job? = null
+    private var summaryJob: Job? = null
     private val activeThermalInitialization = AtomicReference<ActiveThermalInitialization?>(null)
     private val activeThermalTurn = AtomicReference<ActiveThermalTurn?>(null)
     private val thermalDirectiveSubscription: AutoCloseable
@@ -750,6 +759,7 @@ class PersonalEdgeViewModel(
             val zone = ZoneId.systemDefault()
             val now = Instant.now().atZone(zone)
             val calendarLabel = container.settings.current().defaultCalendarLabel
+            val summary = storedSummary()
             buildString {
                 append("[현재 ")
                 append(now.format(TURN_CONTEXT_FORMAT))
@@ -760,11 +770,73 @@ class PersonalEdgeViewModel(
                     append(calendarLabel)
                 }
                 append("]\n")
+                if (summary != null) {
+                    append("[이전 대화 요약] ")
+                    append(summary)
+                    append("\n")
+                }
             }
         }.getOrNull() ?: return prompt
 
+        // Dropped whole rather than truncated: half a summary is worse than none, and the typed
+        // prompt already reserves its own share of the runtime budget.
         if (preamble.toByteArray(Charsets.UTF_8).size > MAX_TURN_PREAMBLE_BYTES) return prompt
         return preamble + prompt
+    }
+
+    /** The stored recap for the active thread, bounded so it cannot crowd out the user's prompt. */
+    private suspend fun storedSummary(): String? {
+        val conversationId = _chatHistory.value.activeConversationId ?: return null
+        val summary = runCatching { container.conversations.findConversation(conversationId) }
+            .getOrNull()
+            ?.summary
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?: return null
+
+        return summary.takeIf { text ->
+            text.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_PREAMBLE_BYTES
+        }
+    }
+
+    /**
+     * Compresses older messages after a turn finishes.
+     *
+     * Runs on the tool-free budget, so a model that tries to call a tool during summarization is
+     * stopped before anything is prepared and no confirmation dialog appears behind the user's
+     * back. A failed or refused summary simply leaves the thread unsummarized.
+     */
+    private fun summarizeInBackground(conversationId: String?) {
+        if (conversationId == null) return
+        if (summaryJob?.isActive == true) return
+
+        summaryJob = viewModelScope.launch {
+            val request = summarizer.requestFor(conversationId) ?: return@launch
+            if (_uiState.value.modelStatus != ModelUiStatus.READY) return@launch
+
+            val summary = StringBuilder()
+            var toolAttempted = false
+            val turnId = TurnId("summary-${UUID.randomUUID()}")
+            try {
+                controller.runTurn(turnId, request.prompt, controller.toolFreeLimits)
+                    .collect { event ->
+                        when (event) {
+                            is AgentEvent.TextDelta -> summary.append(event.text)
+                            is AgentEvent.ToolExecuted -> toolAttempted = true
+                            is AgentEvent.Failure -> toolAttempted = true
+                            is AgentEvent.Completed -> Unit
+                        }
+                    }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return@launch
+            }
+
+            if (!toolAttempted) {
+                summarizer.acceptSummary(request, summary.toString())
+            }
+        }
     }
 
     fun sendPrompt() {
@@ -992,6 +1064,8 @@ class PersonalEdgeViewModel(
                 }
                 finishDiagnosticPhase()
             }
+            // After the turn is released, never during it: the controller runs one turn at a time.
+            summarizeInBackground(conversationId)
         }.also(thermalTurn.job::set)
     }
 
@@ -1059,6 +1133,8 @@ class PersonalEdgeViewModel(
         AlarmSetTool.NAME -> "시계 앱에 알람 추가를 요청했습니다."
         AlarmNextTool.NAME -> "다음 알람 시각을 확인했습니다."
         NotificationSearchTool.NAME -> "수집된 카카오톡 알림을 검색했습니다."
+        RouteEstimateTool.NAME -> "네이버 지도에서 이동 시간을 조회했습니다."
+        WebSearchTool.NAME -> "네이버에서 웹 검색을 했습니다."
         else -> "확인된 Tool을 실행했습니다."
     }
 
@@ -1245,7 +1321,9 @@ class PersonalEdgeViewModel(
     companion object {
         val modelManifest = PinnedModelManifest.value
         // The typed prompt shares the runtime budget with the trusted preamble prepended below.
-        private const val MAX_TURN_PREAMBLE_BYTES = 256
+        // The preamble carries the date line plus, when present, a stored conversation summary.
+        private const val MAX_SUMMARY_PREAMBLE_BYTES = 480
+        private const val MAX_TURN_PREAMBLE_BYTES = 640
         private const val MAX_PROMPT_BYTES = MAX_USER_PROMPT_BYTES - MAX_TURN_PREAMBLE_BYTES
         private val TURN_CONTEXT_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd(E) HH:mm", Locale.KOREAN)

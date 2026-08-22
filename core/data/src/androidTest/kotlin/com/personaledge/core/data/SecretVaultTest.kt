@@ -43,9 +43,9 @@ class SecretVaultTest {
 
     @Test
     fun theCiphertextOnDiskDoesNotContainThePlaintext() = runBlocking {
-        vault.store(SecretKeyName.WEB_SEARCH_API_KEY, "super-secret-search-key")
+        vault.store(SecretKeyName.NAVER_SEARCH_CLIENT_ID, "super-secret-search-key")
 
-        val stored = File(directory, SecretKeyName.WEB_SEARCH_API_KEY.fileName).readBytes()
+        val stored = File(directory, SecretKeyName.NAVER_SEARCH_CLIENT_ID.fileName).readBytes()
         val asText = String(stored, Charsets.ISO_8859_1)
 
         assertFalse(asText.contains("super-secret-search-key"))
@@ -67,14 +67,14 @@ class SecretVaultTest {
 
     @Test
     fun aTamperedCiphertextIsReportedAsAbsentRatherThanReturned() = runBlocking {
-        vault.store(SecretKeyName.WEB_SEARCH_API_KEY, "authentic-value")
+        vault.store(SecretKeyName.NAVER_SEARCH_CLIENT_ID, "authentic-value")
 
-        val file = File(directory, SecretKeyName.WEB_SEARCH_API_KEY.fileName)
+        val file = File(directory, SecretKeyName.NAVER_SEARCH_CLIENT_ID.fileName)
         val bytes = file.readBytes()
         bytes[bytes.lastIndex] = (bytes[bytes.lastIndex].toInt() xor 0x01).toByte()
         file.writeBytes(bytes)
 
-        assertNull(vault.read(SecretKeyName.WEB_SEARCH_API_KEY))
+        assertNull(vault.read(SecretKeyName.NAVER_SEARCH_CLIENT_ID))
     }
 
     @Test
