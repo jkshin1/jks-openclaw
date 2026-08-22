@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -185,6 +187,10 @@ private fun PersonalEdgeScreen(
     onCancel: () -> Unit,
     onConfirmation: (String, Boolean) -> Unit,
 ) {
+    // Expanded on first run because the model still has to be imported; collapsing is remembered
+    // for the session so a returning user lands on the transcript.
+    var settingsExpanded by rememberSaveable { mutableStateOf(true) }
+
     Scaffold { innerPadding ->
         Column(
             modifier = Modifier
@@ -218,35 +224,52 @@ private fun PersonalEdgeScreen(
                 TextButton(onClick = onOpenHistory, enabled = state.activeTurnId == null) {
                     Text("기록")
                 }
+                TextButton(onClick = { settingsExpanded = !settingsExpanded }) {
+                    Text(if (settingsExpanded) "설정 접기" else "설정")
+                }
             }
 
-            ModelStatusCard(
-                state = state,
-                onImportModel = onImportModel,
-                onInspectModel = onInspectModel,
-                onInitializeCpu = onInitializeCpu,
-                onInitializeGpu = onInitializeGpu,
-            )
+            // The setup cards outgrew a phone screen once there were four of them, pushing the
+            // input row off the bottom. They share the free space with the transcript and scroll
+            // inside it, so the prompt field is reachable at every size and fold state.
+            if (settingsExpanded) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ModelStatusCard(
+                        state = state,
+                        onImportModel = onImportModel,
+                        onInspectModel = onInspectModel,
+                        onInitializeCpu = onInitializeCpu,
+                        onInitializeGpu = onInitializeGpu,
+                    )
 
-            CalendarSetupCard(
-                setup = calendarSetup,
-                onRequestPermission = onRequestCalendarPermission,
-                onPinCalendar = onPinCalendar,
-                onUnpinCalendar = onUnpinCalendar,
-            )
+                    CalendarSetupCard(
+                        setup = calendarSetup,
+                        onRequestPermission = onRequestCalendarPermission,
+                        onPinCalendar = onPinCalendar,
+                        onUnpinCalendar = onUnpinCalendar,
+                    )
 
-            NotificationSetupCard(
-                setup = notificationSetup,
-                onOpenAccessSettings = onOpenNotificationAccess,
-                onSetCapture = onSetNotificationCapture,
-                onDeleteCaptured = onDeleteCapturedNotifications,
-            )
+                    NotificationSetupCard(
+                        setup = notificationSetup,
+                        onOpenAccessSettings = onOpenNotificationAccess,
+                        onSetCapture = onSetNotificationCapture,
+                        onDeleteCaptured = onDeleteCapturedNotifications,
+                    )
 
-            CredentialsCard(
-                credentials = credentials,
-                onStore = onStoreCredential,
-                onDelete = onDeleteCredential,
-            )
+                    CredentialsCard(
+                        credentials = credentials,
+                        onStore = onStoreCredential,
+                        onDelete = onDeleteCredential,
+                    )
+                }
+            } else {
+                CompactStatusRow(state = state)
+            }
 
             Conversation(
                 messages = state.messages,
@@ -322,6 +345,38 @@ private fun PersonalEdgeScreen(
                 }
             },
         )
+    }
+}
+
+/** One line standing in for the collapsed setup cards, so state is never fully hidden. */
+@Composable
+private fun CompactStatusRow(state: PersonalEdgeUiState) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = state.modelStatus.name,
+            style = MaterialTheme.typography.labelMedium,
+            color = statusColor(state.modelStatus),
+        )
+        Text(
+            // thermalStatusText already begins with "열 상태"; prefixing it again read as "열 열".
+            text = thermalStatusText(state.thermalStatus),
+            style = MaterialTheme.typography.labelMedium,
+            color = thermalStatusColor(state.thermalStatus),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        state.activeBackend?.let { backend ->
+            Text(
+                text = backend.name,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
