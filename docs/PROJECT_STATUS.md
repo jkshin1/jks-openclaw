@@ -15,7 +15,7 @@ Do not promote a feature merely because a lower state passed.
 | Area | State | Evidence and limits |
 |---|---|---|
 | Gemma/LiteRT runtime | Physical accepted for the 4K GPU slice | Verified model import, streaming, cancellation, recovery, and natural `SEVERE` continuation passed on the Fold8. Natural `CRITICAL`, battery, fold/background, and 8K/16K remain unverified. Exact requested output length also failed in the sustained probe. |
-| **Real Gemma tool selection** | **Physical accepted (English prompt)** | On the Fold8, GPU backend, 2026-08-22: the model selected `calendar_create_event` unprompted, produced valid arguments, resolved "tomorrow" to the correct date from the trusted preamble, and the confirmation dialog rendered from the canonical snapshot. Approving wrote the event to `CalendarContract` (verified by provider query at the exact requested local times), the trusted receipt was reinjected, and the model's closing answer cited the right date and hours. The test event was deleted afterwards. **Korean prompts are still untested** — `adb input text` cannot inject non-ASCII, so that needs a hand-typed check. |
+| **Real Gemma tool selection** | **Physical accepted (English prompt)** | On the Fold8, GPU backend, 2026-08-22: the model selected `calendar_create_event` unprompted, produced valid arguments, resolved "tomorrow" to the correct date from the trusted preamble, and the confirmation dialog rendered from the canonical snapshot. Approving wrote the event to `CalendarContract` (verified by provider query at the exact requested local times), the trusted receipt was reinjected, and the model's closing answer cited the right date and hours. The test event was deleted afterwards. **Korean prompts remain untested by automation.** Three routes were tried on the device and all fail: `input text` rejects non-ASCII, `input keyevent` bypasses the IME's Hangul composer (QWERTY-position keys arrive as literal Latin letters), and the device has no `cmd clipboard`. Installing a third-party input-method APK is out of scope. This is a ten-second manual check, not a missing capability. |
 | Turn latency | Measured once on Fold8 | One complete tool-calling turn took 57.7s wall clock against the 120s deadline. The recorded `ttft_ms` of 56.1s is **not** a clean decode metric for a tool turn: it spans prefill, the tool-call step, the human confirmation wait, execution, and the second prefill. Thermal stayed `none`/`light` throughout. One sample, no repeat. |
 | Tool safety | Emulator verified, one physical pass | Manual Tool calling, typed validation, confirmation, execution interlock, and durable SQLite at-most-once claims are wired. One confirmed-and-executed side effect was observed end to end on the Fold8. This is not exactly-once execution. |
 | Local data foundation | Emulator verified | Room conversation/message/notification schema, DataStore settings, and Keystore AES-GCM vault. Every store is now wired to a UI and a runtime path: chat history, notification capture, settings, and the NAVER keys. |
@@ -63,10 +63,11 @@ Every feature on the MVP list is now implemented. What remains cannot be finishe
 development machine — each item needs the physical Fold8, real credentials, or the owner's own
 password.
 
-1. **Create and back up the personal signing key.** `./scripts/create-release-keystore.sh` prompts
-   for a password only the owner should choose, so this cannot be done for them. Until it is run,
-   `assembleRelease` produces an unsigned APK that cannot be installed. Then verify that
-   `adb install -r` preserves the imported model and app data across an update.
+1. **Back up the personal signing key, then migrate the phone to the release build.** The key now
+   exists and produces a verified signed APK. What is left is offline backup of
+   `app/personal-edge-release.jks` plus its password, and the one-time move from the debug build
+   to the release build — which cannot preserve data, because the keys differ, so it costs an
+   uninstall and a 3.66GB model re-import. Do it deliberately, not incidentally.
 2. **Qualify the NAVER Calendar transport** (see the gate below). The CalendarContract adapter
    works against any writable calendar; whether a NAVER calendar can be published there on Android
    is unresolved.
