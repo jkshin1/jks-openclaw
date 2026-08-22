@@ -32,9 +32,30 @@ Follow `.editorconfig`: UTF-8, LF, four-space indentation, final newline, and no
 
 Tests use JUnit 4, coroutine test utilities, and AndroidX instrumentation. Name files `*Test.kt` and cover validation, cancellation, replay, expiry, and permission/thermal races. Run affected module tests during development and the full command before review. Android framework behavior requires instrumentation; GPU, memory, thermal, fold, and sustained-decode claims require Fold8 evidence.
 
+## Working on the Physical Fold8
+
+Read this before running anything against the phone. Each item cost real damage or a real scare.
+
+- **`connectedAndroidTest` uninstalls the app**, which deletes its data — including the imported
+  3.66 GB model, which then needs a USB push and a re-import. `gradle.properties` sets
+  `android.injected.androidTest.leaveApksInstalledAfterRun=true` to prevent that. Do not remove it.
+- **Some tests are `assumeTrue(isEmulator)`-guarded and must stay that way.** Alarm creation cleans
+  up with `pm clear` on the clock app, and the credential tests clear the real vault, which would
+  irrecoverably delete the owner's NAVER keys. On the Fold8 that is 13 intentional skips.
+- **Debug and release builds cannot replace each other**; the keys differ. Switching costs an
+  uninstall and a 3.66 GB model re-import, so treat it as a deliberate migration.
+- **Do not delete calendar events you did not create.** Query first, and leave anything whose
+  origin you cannot establish from this app's diagnostics.
+- `adb` cannot type Hangul: `input text` refuses non-ASCII, `input keyevent` bypasses the IME's
+  Hangul composer, and there is no `cmd clipboard`. Drive the ViewModel from an instrumentation
+  test instead — see `KoreanToolSelectionTest`.
+- Diagnostics under `no_backup/diagnostics/diagnostics.jsonl` are the authority on what a turn
+  actually did. Read them before claiming a gate failed.
+
 ## Project Status & Planning
 
-Read `docs/PROJECT_STATUS.md` before changing scope. Keep “implemented,” “emulator verified,” and “physical-device accepted” distinct. Update that document when a milestone or provider assumption changes; never infer NAVER integration from a local test calendar.
+Read `docs/HANDOFF.md` first if you are picking this up cold, then `docs/PROJECT_STATUS.md`
+before changing scope. Keep “implemented,” “emulator verified,” and “physical-device accepted” distinct. Update that document when a milestone or provider assumption changes; never infer NAVER integration from a local test calendar.
 
 ## Commit & Pull Request Guidelines
 

@@ -58,6 +58,7 @@ ANDROID_SERIAL=emulator-5554 ./gradlew connectedDebugAndroidTest
 캘린더를 하나 선택해야 일정 Tool이 동작합니다. 모델은 APK에 포함되지 않으며, 선택한
 파일은 고정 revision/size/SHA-256을 통과해야만 LiteRT 런타임에 전달됩니다.
 
+다른 도구나 새 세션에서 이어받을 때는 [docs/HANDOFF.md](docs/HANDOFF.md)를 먼저 읽으세요.
 현재 완료·검증·남은 범위는 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md), 캘린더 연동
 한계와 안전장치는 [docs/CALENDAR.md](docs/CALENDAR.md), 개인 서명키와 백업
 절차는 [docs/RELEASE_AND_BACKUP.md](docs/RELEASE_AND_BACKUP.md),
