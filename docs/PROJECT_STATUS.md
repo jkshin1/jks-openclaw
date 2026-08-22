@@ -15,11 +15,14 @@ Do not promote a feature merely because a lower state passed.
 | Area | State | Evidence and limits |
 |---|---|---|
 | Gemma/LiteRT runtime | Physical accepted for the 4K GPU slice | Verified model import, streaming, cancellation, recovery, and natural `SEVERE` continuation passed on the Fold8. Natural `CRITICAL`, battery, fold/background, and 8K/16K remain unverified. Exact requested output length also failed in the sustained probe. |
-| Tool safety | Emulator verified | Manual Tool calling, typed validation, confirmation, execution interlock, and durable SQLite at-most-once claims are wired. This is not exactly-once execution. |
+| **Real Gemma tool selection** | **Physical accepted (English prompt)** | On the Fold8, GPU backend, 2026-08-22: the model selected `calendar_create_event` unprompted, produced valid arguments, resolved "tomorrow" to the correct date from the trusted preamble, and the confirmation dialog rendered from the canonical snapshot. Approving wrote the event to `CalendarContract` (verified by provider query at the exact requested local times), the trusted receipt was reinjected, and the model's closing answer cited the right date and hours. The test event was deleted afterwards. **Korean prompts are still untested** — `adb input text` cannot inject non-ASCII, so that needs a hand-typed check. |
+| Turn latency | Measured once on Fold8 | One complete tool-calling turn took 57.7s wall clock against the 120s deadline. The recorded `ttft_ms` of 56.1s is **not** a clean decode metric for a tool turn: it spans prefill, the tool-call step, the human confirmation wait, execution, and the second prefill. Thermal stayed `none`/`light` throughout. One sample, no repeat. |
+| Tool safety | Emulator verified, one physical pass | Manual Tool calling, typed validation, confirmation, execution interlock, and durable SQLite at-most-once claims are wired. One confirmed-and-executed side effect was observed end to end on the Fold8. This is not exactly-once execution. |
 | Local data foundation | Emulator verified | Room conversation/message/notification schema, DataStore settings, and Keystore AES-GCM vault. Every store is now wired to a UI and a runtime path: chat history, notification capture, settings, and the NAVER keys. |
 | Chat history | Emulator verified | Turns persist to Room and restore on launch; the history dialog switches, deletes one thread, and deletes all. Verified on the AVD by seeding the real database and driving the UI. Summarization is a separate row below. |
 | CalendarContract tools | Emulator verified | Query, create, and update are scoped to one pinned writable calendar; confirmation, replay protection, change digest, permissions, and setup UI are implemented. Tests used a local AVD calendar. |
-| NAVER Calendar | **Not physically accepted** | The app has no direct NAVER login/API/CalDAV implementation. No real NAVER account, remote sync, Fold8, or Gemma calendar E2E receipt exists. |
+| NAVER Calendar | **Still not qualified** | Checked on the Fold8 on 2026-08-22. The device does have calendars whose `account_name` is a naver.com address — but their `account_type` is `com.osp.app.signin` and `com.samsung.android.mobileservice`, i.e. **Samsung account calendars whose owner happens to use a NAVER address as their Samsung ID**. That is not NAVER Calendar, and writing there syncs to Samsung, not NAVER. Do not read the account name as evidence of a NAVER transport. |
+| Calendar visibility on Fold8 | **Open problem** | The shell (`content query`) sees 9 calendars; the app, holding `READ_CALENDAR`, sees exactly one — the local "My calendar". The Samsung-account and Google calendars are not returned to it. Cause unknown and not yet diagnosed; `run-as content query` cannot be used to compare because the `content` command needs a system permission. Until this is understood, the calendar tools can only reach a local calendar on this device. |
 | Standard alarm tools | Emulator verified | `alarm_set` creates one-shot and repeating alarms through `AlarmClock.ACTION_SET_ALARM`; `alarm_next` reads `getNextAlarmClock()`. Both confirmed on the API 37 AVD from the app's own foreground. The platform offers no way to list, edit, or delete alarms, so no such tool exists. Not exercised through a real Gemma turn or on the Fold8. |
 | Kakao notification capture | Emulator verified, one gap | Listener binds, non-allowlisted posts are ignored, capture is off by default behind two gates, and search/retention/erasure are covered. Text is stripped of control tokens and invisible formatting before storage. **The accept path for com.kakao.talk itself is not end-to-end verified**: a test cannot post as another package, so real capture is a Fold8 check. |
 | Third-party credentials | Emulator verified | Settings screen stores four keys — an NCP pair for maps and a Developers pair for search — into the Keystore AES-GCM vault. Values move one way: the UI reports presence only and cannot read a key back. Read per request by the network gateways. |
@@ -27,6 +30,7 @@ Do not promote a feature merely because a lower state passed.
 | Conversation summaries | Emulator verified, **model path unproven** | After a turn, a thread with 10+ unsummarized messages is compressed on the tool-free budget (`maxSteps = 1`, so a tool call aborts before anything is prepared and no dialog can appear in the background). The stored summary is injected into the next turn's preamble within a 480-byte cap. Threshold logic, prompt construction, and storage are tested; the **actual model summary has never been generated**, so quality and added latency are unmeasured. |
 | Setup and settings UI | Emulator verified | Model import, calendar permission and pinning, notification access and capture toggle, credential entry, and conversation history are all reachable from one screen. The four setup cards collapse behind a toggle and scroll inside a bounded area, because at phone width they had been pushing the prompt field off-screen entirely. Verified at 1080x2316 as well as the unfolded size. |
 | Diagnostics and thermal policy | Physical accepted for current slice | Content-free rotating diagnostics and evidence collection work. `NONE` through `SEVERE` continue, `CRITICAL` cooperatively cancels, and `EMERGENCY+` immediately cancels; the latter two branches lack natural physical evidence. |
+| Update preservation | Physically verified (debug key) | `adb install -r` over the running install preserved the app-private 3.66GB model and diagnostics on the Fold8. Verified with the debug key; the release-key path still depends on the owner creating one. |
 | Personal installation | Blocked on the owner | Signing wiring, the keystore script, and a verifier that recognises the unsigned artifact all exist. The key itself cannot be created here: the script prompts for a password only the owner should choose. Until then `assembleRelease` emits `app-release-unsigned.apk`, which cannot be installed. Play Store, AAB, and public CI are out of scope. |
 
 At this snapshot, host unit tests report 209 passes. API 37 instrumentation reports 96 tests: 95 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
@@ -84,6 +88,19 @@ model thinking, and transient status notices such as thermal refusals.
 Everything lives in `noBackupFilesDir` and is excluded from cloud backup and device transfer.
 "전체 삭제" clears conversations and messages only; the action ledger is a separate database and is
 deliberately untouched, so erasing history can never re-enable an already-executed side effect.
+
+## Running Instrumentation on the Fold8
+
+`connectedAndroidTest` uninstalls the app when it finishes, and that destroys its data — on
+2026-08-22 it deleted the imported 3.66GB model from the Fold8, which then had to be pushed and
+re-imported. `gradle.properties` now sets
+`android.injected.androidTest.leaveApksInstalledAfterRun=true`, verified on the AVD to be the
+difference between the package surviving and not.
+
+Tests that would damage real device state are guarded with `assumeTrue(isEmulator)` and skip on a
+phone: alarm creation (no API removes an alarm, so cleanup is `pm clear` on the clock app) and the
+credential vault tests (setup and teardown clear the real vault, which would delete the owner's
+NAVER keys irrecoverably). On the Fold8 that is 13 skips out of 96.
 
 ## Network Boundaries
 

@@ -1,5 +1,6 @@
 package com.personaledge.agent
 
+import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.personaledge.core.data.SecretVault
@@ -8,6 +9,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -15,16 +17,25 @@ import org.junit.runner.RunWith
 /**
  * Uses the real AndroidKeyStore, because the point of this feature is what the hardware key does.
  * Values here are obvious placeholders, never real credentials.
+ *
+ * Emulator only. The vault it opens is the installed app's own, and both setup and teardown clear
+ * it — on a phone that would silently delete the owner's real NAVER keys, which cannot be read
+ * back or recovered. The KeyStore behaviour under test is identical on the emulator, so nothing is
+ * lost by skipping here.
  */
 @RunWith(AndroidJUnit4::class)
 class CredentialSettingsTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    private val isEmulator: Boolean
+        get() = Build.HARDWARE == "ranchu" || Build.FINGERPRINT.contains("generic")
 
     private lateinit var vault: SecretVault
     private lateinit var settings: CredentialSettings
 
     @Before
     fun createVault() {
+        assumeTrue("Clearing the real credential vault is emulator-only.", isEmulator)
         vault = SecretVault.create(context)
         settings = CredentialSettings(vault)
         runBlocking { vault.clear() }
@@ -32,7 +43,9 @@ class CredentialSettingsTest {
 
     @After
     fun clearVault() {
-        runBlocking { vault.clear() }
+        if (isEmulator && ::vault.isInitialized) {
+            runBlocking { vault.clear() }
+        }
     }
 
     private suspend fun storedSlots() = settings.statuses()
