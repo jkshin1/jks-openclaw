@@ -138,6 +138,10 @@ enum class DiagnosticConfirmationOutcome {
     AUTHENTICATION_FAILED,
     EXPIRED,
     CANCELLED,
+    /** Tool returned a trusted successful read/write result after any required approval. */
+    EXECUTED_SUCCESS,
+    /** Tool returned a trusted normal refusal result; no requested write was completed. */
+    EXECUTED_REFUSED,
 }
 
 enum class DiagnosticThermalStatus {

@@ -6,9 +6,22 @@ import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/** Content-free startup check; neither branch exposes request keys, Tools, or parameters. */
+sealed interface UnresolvedActionCheck {
+    data class Available(val count: Long) : UnresolvedActionCheck {
+        init {
+            require(count >= 0)
+        }
+    }
+
+    /** Storage could not prove that there are zero unresolved executions. */
+    data object Unavailable : UnresolvedActionCheck
+}
 
 /**
  * Durable, atomically claimed replay protection for side-effecting tools.
@@ -48,6 +61,40 @@ class SqliteActionLedger internal constructor(
         }
     }
 
+    override suspend fun recordState(
+        idempotencyKey: String,
+        state: ActionExecutionState,
+    ): Boolean {
+        require(idempotencyKey.isNotBlank())
+        require(idempotencyKey.length <= MAXIMUM_KEY_CHARACTERS)
+        require(state != ActionExecutionState.CLAIMED)
+
+        return withContext(ioDispatcher) {
+            try {
+                recordStateBlocking(idempotencyKey, state)
+            } catch (_: Exception) {
+                // The original claim remains replay-blocking even if this enrichment fails.
+                false
+            }
+        }
+    }
+
+    /**
+     * Counts only non-terminal claims for a content-free startup warning.
+     *
+     * A database fault is not equivalent to zero: callers must show the unavailable warning and
+     * keep automatic retries disabled.
+     */
+    suspend fun unresolvedActionCheck(): UnresolvedActionCheck = withContext(ioDispatcher) {
+        try {
+            UnresolvedActionCheck.Available(unresolvedActionCountBlocking())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            UnresolvedActionCheck.Unavailable
+        }
+    }
+
     /** Releases the pooled connections. The next call reopens the same durable file. */
     fun close() {
         helper.close()
@@ -57,6 +104,38 @@ class SqliteActionLedger internal constructor(
     internal fun claimCount(): Long = helper.readableDatabase.compileStatement(
         "SELECT COUNT(*) FROM $TABLE_NAME",
     ).use { statement -> statement.simpleQueryForLong() }
+
+    internal fun stateOf(idempotencyKey: String): ActionExecutionState? {
+        helper.readableDatabase.query(
+            TABLE_NAME,
+            arrayOf(COLUMN_STATE),
+            "$COLUMN_IDEMPOTENCY_KEY = ?",
+            arrayOf(idempotencyKey),
+            null,
+            null,
+            null,
+            "1",
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            return runCatching { ActionExecutionState.valueOf(cursor.getString(0)) }.getOrNull()
+        }
+    }
+
+    private fun unresolvedActionCountBlocking(): Long = helper.readableDatabase.query(
+        TABLE_NAME,
+        arrayOf("COUNT(*)"),
+        "$COLUMN_STATE = ? OR $COLUMN_STATE = ?",
+        arrayOf(
+            ActionExecutionState.CLAIMED.name,
+            ActionExecutionState.UNKNOWN_AFTER_CLAIM.name,
+        ),
+        null,
+        null,
+        null,
+    ).use { cursor ->
+        check(cursor.moveToFirst()) { "Missing unresolved action count row." }
+        cursor.getLong(0)
+    }
 
     private fun claimBlocking(idempotencyKey: String): Boolean {
         val database = helper.writableDatabase
@@ -72,9 +151,11 @@ class SqliteActionLedger internal constructor(
                 return false
             }
 
-            val values = ContentValues(2).apply {
+            val values = ContentValues(4).apply {
                 put(COLUMN_IDEMPOTENCY_KEY, idempotencyKey)
                 put(COLUMN_CLAIMED_AT, now)
+                put(COLUMN_STATE, ActionExecutionState.CLAIMED.name)
+                put(COLUMN_UPDATED_AT, now)
             }
             try {
                 database.insertOrThrow(TABLE_NAME, null, values)
@@ -87,6 +168,53 @@ class SqliteActionLedger internal constructor(
         } finally {
             database.endTransaction()
         }
+    }
+
+    private fun recordStateBlocking(
+        idempotencyKey: String,
+        state: ActionExecutionState,
+    ): Boolean {
+        val database = helper.writableDatabase
+        val values = ContentValues(2).apply {
+            put(COLUMN_STATE, state.name)
+            put(COLUMN_UPDATED_AT, clock())
+        }
+
+        database.beginTransactionNonExclusive()
+        return try {
+            val updated = database.update(
+                TABLE_NAME,
+                values,
+                "$COLUMN_IDEMPOTENCY_KEY = ? AND $COLUMN_STATE = ?",
+                arrayOf(idempotencyKey, ActionExecutionState.CLAIMED.name),
+            )
+            val accepted = when {
+                updated == 1 -> true
+                updated != 0 -> false
+                else -> queryState(database, idempotencyKey) == state
+            }
+            if (accepted) database.setTransactionSuccessful()
+            accepted
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    private fun queryState(
+        database: SQLiteDatabase,
+        idempotencyKey: String,
+    ): ActionExecutionState? = database.query(
+        TABLE_NAME,
+        arrayOf(COLUMN_STATE),
+        "$COLUMN_IDEMPOTENCY_KEY = ?",
+        arrayOf(idempotencyKey),
+        null,
+        null,
+        null,
+        "1",
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        runCatching { ActionExecutionState.valueOf(cursor.getString(0)) }.getOrNull()
     }
 
     private fun pruneExpired(database: SQLiteDatabase, now: Long) {
@@ -108,8 +236,10 @@ class SqliteActionLedger internal constructor(
         internal const val TABLE_NAME = "action_claims"
         internal const val COLUMN_IDEMPOTENCY_KEY = "idempotency_key"
         internal const val COLUMN_CLAIMED_AT = "claimed_at_epoch_millis"
+        internal const val COLUMN_STATE = "execution_state"
+        internal const val COLUMN_UPDATED_AT = "updated_at_epoch_millis"
         internal const val DATABASE_NAME = "action-ledger.db"
-        internal const val DATABASE_VERSION = 1
+        internal const val DATABASE_VERSION = 2
 
         const val DEFAULT_RETENTION_MILLIS = 180L * 24 * 60 * 60 * 1_000
         const val DEFAULT_MAXIMUM_CLAIMS = 100_000
@@ -170,7 +300,9 @@ internal class ActionLedgerOpenHelper(
             """
             CREATE TABLE ${SqliteActionLedger.TABLE_NAME} (
                 ${SqliteActionLedger.COLUMN_IDEMPOTENCY_KEY} TEXT NOT NULL PRIMARY KEY,
-                ${SqliteActionLedger.COLUMN_CLAIMED_AT} INTEGER NOT NULL
+                ${SqliteActionLedger.COLUMN_CLAIMED_AT} INTEGER NOT NULL,
+                ${SqliteActionLedger.COLUMN_STATE} TEXT NOT NULL,
+                ${SqliteActionLedger.COLUMN_UPDATED_AT} INTEGER NOT NULL
             ) WITHOUT ROWID
             """.trimIndent(),
         )
@@ -181,6 +313,26 @@ internal class ActionLedgerOpenHelper(
     }
 
     override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion == 1 && newVersion == 2) {
+            // V1 retained only a claim. It is impossible to know whether its side effect happened,
+            // so preserve every key and label it conservatively instead of reopening a replay.
+            database.execSQL(
+                "ALTER TABLE ${SqliteActionLedger.TABLE_NAME} " +
+                    "ADD COLUMN ${SqliteActionLedger.COLUMN_STATE} TEXT NOT NULL " +
+                    "DEFAULT '${ActionExecutionState.UNKNOWN_AFTER_CLAIM.name}'",
+            )
+            database.execSQL(
+                "ALTER TABLE ${SqliteActionLedger.TABLE_NAME} " +
+                    "ADD COLUMN ${SqliteActionLedger.COLUMN_UPDATED_AT} INTEGER NOT NULL DEFAULT 0",
+            )
+            database.execSQL(
+                "UPDATE ${SqliteActionLedger.TABLE_NAME} " +
+                    "SET ${SqliteActionLedger.COLUMN_UPDATED_AT} = " +
+                    SqliteActionLedger.COLUMN_CLAIMED_AT,
+            )
+            return
+        }
+
         // Dropping the ledger would reopen every historical key. Future schema changes must
         // migrate rows explicitly rather than inheriting a destructive default.
         error("Unsupported action ledger migration from $oldVersion to $newVersion.")

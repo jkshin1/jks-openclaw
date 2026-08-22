@@ -1,4 +1,4 @@
-# Calendar: NAVER Qualification Through CalendarContract
+# CalendarContract scope and NAVER qualification
 
 ## Why the device calendar, not the NAVER API
 
@@ -16,14 +16,18 @@ but a supported way to publish a NAVER calendar there has **not** been establish
 [official CalDAV help](https://help.naver.com/service/5620/contents/2426?lang=ko) explicitly says
 Android is unsupported. Current emulator tests use a local calendar, not a NAVER account.
 
-## Qualification required on the Fold8
+## What the Fold8 provider check established
 
-1. Check whether the official NAVER Calendar app exposes the NAVER account as a writable
-   `CalendarContract` calendar.
-2. If it does, grant calendar permission, pin only that row, and verify remote read/create/update
-   synchronization without exposing other accounts.
-3. If it does not, stop: do not label a local calendar or an unverified third-party CalDAV setup
-   as NAVER integration. Select and review a different personal-use adapter first.
+On 2026-08-22 the device had a `com.nhn.android.naveraccount` account, but that account published
+zero rows into `CalendarContract`. Rows with a naver.com-shaped `account_name` had Samsung
+`account_type` values (`com.osp.app.signin` or `com.samsung.android.mobileservice`); they were
+Samsung calendars for an owner who used a NAVER address as a Samsung ID. Account name is not
+provider identity, and a write there is not NAVER sync evidence.
+
+The settings UI therefore shows display name, account name, account type, and calendar ID together.
+The supported product claim is generic `CalendarContract` access to the row the owner selected.
+NAVER publication and remote synchronization remain unqualified unless a new documented transport
+is designed and independently accepted.
 
 Until a writable calendar is pinned, the calendar tools refuse to run. That is the interlock
 working, not a bug. Pinning alone proves only CalendarContract access, not NAVER identity or sync.
@@ -49,7 +53,7 @@ or modify anything outside the calendar the user pinned.
 |---|---|---|---|
 | `calendar_query` | READ_ONLY | none | Window ≤ 60 days, ≤ 20 events, truncation is reported |
 | `calendar_create_event` | DATA_WRITE | required | Writes only to the pinned calendar |
-| `calendar_update_event` | DATA_WRITE | required | Refuses all-day events and no-op changes |
+| `calendar_update_event` | DATA_WRITE | required | Refuses all-day, recurring-series, and no-op changes |
 
 Times are local wall clock (`2026-08-21T14:30`), never an offset the model invented. The device
 zone is applied during validation, and the resulting instant is what the confirmation dialog shows
@@ -63,7 +67,9 @@ schema, so a JSON number can never round-trip through a float and land on a diff
 
 The model chooses which event to update, so the update tool never trusts that choice:
 
-1. During validation the event is read, checked for writability, and rejected if it is all-day.
+1. During validation the event is read and checked for writability. All-day events are refused
+   because their date/UTC convention differs. Recurring masters are refused because the current
+   confirmation contract cannot distinguish one occurrence from the whole series.
 2. The preview shows the event's current title and times next to every proposed change.
 3. A digest of the event as confirmed is stored in the canonical input.
 4. Immediately before the write, the event is read again and the digest re-checked. If a sync

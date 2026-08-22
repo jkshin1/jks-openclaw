@@ -4,16 +4,20 @@ package com.personaledge.core.tools
 internal class FakeCalendarGateway(
     var calendars: List<CalendarAccount> = listOf(NAVER_CALENDAR),
     events: List<CalendarEvent> = emptyList(),
-) : CalendarGateway {
+) : CalendarGateway, CalendarProviderGateway {
     val stored = events.associateBy(CalendarEvent::eventId).toMutableMap()
     val inserted = mutableListOf<CalendarEventDraft>()
     val patches = mutableListOf<Pair<Long, CalendarEventPatch>>()
 
     var readFailure: CalendarAccessException? = null
     var nextEventId = 9_000L
+    val queriedCalendarIds = mutableListOf<Long>()
 
     /** Simulates a background sync that moves an event while the confirmation dialog is open. */
     var onFindEvent: ((CalendarEvent) -> CalendarEvent)? = null
+
+    /** Simulates a provider move after the scoped read but before its atomic update selection. */
+    var onProviderUpdate: ((CalendarEvent) -> CalendarEvent)? = null
 
     override suspend fun writableCalendars(): List<CalendarAccount> {
         readFailure?.let { failure -> throw failure }
@@ -24,11 +28,35 @@ internal class FakeCalendarGateway(
         startEpochMillis: Long,
         endEpochMillis: Long,
         limit: Int,
+    ): List<CalendarEvent> = queryEventsInternal(
+        calendarId = null,
+        startEpochMillis = startEpochMillis,
+        endEpochMillis = endEpochMillis,
+        limit = limit,
+    )
+
+    override suspend fun queryEvents(
+        calendarId: Long,
+        startEpochMillis: Long,
+        endEpochMillis: Long,
+        limit: Int,
+    ): List<CalendarEvent> {
+        queriedCalendarIds += calendarId
+        return queryEventsInternal(calendarId, startEpochMillis, endEpochMillis, limit)
+    }
+
+    private fun queryEventsInternal(
+        calendarId: Long?,
+        startEpochMillis: Long,
+        endEpochMillis: Long,
+        limit: Int,
     ): List<CalendarEvent> {
         readFailure?.let { failure -> throw failure }
         return stored.values
             .filter { event ->
-                event.startEpochMillis < endEpochMillis && event.endEpochMillis > startEpochMillis
+                (calendarId == null || event.calendarId == calendarId) &&
+                    event.startEpochMillis < endEpochMillis &&
+                    event.endEpochMillis > startEpochMillis
             }
             .sortedBy(CalendarEvent::startEpochMillis)
             .take(limit)
@@ -58,6 +86,28 @@ internal class FakeCalendarGateway(
 
     override suspend fun updateEvent(eventId: Long, patch: CalendarEventPatch): Boolean {
         val existing = stored[eventId] ?: return false
+        return applyPatch(eventId, existing, patch)
+    }
+
+    override suspend fun updateEvent(
+        expectedCalendarId: Long,
+        eventId: Long,
+        patch: CalendarEventPatch,
+    ): Boolean {
+        var existing = stored[eventId] ?: return false
+        onProviderUpdate?.let { move ->
+            existing = move(existing)
+            stored[eventId] = existing
+        }
+        if (existing.calendarId != expectedCalendarId) return false
+        return applyPatch(eventId, existing, patch)
+    }
+
+    private fun applyPatch(
+        eventId: Long,
+        existing: CalendarEvent,
+        patch: CalendarEventPatch,
+    ): Boolean {
         patches += eventId to patch
         stored[eventId] = existing.copy(
             title = patch.title ?: existing.title,
@@ -73,6 +123,7 @@ internal class FakeCalendarGateway(
             id = 11,
             displayName = "네이버 캘린더",
             accountName = "personal@naver.com",
+            accountType = "fake.naver.calendar",
             isPrimary = true,
             timeZoneId = "Asia/Seoul",
         )
@@ -80,6 +131,7 @@ internal class FakeCalendarGateway(
             id = 22,
             displayName = "회사 일정",
             accountName = "work@example.com",
+            accountType = "fake.work.calendar",
             isPrimary = false,
             timeZoneId = "Asia/Seoul",
         )

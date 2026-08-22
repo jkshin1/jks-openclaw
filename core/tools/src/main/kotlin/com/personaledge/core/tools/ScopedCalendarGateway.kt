@@ -9,7 +9,7 @@ package com.personaledge.core.tools
  * immediately rather than at the next process start.
  */
 class ScopedCalendarGateway(
-    private val delegate: CalendarGateway,
+    private val delegate: CalendarProviderGateway,
     private val pinnedCalendarId: suspend () -> Long?,
 ) : CalendarGateway {
 
@@ -23,13 +23,12 @@ class ScopedCalendarGateway(
         endEpochMillis: Long,
         limit: Int,
     ): List<CalendarEvent> {
-        val pinned = pinnedCalendarId() ?: return emptyList()
-        // Over-fetch so filtering out other calendars cannot silently shorten the page.
-        val fetchLimit = (limit.toLong() * OVER_FETCH_FACTOR)
-            .coerceAtMost(MAX_FETCH_ROWS.toLong())
-            .toInt()
+        val pinned = pinnedCalendarId()
+            ?: throw CalendarAccessException("설정에서 사용할 캘린더를 먼저 선택하세요.")
         return delegate
-            .queryEvents(startEpochMillis, endEpochMillis, fetchLimit)
+            .queryEvents(pinned, startEpochMillis, endEpochMillis, limit)
+            // Provider scoping is authoritative; retain this check as defense in depth against a
+            // broken or malicious provider implementation.
             .filter { event -> event.calendarId == pinned }
             .take(limit)
     }
@@ -46,13 +45,13 @@ class ScopedCalendarGateway(
     }
 
     override suspend fun updateEvent(eventId: Long, patch: CalendarEventPatch): Boolean {
-        // Reuses the scoped read, so an event outside the pinned calendar is never updated.
-        findEvent(eventId) ?: return false
-        return delegate.updateEvent(eventId, patch)
-    }
-
-    private companion object {
-        const val OVER_FETCH_FACTOR = 5
-        const val MAX_FETCH_ROWS = 200
+        val pinned = pinnedCalendarId() ?: return false
+        val existing = delegate.findEvent(eventId)
+            ?.takeIf { event -> event.calendarId == pinned }
+            ?: return false
+        check(existing.eventId == eventId)
+        // CalendarContract applies both predicates in one update. A sync that moves the row after
+        // the read therefore yields zero updated rows instead of writing outside the pinned scope.
+        return delegate.updateEvent(pinned, eventId, patch)
     }
 }

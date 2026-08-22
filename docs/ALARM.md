@@ -49,7 +49,9 @@ instead of assuming.
 Because there is no result and no way to delete, the durable action ledger matters more here than
 anywhere else: an interrupted turn must not silently ask for the same alarm twice. Repeat days are
 canonicalized into a fixed weekday order, so `"fri,mon,wed"` and `"mon,wed,fri"` produce the same
-canonical snapshot and therefore the same idempotency key.
+canonical snapshot and confirmation preview. The idempotency key additionally includes the current
+request identity: replay within that request is blocked, while a separately submitted user turn is
+a new action and must be judged from the target clock state.
 
 ## Requirements on the device
 

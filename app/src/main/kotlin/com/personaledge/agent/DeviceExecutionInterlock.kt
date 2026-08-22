@@ -29,8 +29,10 @@ class DeviceExecutionInterlock(
     context: Context,
     private val thermalStatus: () -> DiagnosticThermalStatus,
     private val pinnedCalendarId: suspend () -> Long?,
+    private val calendarIsReadable: suspend (Long) -> Boolean,
     private val alarmGateway: AlarmGateway,
     private val notificationGateway: StoredNotificationGateway,
+    private val networkConsent: suspend (String) -> Boolean,
 ) : ExecutionInterlock {
     private val applicationContext = context.applicationContext
 
@@ -47,24 +49,29 @@ class DeviceExecutionInterlock(
         }
 
         request.requiredCapabilities.forEach { capability ->
-            missingRequirement(capability)?.let { reason -> return InterlockDecision.Block(reason) }
+            missingRequirement(capability, request.toolName)?.let { reason ->
+                return InterlockDecision.Block(reason)
+            }
         }
 
         return InterlockDecision.Allow
     }
 
-    private suspend fun missingRequirement(capability: ToolCapability): String? = when (capability) {
+    private suspend fun missingRequirement(
+        capability: ToolCapability,
+        toolName: String,
+    ): String? = when (capability) {
         ToolCapability.READ_CALENDAR -> permissionReason(
             permission = Manifest.permission.READ_CALENDAR,
             reason = "캘린더 읽기 권한이 없습니다. 설정에서 허용해 주세요.",
-        )
+        ) ?: pinnedCalendarReason()
         ToolCapability.WRITE_CALENDAR -> permissionReason(
             permission = Manifest.permission.WRITE_CALENDAR,
             reason = "캘린더 쓰기 권한이 없습니다. 설정에서 허용해 주세요.",
         ) ?: pinnedCalendarReason()
         ToolCapability.SCHEDULE_ALARM -> clockAppReason()
         ToolCapability.READ_NOTIFICATIONS -> notificationCaptureReason()
-        ToolCapability.NETWORK -> networkReason()
+        ToolCapability.NETWORK -> networkReason(toolName)
         // Declared but not yet wired. Refusing keeps a future tool from shipping unchecked.
         ToolCapability.POST_NOTIFICATIONS -> "이 기능은 아직 사용할 수 없습니다."
     }
@@ -78,8 +85,24 @@ class DeviceExecutionInterlock(
             reason
         }
 
-    private suspend fun pinnedCalendarReason(): String? =
-        if (pinnedCalendarId() == null) "설정에서 사용할 캘린더를 먼저 선택하세요." else null
+    private suspend fun pinnedCalendarReason(): String? {
+        val pinned = try {
+            pinnedCalendarId()
+        } catch (_: Exception) {
+            return "선택한 캘린더 상태를 확인하지 못했습니다. 설정에서 다시 선택하세요."
+        } ?: return "설정에서 사용할 캘린더를 먼저 선택하세요."
+
+        val readable = try {
+            calendarIsReadable(pinned)
+        } catch (_: Exception) {
+            false
+        }
+        return if (readable) {
+            null
+        } else {
+            "선택한 캘린더를 더 이상 읽을 수 없습니다. 설정에서 다시 선택하세요."
+        }
+    }
 
     /**
      * The clock app can be disabled or uninstalled between preparation and execution, and
@@ -104,17 +127,27 @@ class DeviceExecutionInterlock(
      * This checks reachability, not credentials: each network tool verifies its own key during
      * validation, because a missing key is a settings problem with a different remedy.
      */
-    private fun networkReason(): String? {
+    private suspend fun networkReason(toolName: String): String? {
+        val consented = runCatching { networkConsent(toolName) }.getOrDefault(false)
+        if (!consented) return NetworkToolConsent.disabledReason(toolName)
+
         val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
             ?: return "네트워크 상태를 확인할 수 없습니다."
         val capabilities = connectivity.activeNetwork
             ?.let(connectivity::getNetworkCapabilities)
             ?: return "네트워크에 연결되어 있지 않습니다."
 
-        return if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-            null
-        } else {
-            "네트워크에 연결되어 있지 않습니다."
+        val reachability = NetworkReachabilityPolicy.evaluate(
+            hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+            isValidated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+            isNotSuspended = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED),
+        )
+        return when (reachability) {
+            NetworkReachability.UNAVAILABLE -> "네트워크에 연결되어 있지 않습니다."
+            NetworkReachability.UNVALIDATED ->
+                "인터넷 연결이 확인되지 않았습니다. 로그인 화면이나 캡티브 포털을 확인해 주세요."
+            NetworkReachability.SUSPENDED -> "네트워크 연결이 일시 중지되어 있습니다."
+            NetworkReachability.USABLE -> null
         }
     }
 
@@ -122,5 +155,26 @@ class DeviceExecutionInterlock(
         if (alarmGateway.clockAppAvailable()) null else "알람을 처리할 시계 앱이 없습니다."
     } catch (_: Exception) {
         "시계 앱을 확인하지 못했습니다."
+    }
+}
+
+internal enum class NetworkReachability {
+    UNAVAILABLE,
+    UNVALIDATED,
+    SUSPENDED,
+    USABLE,
+}
+
+/** Pure policy kept separate so captive-portal and suspended states have host regression coverage. */
+internal object NetworkReachabilityPolicy {
+    fun evaluate(
+        hasInternet: Boolean,
+        isValidated: Boolean,
+        isNotSuspended: Boolean,
+    ): NetworkReachability = when {
+        !hasInternet -> NetworkReachability.UNAVAILABLE
+        !isValidated -> NetworkReachability.UNVALIDATED
+        !isNotSuspended -> NetworkReachability.SUSPENDED
+        else -> NetworkReachability.USABLE
     }
 }

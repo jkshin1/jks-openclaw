@@ -1,5 +1,7 @@
 package com.personaledge.core.tools
 
+import java.net.URI
+
 /**
  * Neutralizes text that came from outside this device.
  *
@@ -41,30 +43,81 @@ internal object UntrustedText {
         HTML_ENTITIES.forEach { (entity, replacement) ->
             result = result.replace(entity, replacement)
         }
-        return result
+        val withoutInvisibleText = buildString(result.length) {
+            var index = 0
+            while (index < result.length) {
+                val codePoint = result.codePointAt(index)
+                index += Character.charCount(codePoint)
+                if (!isUnsafeTextCodePoint(codePoint)) appendCodePoint(codePoint)
+            }
+        }
+        val cleaned = withoutInvisibleText
             .replace(MODEL_CONTROL_TOKEN_OPEN, " ")
             .replace(MODEL_CONTROL_TOKEN_CLOSE, " ")
-            .filterNot { character -> character.isISOControl() || character.isInvisibleFormatting() }
             .replace(WHITESPACE_RUN, " ")
             .trim()
-            .take(maximumCharacters)
+        return cleaned.takeCodePoints(maximumCharacters)
     }
 
     private val WHITESPACE_RUN = Regex("\\s{2,}")
 
-    private fun Char.isInvisibleFormatting(): Boolean = when (Character.getType(this).toByte()) {
-        Character.FORMAT,
-        Character.LINE_SEPARATOR,
-        Character.PARAGRAPH_SEPARATOR,
-        -> true
-        else -> false
+    private fun isUnsafeTextCodePoint(codePoint: Int): Boolean =
+        Character.isISOControl(codePoint) || when (Character.getType(codePoint)) {
+            Character.FORMAT.toInt(),
+            Character.LINE_SEPARATOR.toInt(),
+            Character.PARAGRAPH_SEPARATOR.toInt(),
+            -> true
+            else -> false
+        }
+
+    private fun String.takeCodePoints(maximum: Int): String {
+        require(maximum >= 0)
+        if (codePointCount(0, length) <= maximum) return this
+        return substring(0, offsetByCodePoints(0, maximum))
     }
 
-    /** True when a link is safe to show: absolute, HTTPS or HTTP, and free of embedded markup. */
-    fun isDisplayableLink(value: String): Boolean =
-        (value.startsWith("https://") || value.startsWith("http://")) &&
-            value.length <= MAX_LINK_CHARACTERS &&
-            value.none { character -> character.isWhitespace() || character.isISOControl() }
+    /**
+     * Returns one strict, normalized ASCII URL or null when provider text is unsafe to reinject.
+     *
+     * A prefix check is not enough here: the link itself enters the Gemma ToolResponse. In
+     * particular, an otherwise valid-looking URL must not carry a model delimiter, bidi override,
+     * user-info authority, or fragment that renders as a different destination. Parsing also rules
+     * out opaque forms such as `https:example.com` and authorities without a real host.
+     */
+    fun canonicalDisplayableLink(value: String): String? {
+        if (value.isEmpty() || value.length > MAX_LINK_CHARACTERS) return null
+        if (value.contains(MODEL_CONTROL_TOKEN_OPEN) || value.contains(MODEL_CONTROL_TOKEN_CLOSE)) {
+            return null
+        }
+        if (value.indexOf('\\') >= 0 || value.codePoints().anyMatch(::isUnsafeLinkCodePoint)) {
+            return null
+        }
+
+        val parsed = runCatching { URI(value) }.getOrNull() ?: return null
+        val scheme = parsed.scheme?.lowercase() ?: return null
+        if (scheme != "https" && scheme != "http") return null
+        if (!parsed.isAbsolute || parsed.isOpaque) return null
+        if (parsed.rawUserInfo != null || parsed.rawFragment != null) return null
+        if (parsed.host.isNullOrBlank()) return null
+        if (parsed.port !in -1..65_535) return null
+
+        val canonical = parsed.normalize().toASCIIString()
+        if (canonical.length > MAX_LINK_CHARACTERS) return null
+        val reparsed = runCatching { URI(canonical) }.getOrNull() ?: return null
+        if (reparsed.scheme?.lowercase() != scheme || reparsed.host.isNullOrBlank()) return null
+        if (reparsed.rawUserInfo != null || reparsed.rawFragment != null || reparsed.isOpaque) return null
+        return canonical
+    }
+
+    private fun isUnsafeLinkCodePoint(codePoint: Int): Boolean =
+        Character.isWhitespace(codePoint) || Character.isISOControl(codePoint) ||
+            when (Character.getType(codePoint)) {
+                Character.FORMAT.toInt(),
+                Character.LINE_SEPARATOR.toInt(),
+                Character.PARAGRAPH_SEPARATOR.toInt(),
+                -> true
+                else -> false
+            }
 
     private const val MAX_LINK_CHARACTERS = 500
 }

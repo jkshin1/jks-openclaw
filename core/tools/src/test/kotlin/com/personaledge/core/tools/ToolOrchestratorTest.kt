@@ -1,8 +1,13 @@
 package com.personaledge.core.tools
 
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ToolOrchestratorTest {
@@ -18,9 +23,37 @@ class ToolOrchestratorTest {
         private val claims = mutableSetOf<String>()
 
         override suspend fun claim(idempotencyKey: String): Boolean = claims.add(idempotencyKey)
+
+        override suspend fun recordState(
+            idempotencyKey: String,
+            state: ActionExecutionState,
+        ): Boolean = idempotencyKey in claims
     }
 
-    private class RecordingMessageTool : AgentTool<MessageParams, String> {
+    private class StateRecordingPersistentLedger : PersistentActionLedger() {
+        val states = mutableMapOf<String, ActionExecutionState>()
+        var beforeTerminalRecord: suspend () -> Unit = {}
+
+        override suspend fun claim(idempotencyKey: String): Boolean {
+            if (idempotencyKey in states) return false
+            states[idempotencyKey] = ActionExecutionState.CLAIMED
+            return true
+        }
+
+        override suspend fun recordState(
+            idempotencyKey: String,
+            state: ActionExecutionState,
+        ): Boolean {
+            beforeTerminalRecord()
+            if (states[idempotencyKey] != ActionExecutionState.CLAIMED) return false
+            states[idempotencyKey] = state
+            return true
+        }
+    }
+
+    private class RecordingMessageTool(
+        private val outcome: ToolExecutionOutcome = ToolExecutionOutcome.WRITE_COMPLETED,
+    ) : AgentTool<MessageParams, String> {
         override val descriptor = ToolDescriptor(
             name = "send_message",
             description = "Send a message",
@@ -41,6 +74,8 @@ class ToolOrchestratorTest {
             executions += 1
             return input.encoded
         }
+
+        override fun executionOutcome(result: String): ToolExecutionOutcome = outcome
     }
 
     private class AliasingMessageTool : AgentTool<MessageParams, String> {
@@ -225,6 +260,11 @@ class ToolOrchestratorTest {
                 now = 62_000L
                 return true
             }
+
+            override suspend fun recordState(
+                idempotencyKey: String,
+                state: ActionExecutionState,
+            ): Boolean = true
         }
         val orchestrator = ToolOrchestrator(
             actionLedger = ledger,
@@ -276,5 +316,113 @@ class ToolOrchestratorTest {
             runBlocking { second.execute(secondAction.action) }
         }
         assertEquals(1, tool.executions)
+    }
+
+    @Test
+    fun `cancellation after a side effect retains its terminal receipt before resuming`() =
+        runBlocking {
+            val terminalRecordStarted = CompletableDeferred<Unit>()
+            val releaseTerminalRecord = CompletableDeferred<Unit>()
+            val ledger = StateRecordingPersistentLedger().apply {
+                beforeTerminalRecord = {
+                    terminalRecordStarted.complete(Unit)
+                    releaseTerminalRecord.await()
+                }
+            }
+            val tool = RecordingMessageTool()
+            val orchestrator = ToolOrchestrator(
+                actionLedger = ledger,
+                userConfirmationGate = UserConfirmationGate { true },
+                clock = { 1_000L },
+            )
+            val prepared = orchestrator.prepare(
+                tool = tool,
+                params = MessageParams("hello"),
+                requestId = "cancel-after-write",
+            ) as PreparationResult.Ready
+            val retained = AtomicReference<ToolExecutionReceipt<String>?>(null)
+            val execution = launch {
+                orchestrator.executeWithReceipt(prepared.action, retained::set)
+            }
+
+            terminalRecordStarted.await()
+            execution.cancel()
+            releaseTerminalRecord.complete(Unit)
+            execution.join()
+
+            assertTrue(execution.isCancelled)
+            assertEquals(1, tool.executions)
+            assertEquals(ToolExecutionOutcome.WRITE_COMPLETED, retained.get()?.outcome)
+            assertEquals(ActionExecutionState.COMPLETED, ledger.states.values.single())
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking { orchestrator.execute(prepared.action) }
+            }
+            assertEquals(1, tool.executions)
+        }
+
+    @Test
+    fun `a normal refused result is durably distinct from a completed write`() = runBlocking {
+        val ledger = StateRecordingPersistentLedger()
+        val tool = RecordingMessageTool(outcome = ToolExecutionOutcome.WRITE_REFUSED)
+        val orchestrator = ToolOrchestrator(
+            actionLedger = ledger,
+            userConfirmationGate = UserConfirmationGate { true },
+            clock = { 1_000L },
+        )
+        val prepared = orchestrator.prepare(
+            tool = tool,
+            params = MessageParams("provider refuses"),
+            requestId = "refused-write",
+        ) as PreparationResult.Ready
+
+        val receipt = orchestrator.executeWithReceipt(prepared.action)
+
+        assertEquals(ToolExecutionOutcome.WRITE_REFUSED, receipt.outcome)
+        assertEquals(ActionExecutionState.REFUSED, ledger.states.values.single())
+    }
+
+    @Test
+    fun `read-only execution remains cancellable after its claim`() = runBlocking {
+        val executionStarted = CompletableDeferred<Unit>()
+        val neverRelease = CompletableDeferred<Unit>()
+        val callbackReceipt = AtomicReference<ToolExecutionReceipt<String>?>(null)
+        val readTool = object : AgentTool<MessageParams, String> {
+            override val descriptor = ToolDescriptor(
+                name = "slow_read",
+                description = "Slow cancellable read",
+                risk = ToolRisk.READ_ONLY,
+            )
+
+            override suspend fun validateAndCanonicalize(params: MessageParams): ValidationResult =
+                ValidationResult.Valid(params.text)
+
+            override fun preview(input: CanonicalToolInput): ActionPreview =
+                ActionPreview("읽기", input.encoded)
+
+            override suspend fun execute(
+                input: CanonicalToolInput,
+                permit: ExecutionPermit,
+            ): String {
+                executionStarted.complete(Unit)
+                neverRelease.await()
+                return input.encoded
+            }
+        }
+        val orchestrator = ToolOrchestrator(actionLedger = InMemoryLedger(), clock = { 1_000L })
+        val prepared = orchestrator.prepare(
+            tool = readTool,
+            params = MessageParams("hello"),
+            requestId = "cancel-read",
+        ) as PreparationResult.Ready
+        val execution = launch {
+            orchestrator.executeWithReceipt(prepared.action, callbackReceipt::set)
+        }
+
+        executionStarted.await()
+        execution.cancel()
+        execution.join()
+
+        assertTrue(execution.isCancelled)
+        assertNull(callbackReceipt.get())
     }
 }

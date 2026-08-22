@@ -1,6 +1,7 @@
 package com.personaledge.core.diagnostics
 
 import android.content.Context
+import java.io.OutputStream
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -62,6 +63,37 @@ class DiagnosticRecorder private constructor(
     fun recordResourceSnapshot(): Boolean = failOpen(false) {
         val snapshotProvider = providers?.resources ?: return@failOpen false
         record(DiagnosticEvent.ResourceSnapshot(snapshotProvider.snapshot()))
+    }
+
+    /**
+     * Writes a chronological JSONL snapshot (oldest archive through active log) without closing
+     * [destination]. Only records produced from typed [DiagnosticEvent] values are stored; prompts,
+     * model output, tool arguments/results, credentials, and the exit checkpoint are never included.
+     *
+     * Source validation and copying happen under the recorder mutex. Destination I/O happens after
+     * that bounded snapshot is complete, so a slow Storage Access Framework provider cannot block
+     * new diagnostic records. A destination error can still leave a partial destination document.
+     */
+    fun exportContentFreeJsonl(
+        destination: OutputStream,
+    ): DiagnosticExportResult {
+        val writer = store ?: return DiagnosticExportResult.Unavailable
+        val snapshot = try {
+            mutex.withLock { writer.snapshotForExport() }
+        } catch (_: Throwable) {
+            return DiagnosticExportResult.SourceRejected
+        }
+
+        return try {
+            snapshot.parts.forEach(destination::write)
+            destination.flush()
+            DiagnosticExportResult.Success(
+                sourceFileCount = snapshot.parts.size,
+                byteCount = snapshot.byteCount,
+            )
+        } catch (_: Throwable) {
+            DiagnosticExportResult.DestinationFailed
+        }
     }
 
     private fun recordLocked(event: DiagnosticEvent): Boolean {

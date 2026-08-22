@@ -101,6 +101,10 @@ class AppContainer(application: Application) {
     val alarms: AlarmGateway by lazy { AndroidAlarmGateway(application) }
 
     suspend fun pinnedCalendarId(): Long? = settings.settings.first().defaultCalendarId
+
+    /** Re-queries CalendarContract so a removed or unreadable pinned row fails closed. */
+    suspend fun calendarIsReadable(calendarId: Long): Boolean =
+        deviceCalendars.syncedCalendars().any { calendar -> calendar.id == calendarId }
 }
 
 internal fun Application.appContainer(): AppContainer = (this as PersonalEdgeApplication).container

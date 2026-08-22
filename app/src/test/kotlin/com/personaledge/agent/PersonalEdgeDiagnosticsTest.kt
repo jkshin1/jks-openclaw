@@ -4,11 +4,23 @@ import com.personaledge.core.agent.AgentFailureCode
 import com.personaledge.core.diagnostics.DiagnosticConfirmationOutcome
 import com.personaledge.core.diagnostics.DiagnosticErrorCode
 import com.personaledge.core.diagnostics.DiagnosticEvent
+import com.personaledge.core.diagnostics.DiagnosticExportResult
 import com.personaledge.core.diagnostics.DiagnosticRecorder
 import com.personaledge.core.diagnostics.DiagnosticSink
+import com.personaledge.core.diagnostics.DiagnosticToolRisk
 import com.personaledge.core.diagnostics.DiagnosticToolStage
 import com.personaledge.core.llm.LlmFailureCode
 import com.personaledge.core.llm.ModelStoreErrorCode
+import com.personaledge.core.tools.AlarmNextTool
+import com.personaledge.core.tools.AlarmSetTool
+import com.personaledge.core.tools.CalendarCreateEventTool
+import com.personaledge.core.tools.CalendarQueryTool
+import com.personaledge.core.tools.CalendarUpdateEventTool
+import com.personaledge.core.tools.FakeArrivalNoticeTool
+import com.personaledge.core.tools.NotificationSearchTool
+import com.personaledge.core.tools.RouteEstimateTool
+import com.personaledge.core.tools.WebSearchTool
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 import org.junit.Assert.assertEquals
@@ -34,25 +46,66 @@ class PersonalEdgeDiagnosticsTest {
     }
 
     @Test
-    fun onlyClosedRegistryToolNamesEnterDiagnostics() {
+    fun fixtureAndEveryShippedToolRecordTheirDeclaredRisk() {
+        val events = mutableListOf<DiagnosticEvent>()
+        val sink = DiagnosticSink { event -> events += event; true }
+        val expected = listOf(
+            FakeArrivalNoticeTool.NAME to DiagnosticToolRisk.READ_ONLY,
+            CalendarQueryTool.NAME to DiagnosticToolRisk.READ_ONLY,
+            CalendarCreateEventTool.NAME to DiagnosticToolRisk.DATA_WRITE,
+            CalendarUpdateEventTool.NAME to DiagnosticToolRisk.DATA_WRITE,
+            AlarmSetTool.NAME to DiagnosticToolRisk.DATA_WRITE,
+            AlarmNextTool.NAME to DiagnosticToolRisk.READ_ONLY,
+            NotificationSearchTool.NAME to DiagnosticToolRisk.READ_ONLY,
+            RouteEstimateTool.NAME to DiagnosticToolRisk.READ_ONLY,
+            WebSearchTool.NAME to DiagnosticToolRisk.READ_ONLY,
+        )
+
+        expected.forEach { (name, risk) ->
+            assertTrue(
+                sink.recordKnownToolPhase(
+                    toolName = name,
+                    stage = DiagnosticToolStage.EXECUTED,
+                    outcome = DiagnosticConfirmationOutcome.EXECUTED_SUCCESS,
+                ),
+            )
+            val event = events.last() as DiagnosticEvent.ToolPhase
+            assertEquals(name, event.name.value)
+            assertEquals(risk, event.risk)
+            assertEquals(DiagnosticToolStage.EXECUTED, event.stage)
+            assertEquals(DiagnosticConfirmationOutcome.EXECUTED_SUCCESS, event.confirmationOutcome)
+        }
+        assertEquals(expected.size, events.size)
+    }
+
+    @Test
+    fun unknownToolNamesAreRejectedWithoutWritingDiagnostics() {
         val events = mutableListOf<DiagnosticEvent>()
         val sink = DiagnosticSink { event -> events += event; true }
 
+        listOf("model_invented_tool", "calendar_query_suffix", " calendar_query").forEach { name ->
+            assertFalse(
+                sink.recordKnownToolPhase(
+                    toolName = name,
+                    stage = DiagnosticToolStage.EXECUTED,
+                    outcome = DiagnosticConfirmationOutcome.EXECUTED_REFUSED,
+                ),
+            )
+        }
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun knownToolStillFailsOpenWhenDiagnosticSinkRejectsIt() {
+        val sink = DiagnosticSink { false }
+
         assertFalse(
             sink.recordKnownToolPhase(
-                toolName = "model_invented_tool",
+                toolName = CalendarQueryTool.NAME,
                 stage = DiagnosticToolStage.EXECUTED,
-                outcome = DiagnosticConfirmationOutcome.NOT_REQUIRED,
+                outcome = DiagnosticConfirmationOutcome.EXECUTED_SUCCESS,
             ),
         )
-        assertTrue(
-            sink.recordKnownToolPhase(
-                toolName = "fake_arrival_notice",
-                stage = DiagnosticToolStage.EXECUTED,
-                outcome = DiagnosticConfirmationOutcome.APPROVED,
-            ),
-        )
-        assertEquals(1, events.size)
     }
 
     @Test
@@ -85,5 +138,39 @@ class PersonalEdgeDiagnosticsTest {
             executor = Executor { throw RejectedExecutionException("closed") },
         )
         assertFalse(rejected.record(DiagnosticEvent.ProcessStarted))
+    }
+
+    @Test
+    fun appChannelQueuesExportAfterEarlierRecordsAndClosesTheDestination() {
+        val tasks = mutableListOf<Runnable>()
+        val results = mutableListOf<DiagnosticExportResult>()
+        val destination = CloseTrackingOutputStream()
+        val channel = AppDiagnosticChannel(
+            recorder = DiagnosticRecorder.noOp(),
+            executor = Executor(tasks::add),
+        )
+
+        assertTrue(channel.record(DiagnosticEvent.ProcessStarted))
+        assertTrue(
+            channel.exportContentFreeJsonl(
+                openDestination = { destination },
+                onComplete = results::add,
+            ),
+        )
+        assertEquals(2, tasks.size)
+
+        tasks.forEach(Runnable::run)
+
+        assertEquals(listOf(DiagnosticExportResult.Unavailable), results)
+        assertTrue(destination.closed)
+    }
+
+    private class CloseTrackingOutputStream : ByteArrayOutputStream() {
+        var closed: Boolean = false
+
+        override fun close() {
+            closed = true
+            super.close()
+        }
     }
 }

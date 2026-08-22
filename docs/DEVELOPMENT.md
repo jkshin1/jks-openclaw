@@ -77,8 +77,9 @@ collector combines them with prior exit reasons, memory, thermal, disk, package,
 Raw app-UID logcat is an explicit `--app-logcat` opt-in because native error text may contain
 conversation content.
 Debug builds permit private-file extraction through `run-as`; release builds normally do not.
-See [`DIAGNOSTICS.md`](DIAGNOSTICS.md) for retention, privacy exclusions, crash relaunch steps,
-and the explicitly opt-in sensitive `--bugreport` mode.
+Signed release builds instead export the same content-free JSONL from the app through Android's
+create-document picker. See [`DIAGNOSTICS.md`](DIAGNOSTICS.md) for retention, privacy exclusions,
+crash relaunch steps, and the explicitly opt-in sensitive `--bugreport` mode.
 
 The emulator is useful for UI and permission flows. LiteRT-LM GPU, memory, thermal,
 fold-state, and sustained decode acceptance must run on the physical Fold8.
@@ -141,9 +142,13 @@ OpenDocument URI → verified app-private artifact → LiteRT Conversation
 → trusted JSON ToolResponse → same conversation
 ```
 
-The registered tools are `calendar_query`, `calendar_create_event`, and `calendar_update_event`.
-Grant the calendar permission and pin a calendar in the app before using them; see
-[`CALENDAR.md`](CALENDAR.md) for the scope boundary and unresolved NAVER transport gate.
+The shipped device registry contains eight Tools: `calendar_query`, `calendar_create_event`,
+`calendar_update_event`, `alarm_set`, `alarm_next`, `kakao_notification_search`, `route_estimate`,
+and `web_search`. Calendar access requires permission and one pinned provider row. Notification
+search requires both the Android listener grant and the default-off capture setting. Each network
+Tool requires credentials, a default-off persistent opt-in, connectivity, and a fresh confirmation
+of the exact query or route endpoints before disclosure. See [`CALENDAR.md`](CALENDAR.md),
+[`ALARM.md`](ALARM.md), [`NOTIFICATIONS.md`](NOTIFICATIONS.md), and [`NETWORK.md`](NETWORK.md).
 
 LiteRT automatic tool calling and raw thinking output are both disabled. A denied, expired,
 invalid, oversized, unknown, or cancelled Tool call is never executed or reinserted.
@@ -151,11 +156,13 @@ Duplicate call IDs and duplicate actions remain blocked, but LiteRT-LM exposes a
 a parsed Map, so raw duplicate JSON keys are normalized before app validation and cannot be
 claimed as rejected by this layer.
 
-The first slice starts a fresh native Conversation for each top-level user request. Only
-the Tool call and its result share context, and reinjection is refused when the native
-token count leaves insufficient room for the pinned 1,024-token final output. Long-term
-memory will be added later through bounded summaries/retrieval instead of unbounded KV
-history.
+The app starts a fresh native Conversation for each top-level user request. The Tool call and its
+result share that native context, and reinjection is refused when the token count leaves
+insufficient room for the pinned 1,024-token final output. Cross-turn continuity is application
+owned: Room supplies a bounded summary plus the newest recent messages, which are sanitized,
+explicitly quoted as untrusted history, and fitted with device state inside a 2 KiB request
+envelope. A new user turn cancels and joins any background summary before acquiring the single
+controller. This is bounded retrieval, not unbounded native KV history.
 
 ## Release builds
 
@@ -165,6 +172,10 @@ app without discarding its data or the imported 3.66GB model. Create it once wit
 `./scripts/verify-release-signing.sh`. A partially configured key fails the build instead of
 silently producing an unsigned APK. Backup and device-replacement steps are in
 [`RELEASE_AND_BACKUP.md`](RELEASE_AND_BACKUP.md).
+
+The owner's key already exists and the verifier has passed a non-debug v3-signed APK. Do not run
+the creation script again. What remains is owner-confirmed offline key/password backup and a
+deliberate debug-to-release migration; the two certificates cannot replace each other.
 
 ## Deferred tooling
 

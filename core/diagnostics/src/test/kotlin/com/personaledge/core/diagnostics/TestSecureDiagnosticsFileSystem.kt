@@ -26,6 +26,16 @@ internal class TestSecureDiagnosticsFileSystem(
         return directory
     }
 
+    override fun listLogFiles(): Set<File> {
+        val directory = ensureLogDirectory()
+        return checkNotNull(directory.listFiles())
+            .mapTo(linkedSetOf()) { child ->
+                child.absoluteFile.also { absolute ->
+                    check(absolute.parentFile == directory)
+                }
+            }
+    }
+
     override fun secureFileSize(file: File): Long? {
         requireAllowed(file)
         val path = file.toPath()

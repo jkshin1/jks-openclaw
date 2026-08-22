@@ -15,7 +15,33 @@ interface AgentTool<P : ToolParams, R : Any> {
 
     /** [ExecutionPermit] can only be issued by [ToolOrchestrator]. */
     suspend fun execute(input: CanonicalToolInput, permit: ExecutionPermit): R
+
+    /**
+     * Reduces a trusted result to content-free execution evidence.
+     *
+     * Implementations that can return a normal value while refusing a requested write must
+     * override this method. The result itself is never retained in the action ledger.
+     */
+    fun executionOutcome(result: R): ToolExecutionOutcome =
+        if (descriptor.risk == ToolRisk.READ_ONLY) {
+            ToolExecutionOutcome.READ_COMPLETED
+        } else {
+            ToolExecutionOutcome.WRITE_COMPLETED
+        }
 }
+
+/** Small, content-free receipt safe to retain and surface outside the trusted tool boundary. */
+enum class ToolExecutionOutcome {
+    READ_COMPLETED,
+    WRITE_COMPLETED,
+    WRITE_REFUSED,
+}
+
+/** A tool result paired with the outcome durably recorded after a successful claim. */
+data class ToolExecutionReceipt<out R : Any>(
+    val result: R,
+    val outcome: ToolExecutionOutcome,
+)
 
 /** Immutable snapshot shared by confirmation UI and execution. */
 @JvmInline

@@ -25,7 +25,7 @@ enum class SecretKeyName(internal val fileName: String) {
 }
 
 /**
- * Stores third-party credentials encrypted under a hardware-backed AES key.
+ * Stores third-party credentials encrypted under an app-scoped Android Keystore AES key.
  *
  * The key never leaves the AndroidKeyStore, so the ciphertext on disk is useless on any other
  * device, and an `adb backup` or a copied data directory cannot reveal the values. Losing the

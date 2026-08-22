@@ -137,6 +137,13 @@ class AlarmSetTool(
         }
     }
 
+    override fun executionOutcome(result: AlarmSetResult): ToolExecutionOutcome =
+        if (result.requested) {
+            ToolExecutionOutcome.WRITE_COMPLETED
+        } else {
+            ToolExecutionOutcome.WRITE_REFUSED
+        }
+
     /** Returns null when a token is unknown or repeated; an empty set means a one-shot alarm. */
     private fun parseDays(raw: String?): List<AlarmDay>? {
         val trimmed = raw?.trim().orEmpty()

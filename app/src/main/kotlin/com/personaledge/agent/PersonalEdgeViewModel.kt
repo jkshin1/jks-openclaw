@@ -19,6 +19,7 @@ import com.personaledge.core.diagnostics.DiagnosticBackend
 import com.personaledge.core.diagnostics.DiagnosticConfirmationOutcome
 import com.personaledge.core.diagnostics.DiagnosticErrorCode
 import com.personaledge.core.diagnostics.DiagnosticEvent
+import com.personaledge.core.diagnostics.DiagnosticExportResult
 import com.personaledge.core.diagnostics.DiagnosticPhase
 import com.personaledge.core.diagnostics.DiagnosticResult
 import com.personaledge.core.diagnostics.DiagnosticThermalAction
@@ -46,6 +47,7 @@ import com.personaledge.core.tools.NotificationSearchTool
 import com.personaledge.core.tools.RouteEstimateTool
 import com.personaledge.core.tools.WebSearchTool
 import com.personaledge.core.tools.ToolOrchestrator
+import com.personaledge.core.tools.ToolExecutionOutcome
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -90,6 +92,7 @@ data class CalendarOption(
     val id: Long,
     val label: String,
     val accountName: String,
+    val accountType: String,
     val writable: Boolean,
 )
 
@@ -133,6 +136,20 @@ data class NotificationSetupState(
 data class CredentialsState(
     val statuses: List<CredentialStatus> = emptyList(),
     val error: String? = null,
+)
+
+/** Presence and consent only; the stored home label itself is never exposed back to UI state. */
+data class NetworkSetupState(
+    val routeLookupEnabled: Boolean = false,
+    val webSearchEnabled: Boolean = false,
+    val defaultOriginConfigured: Boolean = false,
+    val error: String? = null,
+)
+
+data class DiagnosticExportState(
+    val inProgress: Boolean = false,
+    val message: String? = null,
+    val succeeded: Boolean = false,
 )
 
 data class PersonalEdgeUiState(
@@ -193,8 +210,12 @@ class PersonalEdgeViewModel(
             context = application,
             thermalStatus = { thermalMonitor.observation.value.status },
             pinnedCalendarId = container::pinnedCalendarId,
+            calendarIsReadable = container::calendarIsReadable,
             alarmGateway = container.alarms,
             notificationGateway = container.notificationGateway,
+            networkConsent = { toolName ->
+                NetworkToolConsent.isEnabled(toolName, container.settings.current())
+            },
         ),
     )
     private val controller = ManualToolAgentController(
@@ -217,6 +238,7 @@ class PersonalEdgeViewModel(
     private var modelJob: Job? = null
     private var turnJob: Job? = null
     private var summaryJob: Job? = null
+    private val unresolvedActionWarningGate = UnresolvedActionWarningGate()
     private val activeThermalInitialization = AtomicReference<ActiveThermalInitialization?>(null)
     private val activeThermalTurn = AtomicReference<ActiveThermalTurn?>(null)
     private val thermalDirectiveSubscription: AutoCloseable
@@ -523,11 +545,26 @@ class PersonalEdgeViewModel(
     private fun restoreConversation() {
         viewModelScope.launch {
             val restored = history.restoreMostRecent()
+            val unresolvedWarning = unresolvedActionWarningGate.load {
+                container.actionLedger.unresolvedActionCheck()
+            }
             _chatHistory.update { state ->
                 state.copy(activeConversationId = restored.conversationId)
             }
-            if (restored.entries.isNotEmpty()) {
-                _uiState.update { state -> state.copy(messages = restored.entries) }
+            if (restored.entries.isNotEmpty() || unresolvedWarning != null) {
+                _uiState.update { state ->
+                    state.copy(
+                        messages = restored.entries + listOfNotNull(
+                            unresolvedWarning?.let { warning ->
+                                ChatEntry(
+                                    id = UNRESOLVED_ACTION_WARNING_ID,
+                                    role = ChatRole.STATUS,
+                                    text = warning,
+                                )
+                            },
+                        ),
+                    )
+                }
             }
         }
     }
@@ -635,6 +672,101 @@ class PersonalEdgeViewModel(
         }
     }
 
+    private val _networkSetup = MutableStateFlow(NetworkSetupState())
+    val networkSetup: StateFlow<NetworkSetupState> = _networkSetup.asStateFlow()
+
+    /** Re-read because DataStore can fail independently and every failure must look like opt-out. */
+    fun refreshNetworkSetup() {
+        viewModelScope.launch { loadNetworkSetup() }
+    }
+
+    fun setRouteLookupEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val failure = runCatching { container.settings.setRouteLookupEnabled(enabled) }
+                .exceptionOrNull()
+            loadNetworkSetup(if (failure == null) null else "경로 조회 동의를 저장하지 못했습니다.")
+        }
+    }
+
+    fun setWebSearchEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val failure = runCatching { container.settings.setWebSearchEnabled(enabled) }
+                .exceptionOrNull()
+            loadNetworkSetup(if (failure == null) null else "웹 검색 동의를 저장하지 못했습니다.")
+        }
+    }
+
+    fun storeDefaultOrigin(raw: String) {
+        when (val validation = SettingsTextPolicy.validateDefaultOrigin(raw)) {
+            is SettingsTextValidation.Invalid -> {
+                _networkSetup.update { state -> state.copy(error = validation.reason) }
+            }
+            is SettingsTextValidation.Valid -> viewModelScope.launch {
+                val failure = runCatching {
+                    container.settings.setDefaultOriginLabel(validation.value)
+                }.exceptionOrNull()
+                loadNetworkSetup(
+                    if (failure == null) null else "기본 출발지를 저장하지 못했습니다.",
+                )
+            }
+        }
+    }
+
+    fun deleteDefaultOrigin() {
+        viewModelScope.launch {
+            val failure = runCatching { container.settings.setDefaultOriginLabel(null) }
+                .exceptionOrNull()
+            loadNetworkSetup(if (failure == null) null else "기본 출발지를 삭제하지 못했습니다.")
+        }
+    }
+
+    private suspend fun loadNetworkSetup(error: String? = null) {
+        val settings = runCatching { container.settings.current() }.getOrNull()
+        _networkSetup.value = NetworkSetupState(
+            routeLookupEnabled = settings?.routeLookupEnabled ?: false,
+            webSearchEnabled = settings?.webSearchEnabled ?: false,
+            defaultOriginConfigured = settings?.defaultOriginLabel != null,
+            error = error ?: if (settings == null) "네트워크 설정을 읽지 못했습니다." else null,
+        )
+    }
+
+    private val _diagnosticExport = MutableStateFlow(DiagnosticExportState())
+    val diagnosticExport: StateFlow<DiagnosticExportState> = _diagnosticExport.asStateFlow()
+
+    /** SAF destination export works in both debug and signed release builds; no run-as required. */
+    fun exportDiagnostics(destination: Uri) {
+        if (_diagnosticExport.value.inProgress) return
+        _diagnosticExport.value = DiagnosticExportState(inProgress = true)
+        val accepted = diagnostics.exportContentFreeJsonl(
+            openDestination = {
+                getApplication<Application>().contentResolver.openOutputStream(destination, "wt")
+            },
+            onComplete = { result ->
+                _diagnosticExport.value = when (result) {
+                    is DiagnosticExportResult.Success -> DiagnosticExportState(
+                        message = "내용 비저장형 진단 ${result.sourceFileCount}개 파일, " +
+                            "${result.byteCount}바이트를 내보냈습니다.",
+                        succeeded = true,
+                    )
+                    DiagnosticExportResult.Unavailable -> DiagnosticExportState(
+                        message = "진단 저장소를 사용할 수 없습니다.",
+                    )
+                    DiagnosticExportResult.SourceRejected -> DiagnosticExportState(
+                        message = "안전 검사를 통과하지 못한 진단 원본이 있어 내보내지 않았습니다.",
+                    )
+                    DiagnosticExportResult.DestinationFailed -> DiagnosticExportState(
+                        message = "선택한 위치에 진단 파일을 쓰지 못했습니다.",
+                    )
+                }
+            },
+        )
+        if (!accepted) {
+            _diagnosticExport.value = DiagnosticExportState(
+                message = "진단 작업을 시작하지 못했습니다.",
+            )
+        }
+    }
+
     private val _notificationSetup = MutableStateFlow(NotificationSetupState())
     val notificationSetup: StateFlow<NotificationSetupState> = _notificationSetup.asStateFlow()
 
@@ -701,8 +833,9 @@ class PersonalEdgeViewModel(
                 calendars = calendars.getOrDefault(emptyList()).map { calendar ->
                     CalendarOption(
                         id = calendar.id,
-                        label = calendar.displayName.ifBlank { "(이름 없음)" },
-                        accountName = calendar.accountName,
+                        label = SettingsTextPolicy.sanitizeProviderLabel(calendar.displayName),
+                        accountName = SettingsTextPolicy.sanitizeProviderLabel(calendar.accountName),
+                        accountType = SettingsTextPolicy.sanitizeProviderLabel(calendar.accountType),
                         writable = calendar.id in writableIds,
                     )
                 },
@@ -746,57 +879,30 @@ class PersonalEdgeViewModel(
         Manifest.permission.READ_CALENDAR,
     ) == PackageManager.PERMISSION_GRANTED
 
-    /**
-     * Prepends today's date, the device time zone, and the pinned calendar.
-     *
-     * The model cannot resolve "내일 3시" without knowing today, and a wrong guess silently books
-     * the wrong day. Every value here is read from the device or from settings, never from model
-     * output, and the whole line is dropped rather than truncated if it would push the turn past
-     * the runtime's prompt budget.
-     */
+    /** Adds bounded device state plus explicitly quoted summary/recent-message context. */
     private suspend fun withTrustedTurnContext(prompt: String): String {
-        val preamble = runCatching {
+        return runCatching {
             val zone = ZoneId.systemDefault()
             val now = Instant.now().atZone(zone)
-            val calendarLabel = container.settings.current().defaultCalendarLabel
-            val summary = storedSummary()
-            buildString {
-                append("[현재 ")
-                append(now.format(TURN_CONTEXT_FORMAT))
-                append(", 시간대 ")
-                append(zone.id)
-                if (calendarLabel != null) {
-                    append(", 캘린더 ")
-                    append(calendarLabel)
-                }
-                append("]\n")
-                if (summary != null) {
-                    append("[이전 대화 요약] ")
-                    append(summary)
-                    append("\n")
-                }
+            val settings = container.settings.current()
+            val conversation = _chatHistory.value.activeConversationId?.let { conversationId ->
+                container.conversations.loadContext(
+                    conversationId = conversationId,
+                    recentMessageLimit = settings.recentMessageWindow,
+                )
             }
-        }.getOrNull() ?: return prompt
-
-        // Dropped whole rather than truncated: half a summary is worse than none, and the typed
-        // prompt already reserves its own share of the runtime budget.
-        if (preamble.toByteArray(Charsets.UTF_8).size > MAX_TURN_PREAMBLE_BYTES) return prompt
-        return preamble + prompt
-    }
-
-    /** The stored recap for the active thread, bounded so it cannot crowd out the user's prompt. */
-    private suspend fun storedSummary(): String? {
-        val conversationId = _chatHistory.value.activeConversationId ?: return null
-        val summary = runCatching { container.conversations.findConversation(conversationId) }
-            .getOrNull()
-            ?.summary
-            ?.trim()
-            ?.takeIf(String::isNotEmpty)
-            ?: return null
-
-        return summary.takeIf { text ->
-            text.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_PREAMBLE_BYTES
-        }
+            TurnContextBuilder.build(
+                prompt = prompt,
+                device = TurnDeviceContext(
+                    localTimestamp = now.format(TURN_CONTEXT_FORMAT),
+                    timeZoneId = zone.id,
+                    calendarId = settings.defaultCalendarId,
+                    calendarLabel = settings.defaultCalendarLabel,
+                ),
+                conversation = conversation,
+                maximumBytes = MAX_USER_PROMPT_BYTES,
+            )
+        }.getOrDefault(prompt)
     }
 
     /**
@@ -870,6 +976,10 @@ class PersonalEdgeViewModel(
             return
         }
 
+        // A background recap uses the same single-owner controller. User work always wins: cancel
+        // it now and join it inside the turn job before recording the prompt or calling runtime.
+        val pendingSummary = BackgroundSummaryPriority.cancelForUserTurn(summaryJob)
+
         val turnId = TurnId("turn-${UUID.randomUUID()}")
         val thermalTurn = ActiveThermalTurn(
             turnId = turnId,
@@ -889,6 +999,7 @@ class PersonalEdgeViewModel(
         }
 
         turnJob = viewModelScope.launch {
+            BackgroundSummaryPriority.awaitRelease(pendingSummary)
             val startedAt = SystemClock.elapsedRealtime()
             val requestText = withTrustedTurnContext(prompt)
             // The typed prompt is stored, never the derived preamble: the date and calendar in it
@@ -909,6 +1020,49 @@ class PersonalEdgeViewModel(
             var deltaCount = 0
             var deltaByteCount = 0L
             var terminalRecorded = false
+            val processedToolOrdinals = mutableSetOf<Int>()
+
+            suspend fun processToolExecution(event: AgentEvent.ToolExecuted): Boolean =
+                ToolReceiptCommitBoundary.commit {
+                    if (event.ordinal in processedToolOrdinals) return@commit false
+                    diagnostics.recordKnownToolPhase(
+                        toolName = event.toolName,
+                        stage = DiagnosticToolStage.EXECUTED,
+                        outcome = when (event.outcome) {
+                            ToolExecutionOutcome.READ_COMPLETED,
+                            ToolExecutionOutcome.WRITE_COMPLETED,
+                            -> DiagnosticConfirmationOutcome.EXECUTED_SUCCESS
+                            ToolExecutionOutcome.WRITE_REFUSED ->
+                                DiagnosticConfirmationOutcome.EXECUTED_REFUSED
+                        },
+                    )
+                    diagnostics.markPhase(DiagnosticPhase.TURN_PROCESSING)
+                    assistantPhase++
+                    val nextAssistantEntryId = "assistant-${turnId.value}-$assistantPhase"
+                    val finalizedAssistantText = recordToolAndAdvanceAssistant(
+                        toolName = event.toolName,
+                        outcome = event.outcome,
+                        currentAssistantEntryId = assistantEntryId,
+                        nextAssistantEntryId = nextAssistantEntryId,
+                    )
+                    history.record(conversationId, MessageRole.ASSISTANT, finalizedAssistantText)
+                    history.record(
+                        conversationId,
+                        MessageRole.TOOL_RECEIPT,
+                        ToolReceiptFormatter.text(event.toolName, event.outcome),
+                    )
+                    assistantEntryId = nextAssistantEntryId
+                    processedToolOrdinals.add(event.ordinal)
+                    true
+                }
+
+            suspend fun reconcileRetainedToolExecutions(): Int {
+                var reconciled = 0
+                controller.retainedToolExecutions(turnId)
+                    .sortedBy(AgentEvent.ToolExecuted::ordinal)
+                    .forEach { event -> if (processToolExecution(event)) reconciled++ }
+                return reconciled
+            }
             try {
                 val latestThermalObservation = thermalMonitor.observation.value
                 if (latestThermalObservation.stopSequence > thermalTurn.baselineStopSequence) {
@@ -940,31 +1094,7 @@ class PersonalEdgeViewModel(
                             appendToMessage(assistantEntryId, event.text)
                         }
                         is AgentEvent.ToolExecuted -> {
-                            diagnostics.recordKnownToolPhase(
-                                toolName = event.toolName,
-                                stage = DiagnosticToolStage.EXECUTED,
-                                outcome = DiagnosticConfirmationOutcome.APPROVED,
-                            )
-                            diagnostics.markPhase(DiagnosticPhase.TURN_PROCESSING)
-                            assistantPhase++
-                            val nextAssistantEntryId =
-                                "assistant-${turnId.value}-$assistantPhase"
-                            val finalizedAssistantText = recordToolAndAdvanceAssistant(
-                                toolName = event.toolName,
-                                currentAssistantEntryId = assistantEntryId,
-                                nextAssistantEntryId = nextAssistantEntryId,
-                            )
-                            history.record(
-                                conversationId,
-                                MessageRole.ASSISTANT,
-                                finalizedAssistantText,
-                            )
-                            history.record(
-                                conversationId,
-                                MessageRole.TOOL_RECEIPT,
-                                toolReceiptText(event.toolName),
-                            )
-                            assistantEntryId = nextAssistantEntryId
+                            processToolExecution(event)
                         }
                         is AgentEvent.Completed -> {
                             if (!terminalRecorded) {
@@ -980,6 +1110,7 @@ class PersonalEdgeViewModel(
                             ensureAssistantMessage(assistantEntryId)
                         }
                         is AgentEvent.Failure -> {
+                            reconcileRetainedToolExecutions()
                             if (!terminalRecorded) {
                                 diagnostics.recordSafely(
                                     DiagnosticEvent.TurnFailed(
@@ -993,7 +1124,13 @@ class PersonalEdgeViewModel(
                                 terminalRecorded = true
                             }
                             removeMessageIfBlank(assistantEntryId)
-                            addMessage(ChatRole.STATUS, failureText(event.code))
+                            addMessage(
+                                ChatRole.STATUS,
+                                failureText(
+                                    code = event.code,
+                                    knownToolExecution = processedToolOrdinals.isNotEmpty(),
+                                ),
+                            )
                         }
                     }
                 }
@@ -1009,6 +1146,10 @@ class PersonalEdgeViewModel(
                     terminalRecorded = true
                 }
             } catch (_: CancellationException) {
+                val knownToolExecution = withContext(NonCancellable) {
+                    reconcileRetainedToolExecutions()
+                    processedToolOrdinals.isNotEmpty()
+                }
                 if (!terminalRecorded) {
                     val cause = thermalTurn.cancellationCause.current()
                         ?: DiagnosticTurnCancellationCause.LIFECYCLE
@@ -1031,9 +1172,18 @@ class PersonalEdgeViewModel(
                 removeMessageIfBlank(assistantEntryId)
                 addMessage(
                     ChatRole.STATUS,
-                    cancellationStatusText(thermalTurn),
+                    if (knownToolExecution) {
+                        "Tool 결과는 위 영수증대로 확정됐지만 후속 모델 답변은 취소됐습니다. " +
+                            "자동으로 재시도하지 않습니다."
+                    } else {
+                        cancellationStatusText(thermalTurn)
+                    },
                 )
             } catch (failure: Exception) {
+                val knownToolExecution = withContext(NonCancellable) {
+                    reconcileRetainedToolExecutions()
+                    processedToolOrdinals.isNotEmpty()
+                }
                 if (!terminalRecorded) {
                     diagnostics.recordSafely(
                         DiagnosticEvent.TurnFailed(
@@ -1047,11 +1197,20 @@ class PersonalEdgeViewModel(
                     terminalRecorded = true
                 }
                 removeMessageIfBlank(assistantEntryId)
-                addMessage(ChatRole.STATUS, "예기치 않은 오류로 요청을 중단했습니다.")
+                addMessage(
+                    ChatRole.STATUS,
+                    if (knownToolExecution) {
+                        "Tool 결과는 위 영수증대로 확정됐지만 후속 처리에 실패했습니다. " +
+                            "자동으로 재시도하지 않습니다."
+                    } else {
+                        "예기치 않은 오류로 요청을 중단했습니다."
+                    },
+                )
             } finally {
                 // NonCancellable so a cancelled or thermally stopped turn still keeps whatever the
                 // model had already produced; a partial answer is history, not garbage.
                 withContext(NonCancellable) {
+                    reconcileRetainedToolExecutions()
                     history.record(
                         conversationId,
                         MessageRole.ASSISTANT,
@@ -1125,25 +1284,13 @@ class PersonalEdgeViewModel(
         }
     }
 
-    /** The label comes from the trusted registry name, never from model output. */
-    private fun toolReceiptText(toolName: String): String = when (toolName) {
-        CalendarQueryTool.NAME -> "캘린더에서 일정을 읽었습니다."
-        CalendarCreateEventTool.NAME -> "캘린더에 일정을 등록했습니다."
-        CalendarUpdateEventTool.NAME -> "캘린더 일정을 수정했습니다."
-        AlarmSetTool.NAME -> "시계 앱에 알람 추가를 요청했습니다."
-        AlarmNextTool.NAME -> "다음 알람 시각을 확인했습니다."
-        NotificationSearchTool.NAME -> "수집된 카카오톡 알림을 검색했습니다."
-        RouteEstimateTool.NAME -> "네이버 지도에서 이동 시간을 조회했습니다."
-        WebSearchTool.NAME -> "네이버에서 웹 검색을 했습니다."
-        else -> "확인된 Tool을 실행했습니다."
-    }
-
     private fun currentMessageText(id: String): String =
         _uiState.value.messages.firstOrNull { entry -> entry.id == id }?.text.orEmpty()
 
     /** Returns the assistant text being closed off, so the caller can persist it in order. */
     private fun recordToolAndAdvanceAssistant(
         toolName: String,
+        outcome: ToolExecutionOutcome,
         currentAssistantEntryId: String,
         nextAssistantEntryId: String,
     ): String {
@@ -1157,7 +1304,7 @@ class PersonalEdgeViewModel(
                     ChatEntry(
                         id = UUID.randomUUID().toString(),
                         role = ChatRole.TOOL,
-                        text = toolReceiptText(toolName),
+                        text = ToolReceiptFormatter.text(toolName, outcome),
                     ),
                     ChatEntry(nextAssistantEntryId, ChatRole.ASSISTANT, ""),
                 ),
@@ -1182,13 +1329,26 @@ class PersonalEdgeViewModel(
         }
     }
 
-    private fun failureText(code: AgentFailureCode): String = when (code) {
+    private fun failureText(
+        code: AgentFailureCode,
+        knownToolExecution: Boolean = false,
+    ): String = if (knownToolExecution) {
+        when (code) {
+            AgentFailureCode.DEADLINE_EXCEEDED ->
+                "Tool 결과는 위 영수증대로 확정됐지만 후속 답변 시간이 초과됐습니다. " +
+                    "자동으로 재시도하지 않습니다."
+            else -> "Tool 결과는 위 영수증대로 확정됐지만 후속 처리가 중단됐습니다. " +
+                "자동으로 재시도하지 않습니다."
+        }
+    } else when (code) {
         AgentFailureCode.BUSY -> "다른 요청이 진행 중입니다."
         AgentFailureCode.DEADLINE_EXCEEDED ->
             "요청 제한 시간 ${AgentLoopLimits().deadlineMillis / 1_000}초를 초과했습니다."
         AgentFailureCode.UNKNOWN_TOOL -> "등록되지 않은 Tool 호출을 차단했습니다."
         AgentFailureCode.INVALID_TOOL_CALL -> "유효하지 않은 Tool 인자를 차단했습니다."
-        AgentFailureCode.TOOL_NOT_EXECUTED -> "Tool 실행이 거절되었거나 만료되었습니다."
+        AgentFailureCode.TOOL_NOT_EXECUTED ->
+            "Tool이 실행되지 않았거나 결과를 확정할 수 없습니다. 자동으로 재시도하지 " +
+                "않았습니다. 대상 앱의 상태를 확인한 뒤 다시 결정하세요."
         AgentFailureCode.STEP_LIMIT_EXCEEDED,
         AgentFailureCode.TOOL_CALL_LIMIT_EXCEEDED -> "Agent 실행 한도를 초과해 중단했습니다."
         AgentFailureCode.INVALID_TURN,
@@ -1321,10 +1481,11 @@ class PersonalEdgeViewModel(
     companion object {
         val modelManifest = PinnedModelManifest.value
         // The typed prompt shares the runtime budget with the trusted preamble prepended below.
-        // The preamble carries the date line plus, when present, a stored conversation summary.
-        private const val MAX_SUMMARY_PREAMBLE_BYTES = 480
-        private const val MAX_TURN_PREAMBLE_BYTES = 640
-        private const val MAX_PROMPT_BYTES = MAX_USER_PROMPT_BYTES - MAX_TURN_PREAMBLE_BYTES
+        // Long prompts reserve 640 bytes for the date line and at least one recent message; short
+        // prompts automatically receive more history while the final request remains <= 2 KiB.
+        private const val MIN_TURN_CONTEXT_BYTES = 640
+        private const val MAX_PROMPT_BYTES = MAX_USER_PROMPT_BYTES - MIN_TURN_CONTEXT_BYTES
+        private const val UNRESOLVED_ACTION_WARNING_ID = "unresolved-action-warning"
         private val TURN_CONTEXT_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd(E) HH:mm", Locale.KOREAN)
     }

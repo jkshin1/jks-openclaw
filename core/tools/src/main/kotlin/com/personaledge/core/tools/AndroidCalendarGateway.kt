@@ -20,7 +20,7 @@ import kotlinx.coroutines.withContext
 class AndroidCalendarGateway(
     context: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-) : CalendarGateway {
+) : CalendarProviderGateway {
     private val contentResolver = context.applicationContext.contentResolver
 
     /** Every synced calendar, unfiltered. The settings screen uses this to let the user pick one. */
@@ -33,6 +33,7 @@ class AndroidCalendarGateway(
     }
 
     override suspend fun queryEvents(
+        calendarId: Long,
         startEpochMillis: Long,
         endEpochMillis: Long,
         limit: Int,
@@ -51,8 +52,8 @@ class AndroidCalendarGateway(
             contentResolver.query(
                 uri,
                 INSTANCE_PROJECTION,
-                null,
-                null,
+                "${CalendarContract.Instances.CALENDAR_ID} = ?",
+                arrayOf(calendarId.toString()),
                 "${CalendarContract.Instances.BEGIN} ASC",
             )
         }.useRows(limit) { cursor ->
@@ -91,6 +92,10 @@ class AndroidCalendarGateway(
                 startEpochMillis = cursor.getLong(EVENT_DTSTART),
                 endEpochMillis = cursor.getLong(EVENT_DTEND),
                 allDay = cursor.getInt(EVENT_ALL_DAY) != 0,
+                // CalendarContract supports both rule-based and explicit-date recurrence. Either
+                // form represents a series master that must not be edited as one occurrence.
+                recurring = cursor.getStringOrNull(EVENT_RRULE) != null ||
+                    cursor.getStringOrNull(EVENT_RDATE) != null,
                 location = cursor.getStringOrNull(EVENT_LOCATION),
             )
         }.firstOrNull()
@@ -117,6 +122,7 @@ class AndroidCalendarGateway(
     }
 
     override suspend fun updateEvent(
+        expectedCalendarId: Long,
         eventId: Long,
         patch: CalendarEventPatch,
     ): Boolean = withContext(ioDispatcher) {
@@ -131,10 +137,11 @@ class AndroidCalendarGateway(
 
         val updated = try {
             contentResolver.update(
-                ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
+                CalendarContract.Events.CONTENT_URI,
                 values,
-                null,
-                null,
+                "${CalendarContract.Events._ID} = ? AND " +
+                    "${CalendarContract.Events.CALENDAR_ID} = ?",
+                arrayOf(eventId.toString(), expectedCalendarId.toString()),
             )
         } catch (failure: SecurityException) {
             throw CalendarAccessException("캘린더 쓰기 권한이 없습니다.", failure)
@@ -170,6 +177,7 @@ class AndroidCalendarGateway(
                 id = cursor.getLong(CALENDAR_ID),
                 displayName = cursor.getStringOrEmpty(CALENDAR_DISPLAY_NAME),
                 accountName = cursor.getStringOrEmpty(CALENDAR_ACCOUNT_NAME),
+                accountType = cursor.getStringOrEmpty(CALENDAR_ACCOUNT_TYPE),
                 isPrimary = cursor.getInt(CALENDAR_IS_PRIMARY) != 0,
                 timeZoneId = cursor.getStringOrNull(CALENDAR_TIME_ZONE),
             )
@@ -211,14 +219,16 @@ class AndroidCalendarGateway(
             CalendarContract.Calendars._ID,
             CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
             CalendarContract.Calendars.ACCOUNT_NAME,
+            CalendarContract.Calendars.ACCOUNT_TYPE,
             CalendarContract.Calendars.IS_PRIMARY,
             CalendarContract.Calendars.CALENDAR_TIME_ZONE,
         )
         const val CALENDAR_ID = 0
         const val CALENDAR_DISPLAY_NAME = 1
         const val CALENDAR_ACCOUNT_NAME = 2
-        const val CALENDAR_IS_PRIMARY = 3
-        const val CALENDAR_TIME_ZONE = 4
+        const val CALENDAR_ACCOUNT_TYPE = 3
+        const val CALENDAR_IS_PRIMARY = 4
+        const val CALENDAR_TIME_ZONE = 5
 
         val INSTANCE_PROJECTION = arrayOf(
             CalendarContract.Instances.EVENT_ID,
@@ -245,6 +255,8 @@ class AndroidCalendarGateway(
             CalendarContract.Events.DTEND,
             CalendarContract.Events.ALL_DAY,
             CalendarContract.Events.EVENT_LOCATION,
+            CalendarContract.Events.RRULE,
+            CalendarContract.Events.RDATE,
         )
         const val EVENT_ID = 0
         const val EVENT_CALENDAR_ID = 1
@@ -253,5 +265,7 @@ class AndroidCalendarGateway(
         const val EVENT_DTEND = 4
         const val EVENT_ALL_DAY = 5
         const val EVENT_LOCATION = 6
+        const val EVENT_RRULE = 7
+        const val EVENT_RDATE = 8
     }
 }

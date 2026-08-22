@@ -141,6 +141,7 @@ class AlarmToolsTest {
         assertFalse(result.requested)
         assertEquals("start_blocked", result.reason)
         assertNull(result.nextAlarm)
+        assertEquals(ToolExecutionOutcome.WRITE_REFUSED, tool.executionOutcome(result))
     }
 
     @Test
@@ -154,6 +155,7 @@ class AlarmToolsTest {
 
         assertTrue(result.requested)
         assertNull(result.nextAlarm)
+        assertEquals(ToolExecutionOutcome.WRITE_COMPLETED, tool.executionOutcome(result))
     }
 
     @Test

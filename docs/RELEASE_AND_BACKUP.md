@@ -19,6 +19,10 @@ was created on.
 
 ## Create the key once
 
+The owner's personal key already exists. **Do not run the creation script again on this checkout.**
+The following command is only the recovery/setup procedure for a genuinely new installation where
+no key has been restored:
+
 ```bash
 source ./scripts/android-env.sh
 ./scripts/create-release-keystore.sh
@@ -46,6 +50,10 @@ cannot be installed.
 
 ## Build and verify
 
+The current source identifies itself as `versionCode=1`, `versionName="1.0.0-rc1"`. Keep the RC
+suffix until provider/live, physical-device, key-backup, and signed-release migration acceptance
+gates are explicitly closed; then choose a new version code and rebuild for `1.0.0`.
+
 ```bash
 ./gradlew :app:assembleRelease
 ./scripts/verify-release-signing.sh
@@ -56,8 +64,12 @@ carries neither an APK Signature Scheme v2 nor v3 block. On build-tools 37.0.0 t
 v3 only, which is the stronger scheme. Record the printed certificate SHA-256 in your notes: every
 later build must show the same value.
 
-The whole path was exercised on 2026-08-22 with a disposable keystore — build, artifact name, and
-verifier output — so the only untested part is your own key and password.
+The owner's actual key path was exercised on 2026-08-22. `assembleRelease` produced the signed
+`app-release.apk`; the verifier accepted APK Signature Scheme v3, rejected the debug identity, and
+reported certificate SHA-256
+`e0f66d4b4c8064db6a9d46097d77903cf13fbccacbdfc6e49e9f7c380b8e457a`. Future release builds must
+match that fingerprint. This proves build/signing configuration, not offline backup or physical
+release installation.
 
 Without a key configured, the build still succeeds but names its output
 `app-release-unsigned.apk`, which cannot be installed. The verifier recognises that artifact and
@@ -68,7 +80,14 @@ adb -s DEVICE_SERIAL install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 Debug and release builds use different keys, so they cannot replace each other. Pick one for the
-phone and stay on it.
+phone and stay on it. The Fold8's current debug install cannot migrate in place: moving to the
+personal release requires a deliberate uninstall, signed install, and 3.66GB model re-import.
+Do not perform that destructive migration until the owner confirms both the JKS and password are
+recoverable from an independent backup.
+
+After release installation, private diagnostics cannot be pulled with `run-as`. Use the app's
+content-free JSONL export through Android's document picker, then collect package/exit/memory/
+thermal facts with the host script. This path still needs a signed-release physical receipt.
 
 ## What to back up
 
@@ -90,7 +109,7 @@ all app state lives in `noBackupFilesDir`:
 
 - conversation transcripts and captured notification text — private, and stale on another device;
 - the action ledger — its claims mean nothing on a device that never performed those actions;
-- Keystore-encrypted credentials — the AES key is hardware-bound and cannot leave this phone.
+- Keystore-encrypted credentials — the installation-scoped Android Keystore key is not backed up.
 
 That is a design choice, not an omission. It also means a new phone starts empty.
 

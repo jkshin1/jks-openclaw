@@ -69,6 +69,11 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private val viewModel: PersonalEdgeViewModel by viewModels()
+    private val createDiagnosticDocument = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/x-ndjson"),
+    ) { uri ->
+        if (uri != null) viewModel.exportDiagnostics(uri)
+    }
     private val openModelDocument = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -104,12 +109,15 @@ class MainActivity : ComponentActivity() {
                 val chatHistory by viewModel.chatHistory.collectAsStateWithLifecycle()
                 val notificationSetup by viewModel.notificationSetup.collectAsStateWithLifecycle()
                 val credentials by viewModel.credentials.collectAsStateWithLifecycle()
+                val networkSetup by viewModel.networkSetup.collectAsStateWithLifecycle()
+                val diagnosticExport by viewModel.diagnosticExport.collectAsStateWithLifecycle()
 
                 // Calendar access and synced accounts can change while the app is backgrounded.
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                     viewModel.refreshCalendarSetup()
                     viewModel.refreshNotificationSetup()
                     viewModel.refreshCredentials()
+                    viewModel.refreshNetworkSetup()
                 }
 
                 PersonalEdgeScreen(
@@ -118,6 +126,8 @@ class MainActivity : ComponentActivity() {
                     chatHistory = chatHistory,
                     notificationSetup = notificationSetup,
                     credentials = credentials,
+                    networkSetup = networkSetup,
+                    diagnosticExport = diagnosticExport,
                     pendingConfirmation = pending,
                     onRequestCalendarPermission = {
                         requestCalendarPermissions.launch(
@@ -142,6 +152,13 @@ class MainActivity : ComponentActivity() {
                     onDeleteCapturedNotifications = viewModel::deleteCapturedNotifications,
                     onStoreCredential = viewModel::storeCredential,
                     onDeleteCredential = viewModel::deleteCredential,
+                    onSetRouteLookupEnabled = viewModel::setRouteLookupEnabled,
+                    onSetWebSearchEnabled = viewModel::setWebSearchEnabled,
+                    onStoreDefaultOrigin = viewModel::storeDefaultOrigin,
+                    onDeleteDefaultOrigin = viewModel::deleteDefaultOrigin,
+                    onExportDiagnostics = {
+                        createDiagnosticDocument.launch("personal-edge-diagnostics.jsonl")
+                    },
                     onPromptChange = viewModel::updatePrompt,
                     onImportModel = { openModelDocument.launch(arrayOf("application/octet-stream", "*/*")) },
                     onInspectModel = viewModel::inspectInstalledModel,
@@ -163,6 +180,8 @@ private fun PersonalEdgeScreen(
     chatHistory: ChatHistoryState,
     notificationSetup: NotificationSetupState,
     credentials: CredentialsState,
+    networkSetup: NetworkSetupState,
+    diagnosticExport: DiagnosticExportState,
     pendingConfirmation: PendingConfirmation?,
     onRequestCalendarPermission: () -> Unit,
     onPinCalendar: (CalendarOption) -> Unit,
@@ -178,6 +197,11 @@ private fun PersonalEdgeScreen(
     onDeleteCapturedNotifications: () -> Unit,
     onStoreCredential: (CredentialSlot, String) -> Unit,
     onDeleteCredential: (CredentialSlot) -> Unit,
+    onSetRouteLookupEnabled: (Boolean) -> Unit,
+    onSetWebSearchEnabled: (Boolean) -> Unit,
+    onStoreDefaultOrigin: (String) -> Unit,
+    onDeleteDefaultOrigin: () -> Unit,
+    onExportDiagnostics: () -> Unit,
     onPromptChange: (String) -> Unit,
     onImportModel: () -> Unit,
     onInspectModel: () -> Unit,
@@ -247,6 +271,11 @@ private fun PersonalEdgeScreen(
                         onInitializeGpu = onInitializeGpu,
                     )
 
+                    DiagnosticsExportCard(
+                        state = diagnosticExport,
+                        onExport = onExportDiagnostics,
+                    )
+
                     CalendarSetupCard(
                         setup = calendarSetup,
                         onRequestPermission = onRequestCalendarPermission,
@@ -265,6 +294,14 @@ private fun PersonalEdgeScreen(
                         credentials = credentials,
                         onStore = onStoreCredential,
                         onDelete = onDeleteCredential,
+                    )
+
+                    NetworkSetupCard(
+                        setup = networkSetup,
+                        onSetRouteLookupEnabled = onSetRouteLookupEnabled,
+                        onSetWebSearchEnabled = onSetWebSearchEnabled,
+                        onStoreDefaultOrigin = onStoreDefaultOrigin,
+                        onDeleteDefaultOrigin = onDeleteDefaultOrigin,
                     )
                 }
             } else {
@@ -558,6 +595,12 @@ private fun CalendarSetupCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Text(
+                        text = "계정 이름뿐 아니라 계정 유형과 캘린더 ID를 확인하세요. " +
+                            "@naver.com 주소만으로 NAVER 캘린더 동기화가 증명되지는 않습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         setup.calendars.forEach { option ->
                             AssistChip(
@@ -566,9 +609,11 @@ private fun CalendarSetupCard(
                                 label = {
                                     Text(
                                         if (option.id == setup.pinnedCalendarId) {
-                                            "✓ ${option.label} · ${option.accountName}"
+                                            "✓ ${option.label} · ${option.accountName} · " +
+                                                "${option.accountType} · ID ${option.id}"
                                         } else {
-                                            "${option.label} · ${option.accountName}"
+                                            "${option.label} · ${option.accountName} · " +
+                                                "${option.accountType} · ID ${option.id}"
                                         },
                                     )
                                 },
@@ -614,7 +659,7 @@ private fun CredentialsCard(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "키는 이 기기의 하드웨어 키로 암호화되어 저장되며, 저장 후에는 다시 볼 수 " +
+                text = "키는 Android Keystore 키로 암호화되어 저장되며, 저장 후에는 다시 볼 수 " +
                     "없습니다. 백업·기기 이전에 포함되지 않으므로 재설치하면 다시 입력해야 합니다.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -722,6 +767,122 @@ private fun CredentialRow(
 }
 
 @Composable
+private fun NetworkSetupCard(
+    setup: NetworkSetupState,
+    onSetRouteLookupEnabled: (Boolean) -> Unit,
+    onSetWebSearchEnabled: (Boolean) -> Unit,
+    onStoreDefaultOrigin: (String) -> Unit,
+    onDeleteDefaultOrigin: () -> Unit,
+) {
+    // A home label can be sensitive. It is never rememberSaveable and the stored value is never
+    // read back into UI; only a presence bit is exposed after save.
+    var originEntry by remember { mutableStateOf("") }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "네이버 외부 조회",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "아래 동의를 켜도 자동 전송되지 않습니다. 실제 요청마다 전송될 검색어 또는 " +
+                    "출발지·도착지를 다시 보여 주고 승인을 받은 뒤 NAVER로 보냅니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            ConsentRow(
+                title = "경로 조회 허용",
+                detail = "출발지와 도착지를 NAVER Cloud Maps에 전송",
+                checked = setup.routeLookupEnabled,
+                onCheckedChange = onSetRouteLookupEnabled,
+            )
+
+            OutlinedTextField(
+                value = originEntry,
+                onValueChange = { value ->
+                    if (value.codePointCount(0, value.length) <= 80) originEntry = value
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = {
+                    Text(if (setup.defaultOriginConfigured) "기본 출발지 교체" else "기본 출발지")
+                },
+                supportingText = {
+                    Text(
+                        if (setup.defaultOriginConfigured) {
+                            "저장됨 · 개인정보 보호를 위해 저장된 값은 다시 표시하지 않습니다."
+                        } else {
+                            "예: 서울시청 (선택 사항, 기기 백업 제외 저장소에 보관)"
+                        },
+                    )
+                },
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        onStoreDefaultOrigin(originEntry)
+                        originEntry = ""
+                    },
+                    enabled = originEntry.isNotBlank(),
+                ) {
+                    Text("출발지 저장")
+                }
+                if (setup.defaultOriginConfigured) {
+                    TextButton(onClick = onDeleteDefaultOrigin) {
+                        Text("출발지 삭제", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            ConsentRow(
+                title = "웹 검색 허용",
+                detail = "검색어를 NAVER Search API에 전송",
+                checked = setup.webSearchEnabled,
+                onCheckedChange = onSetWebSearchEnabled,
+            )
+
+            setup.error?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConsentRow(
+    title: String,
+    detail: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
 private fun NotificationSetupCard(
     setup: NotificationSetupState,
     onOpenAccessSettings: () -> Unit,
@@ -781,6 +942,47 @@ private fun NotificationSetupCard(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsExportCard(
+    state: DiagnosticExportState,
+    onExport: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "진단 내보내기",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "서명된 릴리스에서도 선택한 위치로 내용 비저장형 JSONL을 내보냅니다. " +
+                    "프롬프트·모델 답변·Tool 인자/결과·API 키는 포함하지 않습니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onExport, enabled = !state.inProgress) {
+                Text(if (state.inProgress) "내보내는 중" else "진단 JSONL 저장")
+            }
+            state.message?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (state.succeeded) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                )
             }
         }
     }

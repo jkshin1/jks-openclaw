@@ -2,12 +2,14 @@ package com.personaledge.agent
 
 import android.app.Application
 import com.personaledge.core.diagnostics.DiagnosticEvent
+import com.personaledge.core.diagnostics.DiagnosticExportResult
 import com.personaledge.core.diagnostics.DiagnosticPhase
 import com.personaledge.core.diagnostics.DiagnosticRecorder
 import com.personaledge.core.diagnostics.DiagnosticSink
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.io.OutputStream
 
 class PersonalEdgeApplication : Application() {
     private val diagnosticExecutor: ExecutorService = Executors.newSingleThreadExecutor { task ->
@@ -70,6 +72,32 @@ internal class AppDiagnosticChannel(
 
     fun recordResourceSnapshot(): Boolean = submit {
         recorder.recordResourceSnapshot()
+    }
+
+    /**
+     * Queued on the same executor as records, so everything accepted before this call is present.
+     * The destination is opened and closed here; a slow SAF provider never runs on the main thread.
+     */
+    fun exportContentFreeJsonl(
+        openDestination: () -> OutputStream?,
+        onComplete: (DiagnosticExportResult) -> Unit,
+    ): Boolean = try {
+        executor.execute {
+            val result = try {
+                val destination = openDestination()
+                if (destination == null) {
+                    DiagnosticExportResult.DestinationFailed
+                } else {
+                    destination.use(recorder::exportContentFreeJsonl)
+                }
+            } catch (_: Throwable) {
+                DiagnosticExportResult.DestinationFailed
+            }
+            runCatching { onComplete(result) }
+        }
+        true
+    } catch (_: Throwable) {
+        false
     }
 
     private fun submit(block: () -> Unit): Boolean = try {

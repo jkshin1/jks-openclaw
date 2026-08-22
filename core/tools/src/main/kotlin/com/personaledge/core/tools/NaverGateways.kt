@@ -205,7 +205,7 @@ class NaverWebSearchGateway(
 
         val items = parseObject(response.body, "검색 응답을 해석하지 못했습니다.")
             .array("items")
-            ?: return emptyList()
+            ?: throw RemoteServiceException("검색 응답에 결과 목록이 없습니다.")
 
         return (0 until minOf(items.size(), limit)).mapNotNull { index ->
             items.objectAt(index)?.toHit()
@@ -213,8 +213,7 @@ class NaverWebSearchGateway(
     }
 
     private fun JsonObject.toHit(): WebSearchHit? {
-        val link = string("link").orEmpty()
-        if (!UntrustedText.isDisplayableLink(link)) return null
+        val link = UntrustedText.canonicalDisplayableLink(string("link").orEmpty()) ?: return null
 
         val title = UntrustedText.clean(string("title").orEmpty(), MAX_TITLE_CHARACTERS)
         if (title.isEmpty()) return null

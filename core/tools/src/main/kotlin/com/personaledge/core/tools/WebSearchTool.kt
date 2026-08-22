@@ -16,9 +16,10 @@ data class WebSearchResult(
  *
  * That returning text is data, never instruction, and the architecture is what guarantees it: a
  * tool result cannot invoke a tool, the model cannot call anything without the orchestrator, and
- * every side effect needs the user's confirmation against an immutable snapshot. A page that says
- * "book a flight" changes nothing on its own. [UntrustedText] adds the narrower guarantee that
- * such text cannot impersonate the Gemma template or render as something it is not.
+ * every side effect needs the user's confirmation against an immutable snapshot. The outbound
+ * query itself also requires confirmation because it discloses user text to NAVER. A page that
+ * says "book a flight" changes nothing on its own. [UntrustedText] adds the narrower guarantee
+ * that such text cannot impersonate the Gemma template or render as something it is not.
  */
 class WebSearchTool(
     private val gateway: WebSearchGateway,
@@ -28,6 +29,7 @@ class WebSearchTool(
         name = NAME,
         description = "Search the web for current information and return titles, links, and snippets",
         risk = ToolRisk.READ_ONLY,
+        minimumConfirmation = ConfirmationRequirement.UserConfirmation,
         requiredCapabilities = setOf(ToolCapability.NETWORK),
     )
 

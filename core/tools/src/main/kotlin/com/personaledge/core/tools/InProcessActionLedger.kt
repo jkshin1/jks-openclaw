@@ -8,7 +8,7 @@ class InProcessActionLedger(
     private val maximumClaims: Int = DEFAULT_MAXIMUM_CLAIMS,
 ) : ActionLedger {
     private val lock = Any()
-    private val claimedKeys = hashSetOf<String>()
+    private val states = hashMapOf<String, ActionExecutionState>()
 
     init {
         require(maximumClaims in 1..MAXIMUM_ALLOWED_CLAIMS)
@@ -18,11 +18,36 @@ class InProcessActionLedger(
         require(idempotencyKey.isNotBlank())
         return synchronized(lock) {
             when {
-                idempotencyKey in claimedKeys -> false
-                claimedKeys.size >= maximumClaims -> false
-                else -> claimedKeys.add(idempotencyKey)
+                idempotencyKey in states -> false
+                states.size >= maximumClaims -> false
+                else -> {
+                    states[idempotencyKey] = ActionExecutionState.CLAIMED
+                    true
+                }
             }
         }
+    }
+
+    override suspend fun recordState(
+        idempotencyKey: String,
+        state: ActionExecutionState,
+    ): Boolean {
+        require(state != ActionExecutionState.CLAIMED)
+        return synchronized(lock) {
+            when (val current = states[idempotencyKey]) {
+                ActionExecutionState.CLAIMED -> {
+                    states[idempotencyKey] = state
+                    true
+                }
+                state -> true
+                null -> false
+                else -> false
+            }
+        }
+    }
+
+    internal fun stateOf(idempotencyKey: String): ActionExecutionState? = synchronized(lock) {
+        states[idempotencyKey]
     }
 
     private companion object {

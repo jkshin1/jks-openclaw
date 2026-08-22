@@ -58,21 +58,33 @@ class NotificationRepository(
         return true
     }
 
-    /** A blank [query] returns the most recent messages instead of matching everything. */
+    /**
+     * A blank [query] returns the most recent messages instead of matching everything.
+     *
+     * [retentionDays] is mandatory so no caller can accidentally expose a row past the configured
+     * privacy window. The stricter of that cutoff and [postedAtOrAfter] wins.
+     */
     suspend fun search(
         packageNames: List<String>,
         query: String?,
         postedAtOrAfter: Long,
+        retentionDays: Int,
         limit: Int,
     ): List<CapturedMessage> {
+        val retentionCutoff = retentionCutoff(retentionDays)
+        // Search is a natural maintenance boundary: the listener might have been idle since these
+        // rows expired. Clamp the read as well as deleting, so a concurrent stale insert cannot
+        // become visible between the prune and the SELECT.
+        pruneAt(retentionCutoff, MAX_STORED_ROWS)
         if (packageNames.isEmpty()) return emptyList()
         val boundedLimit = limit.coerceIn(1, MAX_RESULTS)
         val trimmed = query?.trim().orEmpty()
+        val effectivePostedAtOrAfter = maxOf(postedAtOrAfter, retentionCutoff)
 
         val rows = if (trimmed.isEmpty()) {
-            dao.recent(packageNames, postedAtOrAfter, boundedLimit)
+            dao.recent(packageNames, effectivePostedAtOrAfter, boundedLimit)
         } else {
-            dao.search(packageNames, likePattern(trimmed), postedAtOrAfter, boundedLimit)
+            dao.search(packageNames, likePattern(trimmed), effectivePostedAtOrAfter, boundedLimit)
         }
         return rows.map(CapturedNotificationEntity::toCapturedMessage)
     }
@@ -84,11 +96,18 @@ class NotificationRepository(
      * quiet month keep messages far longer than the user asked for.
      */
     suspend fun prune(retentionDays: Int, maximumRows: Int = MAX_STORED_ROWS): Int {
+        return pruneAt(retentionCutoff(retentionDays), maximumRows)
+    }
+
+    private fun retentionCutoff(retentionDays: Int): Long {
         val boundedDays = retentionDays.coerceIn(
             AgentSettings.MIN_NOTIFICATION_RETENTION_DAYS,
             AgentSettings.MAX_NOTIFICATION_RETENTION_DAYS,
         )
-        val cutoff = clock() - boundedDays.toLong() * MILLIS_PER_DAY
+        return clock() - boundedDays.toLong() * MILLIS_PER_DAY
+    }
+
+    private suspend fun pruneAt(cutoff: Long, maximumRows: Int): Int {
         val byAge = dao.deleteOlderThan(cutoff)
         val byCount = dao.trimTo(maximumRows.coerceIn(1, MAX_STORED_ROWS))
         return byAge + byCount

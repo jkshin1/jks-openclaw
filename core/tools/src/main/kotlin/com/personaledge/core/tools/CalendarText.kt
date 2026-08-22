@@ -71,12 +71,32 @@ internal object CalendarText {
      * Calendar text comes from the device, not the model, but it still enters a model template.
      * Strip anything that could act as a delimiter and cap the length.
      */
-    fun sanitizeForModel(value: String, maximumCharacters: Int): String = value
-        .replace(MODEL_CONTROL_TOKEN_OPEN, " ")
-        .replace(MODEL_CONTROL_TOKEN_CLOSE, " ")
-        .filterNot(Char::isISOControl)
-        .trim()
-        .take(maximumCharacters)
+    fun sanitizeForModel(value: String, maximumCharacters: Int): String {
+        require(maximumCharacters >= 0)
+        val withoutInvisibleText = buildString(value.length) {
+            var index = 0
+            while (index < value.length) {
+                val codePoint = value.codePointAt(index)
+                index += Character.charCount(codePoint)
+                val unsafe = Character.isISOControl(codePoint) || when (Character.getType(codePoint)) {
+                    Character.FORMAT.toInt(),
+                    Character.LINE_SEPARATOR.toInt(),
+                    Character.PARAGRAPH_SEPARATOR.toInt(),
+                    -> true
+                    else -> false
+                }
+                if (!unsafe) appendCodePoint(codePoint)
+            }
+        }
+        // Delimiter replacement must follow unsafe-character removal. Otherwise an input such as
+        // `<\u202E|tool|\u202E>` would acquire complete delimiters only after the filter had run.
+        val safe = withoutInvisibleText
+            .replace(MODEL_CONTROL_TOKEN_OPEN, " ")
+            .replace(MODEL_CONTROL_TOKEN_CLOSE, " ")
+            .trim()
+        if (safe.codePointCount(0, safe.length) <= maximumCharacters) return safe
+        return safe.substring(0, safe.offsetByCodePoints(0, maximumCharacters))
+    }
 
     fun codePointLength(value: String): Int = value.codePointCount(0, value.length)
 
@@ -93,6 +113,7 @@ internal object CalendarText {
             event.startEpochMillis,
             event.endEpochMillis,
             event.allDay,
+            event.recurring,
             event.location.orEmpty(),
             // NUL separator: it cannot appear in a calendar title or location, so no field can
             // impersonate another by embedding the delimiter. Written as an escape because a raw

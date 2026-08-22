@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -49,6 +50,7 @@ class ScopedCalendarGatewayTest {
         val visible = scoped(delegate).queryEvents(0, 10_000, limit = 10)
 
         assertEquals(listOf(1L, 3L), visible.map(CalendarEvent::eventId))
+        assertEquals(listOf(naverId), delegate.queriedCalendarIds)
     }
 
     @Test
@@ -58,6 +60,20 @@ class ScopedCalendarGatewayTest {
 
         assertNull(gateway.findEvent(2))
         assertFalse(gateway.updateEvent(2, CalendarEventPatch(title = "탈취 시도")))
+        assertTrue(delegate.patches.isEmpty())
+    }
+
+    @Test
+    fun `provider move after scoped read is refused atomically`() = runBlocking {
+        val delegate = FakeCalendarGateway(events = listOf(event(1, naverId))).apply {
+            onProviderUpdate = { current -> current.copy(calendarId = workId) }
+        }
+
+        val updated = scoped(delegate).updateEvent(1, CalendarEventPatch(title = "수정 시도"))
+
+        assertFalse(updated)
+        assertEquals(workId, delegate.stored.getValue(1).calendarId)
+        assertEquals("일정 1", delegate.stored.getValue(1).title)
         assertTrue(delegate.patches.isEmpty())
     }
 
@@ -83,19 +99,26 @@ class ScopedCalendarGatewayTest {
         val gateway = scoped(delegate, pinned = null)
 
         assertTrue(gateway.writableCalendars().isEmpty())
-        assertTrue(gateway.queryEvents(0, 10_000, limit = 10).isEmpty())
+        try {
+            gateway.queryEvents(0, 10_000, limit = 10)
+            fail("A missing pin must not look like an empty successful calendar query.")
+        } catch (expected: CalendarAccessException) {
+            assertTrue(expected.message!!.contains("먼저 선택"))
+        }
         assertNull(gateway.findEvent(1))
         assertFalse(gateway.updateEvent(1, CalendarEventPatch(title = "무시됨")))
     }
 
     @Test
-    fun `filtering does not shorten a page below the requested limit`() = runBlocking {
-        val events = (1..30).map { index ->
-            event(index.toLong(), if (index % 3 == 0) naverId else workId)
-        }
+    fun `provider scope is applied before the requested limit`() = runBlocking {
+        val events = (1..30).map { index -> event(index.toLong(), workId) } +
+            listOf(event(31, naverId), event(32, naverId))
         val delegate = FakeCalendarGateway(events = events)
 
-        // 10 of the 30 rows belong to the pinned calendar and are spread across the whole range.
-        assertEquals(5, scoped(delegate).queryEvents(0, 10_000, limit = 5).size)
+        assertEquals(
+            listOf(31L, 32L),
+            scoped(delegate).queryEvents(0, 10_000, limit = 2).map(CalendarEvent::eventId),
+        )
+        assertEquals(listOf(naverId), delegate.queriedCalendarIds)
     }
 }

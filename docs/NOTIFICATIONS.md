@@ -63,7 +63,9 @@ fragments into a token that was not in the original.
 
 - Retention in days, from settings (default 14, 1–180).
 - A hard cap of 5,000 rows regardless of age.
-- Pruning runs at most hourly, triggered by a capture rather than by a timer.
+- Capture-triggered maintenance runs at most hourly. Retention is also applied inside every search
+  and when the settings screen resumes to calculate its stored count, so rows that expire while
+  the listener is idle are no longer readable indefinitely.
 - "수집 기록 삭제" erases every captured row without touching the grant, so capture continues.
 
 Everything lives in `noBackupFilesDir` and is excluded from cloud backup and device transfer.

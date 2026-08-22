@@ -14,7 +14,20 @@ class InProcessActionLedgerTest {
         val ledger = InProcessActionLedger()
 
         assertTrue(ledger.claim("key"))
+        assertEquals(ActionExecutionState.CLAIMED, ledger.stateOf("key"))
         assertFalse(ledger.claim("key"))
+    }
+
+    @Test
+    fun `terminal state is monotonic and idempotent`() = kotlinx.coroutines.runBlocking {
+        val ledger = InProcessActionLedger()
+
+        assertTrue(ledger.claim("key"))
+        assertTrue(ledger.recordState("key", ActionExecutionState.REFUSED))
+        assertTrue(ledger.recordState("key", ActionExecutionState.REFUSED))
+        assertFalse(ledger.recordState("key", ActionExecutionState.COMPLETED))
+        assertFalse(ledger.recordState("missing", ActionExecutionState.COMPLETED))
+        assertEquals(ActionExecutionState.REFUSED, ledger.stateOf("key"))
     }
 
     @Test

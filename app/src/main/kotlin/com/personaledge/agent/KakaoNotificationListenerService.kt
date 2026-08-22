@@ -83,6 +83,9 @@ class KakaoNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(statusBarNotification: StatusBarNotification?) {
+        // The listener grant exposes every package. Reject by package before even asking Android
+        // for the Notification/Bundle so another app's text is neither materialized nor parsed.
+        if (!NotificationCapture.isAllowedPackage(statusBarNotification?.packageName)) return
         val notification = statusBarNotification?.notification ?: return
         val post = NotificationPostReader.read(
             packageName = statusBarNotification.packageName,

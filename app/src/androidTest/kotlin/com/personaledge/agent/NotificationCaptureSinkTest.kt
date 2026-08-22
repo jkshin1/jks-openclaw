@@ -4,6 +4,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.personaledge.core.data.AgentSettings
 import com.personaledge.core.data.NotificationRepository
 import com.personaledge.core.data.PersonalEdgeDatabase
 import com.personaledge.core.data.SettingsRepository
@@ -74,10 +75,15 @@ class NotificationCaptureSinkTest {
         messagingText = null,
     )
 
-    private suspend fun search(query: String? = null, since: Long = 0) = notifications.search(
+    private suspend fun search(
+        query: String? = null,
+        since: Long = 0,
+        retentionDays: Int = AgentSettings.DEFAULT_NOTIFICATION_RETENTION_DAYS,
+    ) = notifications.search(
         packageNames = listOf(NotificationCapture.KAKAO_TALK_PACKAGE),
         query = query,
         postedAtOrAfter = since,
+        retentionDays = retentionDays,
         limit = NotificationRepository.MAX_RESULTS,
     )
 
@@ -168,17 +174,35 @@ class NotificationCaptureSinkTest {
     }
 
     @Test
-    fun retentionDropsMessagesPastTheConfiguredAge() = runBlocking {
-        settings.setNotificationCaptureEnabled(true)
-        settings.setNotificationRetentionDays(1)
-        val sink = sink()
+    fun searchEnforcesRetentionAndPhysicallyPrunesIdleExpiredRows() = runBlocking {
         val dayMillis = 24L * 60 * 60 * 1_000
-        sink.accept(post(sourceKey = "old", text = "예전", postedAtEpochMillis = now - 3 * dayMillis))
-        sink.accept(post(sourceKey = "new", text = "최근"))
+        notifications.capture(
+            NotificationCapture.extract(
+                post(sourceKey = "old", text = "예전", postedAtEpochMillis = now - 3 * dayMillis),
+            )!!,
+        )
+        notifications.capture(NotificationCapture.extract(post(sourceKey = "new", text = "최근"))!!)
 
-        notifications.prune(retentionDays = 1)
+        assertEquals(listOf("최근"), search(retentionDays = 1).map { it.text })
+        assertEquals(1L, notifications.count())
+    }
 
-        assertEquals(listOf("최근"), search().map { it.text })
+    @Test
+    fun callerSearchWindowCanBeNarrowerThanRetention() = runBlocking {
+        val dayMillis = 24L * 60 * 60 * 1_000
+        notifications.capture(
+            NotificationCapture.extract(
+                post(sourceKey = "older", text = "이틀 전", postedAtEpochMillis = now - 2 * dayMillis),
+            )!!,
+        )
+        notifications.capture(NotificationCapture.extract(post(sourceKey = "new", text = "최근"))!!)
+
+        assertEquals(
+            listOf("최근"),
+            search(since = now - dayMillis, retentionDays = 14).map { it.text },
+        )
+        // The two-day-old row is still inside retention; a narrower query must not delete it.
+        assertEquals(2L, notifications.count())
     }
 
     @Test

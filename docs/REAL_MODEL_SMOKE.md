@@ -81,13 +81,21 @@ The observed sequence was:
 5. The transcript rendered `User -> Tool -> Assistant`; the assistant said
    `The simulation completed.`
 
-A second top-level request then proved the stateless first-slice policy recreates a usable
-Conversation rather than accumulating the previous native KV history:
+This is a historical confirmation-path fixture. `fake_arrival_notice` is not registered in the
+shipped app; the current device registry contains the eight real Tools listed in
+[`PROJECT_STATUS.md`](PROJECT_STATUS.md).
+
+A second top-level request then proved that a fresh native Conversation could be recreated rather
+than accumulating the previous native KV history:
 
 ```text
 User: Reply with exactly: SECOND
 Assistant: SECOND
 ```
+
+The current app still creates a fresh native Conversation per top-level turn, but it is no longer
+application-level stateless: a sanitized, quoted, byte-bounded summary and newest recent messages
+are supplied from Room. That later continuity path is not evidence from this historical receipt.
 
 ## Physical Fold8 GPU follow-up
 
@@ -128,6 +136,17 @@ crash, ANR, or low-memory exit. This is direct physical-device evidence that the
 debug/release policy does not cancel at `SEVERE`; it does not qualify long-duration heat or the
 natural `CRITICAL` branch.
 
+Separately on 2026-08-22, one English Fold8 request caused real Gemma to select
+`calendar_create_event`; approval wrote the canonical event and a provider query confirmed its
+times. One Korean instrumentation-driven request selected the same Tool and denial wrote nothing.
+Those receipts establish both confirmation directions for that phrasing, not broad Tool-selection
+accuracy and not physical acceptance of the other seven registered Tools.
+
+The `1.0.0-rc1` candidate later completed a separate read-only `alarm_next` turn through the real
+Fold8 UI. Content-free diagnostics recorded GPU initialization in 6,170 ms, the trusted
+`alarm_next` execution receipt, 3,064 ms TTFT, 4,197 ms total turn duration, and thermal `none`.
+This accepts one alarm-read phrasing only; it does not accept physical `alarm_set`.
+
 ## Remaining acceptance gates
 
 - Measure 4K, then 8K and 16K candidates for cold/warm load, TTFT, decode rate, peak
@@ -137,5 +156,7 @@ natural `CRITICAL` branch.
   device. Natural `SEVERE` continuation is confirmed above.
 - Keep 32K experimental until the physical device shows adequate Android/system headroom;
   advertised model capacity alone is not acceptance evidence.
-- External side-effecting Tools remain disabled until their provider, authentication,
-  durable idempotency, and distribution-policy gates are implemented.
+- The eight real Tools are registered, but retain separate acceptance gates: `alarm_next` has one
+  Fold8 Gemma turn while `alarm_set` does not; Kakao capture lacks a real-package post; NAVER
+  route/search lack live credentialed calls; NAVER Calendar publication is unqualified; and
+  signed-release migration remains an owner decision after offline key backup.

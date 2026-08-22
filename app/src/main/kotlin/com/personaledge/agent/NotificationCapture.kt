@@ -41,11 +41,17 @@ object NotificationCapture {
 
     val DEFAULT_ALLOWED_PACKAGES = setOf(KAKAO_TALK_PACKAGE)
 
+    /** Fast boundary used by the listener before it touches another app's notification payload. */
+    fun isAllowedPackage(
+        packageName: String?,
+        allowedPackages: Set<String> = DEFAULT_ALLOWED_PACKAGES,
+    ): Boolean = packageName != null && packageName in allowedPackages
+
     fun extract(
         post: NotificationPost,
         allowedPackages: Set<String> = DEFAULT_ALLOWED_PACKAGES,
     ): CapturedNotificationDraft? {
-        if (post.packageName !in allowedPackages) return null
+        if (!isAllowedPackage(post.packageName, allowedPackages)) return null
         if (post.isGroupSummary || post.isOngoing) return null
         if (post.sourceKey.isBlank()) return null
         if (post.postedAtEpochMillis <= 0) return null
@@ -82,20 +88,33 @@ object NotificationCapture {
      * formatting are dropped outright, since text that renders differently from what it contains
      * is exactly what a confirmation preview must not show.
      */
-    private fun String?.cleaned(): String? = this
-        ?.replace(MODEL_CONTROL_TOKEN_OPEN, " ")
-        ?.replace(MODEL_CONTROL_TOKEN_CLOSE, " ")
-        ?.filterNot { character -> character.isISOControl() || character.isInvisibleFormatting() }
-        ?.trim()
-        ?.takeIf(String::isNotEmpty)
-
-    private fun Char.isInvisibleFormatting(): Boolean = when (Character.getType(this).toByte()) {
-        Character.FORMAT,
-        Character.LINE_SEPARATOR,
-        Character.PARAGRAPH_SEPARATOR,
-        -> true
-        else -> false
+    private fun String?.cleaned(): String? {
+        val raw = this ?: return null
+        val withoutInvisibleText = buildString(raw.length) {
+            var index = 0
+            while (index < raw.length) {
+                val codePoint = raw.codePointAt(index)
+                index += Character.charCount(codePoint)
+                if (!isUnsafeCodePoint(codePoint)) appendCodePoint(codePoint)
+            }
+        }
+        return withoutInvisibleText
+            // Run after filtering: an invisible character between '<' and '|' must not become a
+            // complete Gemma delimiter when that character is removed.
+            .replace(MODEL_CONTROL_TOKEN_OPEN, " ")
+            .replace(MODEL_CONTROL_TOKEN_CLOSE, " ")
+            .trim()
+            .takeIf(String::isNotEmpty)
     }
+
+    private fun isUnsafeCodePoint(codePoint: Int): Boolean =
+        Character.isISOControl(codePoint) || when (Character.getType(codePoint)) {
+            Character.FORMAT.toInt(),
+            Character.LINE_SEPARATOR.toInt(),
+            Character.PARAGRAPH_SEPARATOR.toInt(),
+            -> true
+            else -> false
+        }
 
     private const val MODEL_CONTROL_TOKEN_OPEN = "<|"
     private const val MODEL_CONTROL_TOKEN_CLOSE = "|>"

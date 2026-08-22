@@ -156,8 +156,8 @@ internal object DiagnosticJsonEncoder {
             DiagnosticConfirmationOutcome.CANCELLED,
         )
         DiagnosticToolStage.EXECUTED -> outcome in setOf(
-            DiagnosticConfirmationOutcome.APPROVED,
-            DiagnosticConfirmationOutcome.NOT_REQUIRED,
+            DiagnosticConfirmationOutcome.EXECUTED_SUCCESS,
+            DiagnosticConfirmationOutcome.EXECUTED_REFUSED,
         )
     }
 

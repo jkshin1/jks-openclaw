@@ -31,8 +31,8 @@ plaintext lives only for the duration of one request.
 
 ## Route estimate
 
-The Directions API takes coordinates, not place names, so each request is two calls: geocode both
-endpoints, then ask for the driving summary.
+The Directions API takes coordinates, not place names, so each estimate is three calls: geocode
+each endpoint separately, then ask for the driving summary.
 
 - `GET /map-geocode/v2/geocode?query=…` → `status`, `addresses[0].x`, `addresses[0].y`,
   `addresses[0].roadAddress`
@@ -59,7 +59,9 @@ filter:
 - a tool result cannot invoke a tool — only the orchestrator can, from a registry entry;
 - the model cannot call anything without the orchestrator, and automatic tool calling is off;
 - every side effect needs the user's confirmation against an immutable snapshot, and the preview
-  is rendered from that snapshot, not from model text.
+  is rendered from that snapshot, not from model text;
+- a later NAVER query would itself require a new confirmation before any user text leaves the
+  device.
 
 `UntrustedText` adds the narrower guarantees: markup is stripped, the handful of entities NAVER
 emits are decoded (`&amp;` last, so `&amp;lt;` cannot become a real `<`), Gemma control-token
@@ -74,8 +76,17 @@ fast with a clear reason instead of timing out. It checks reachability only — 
 its own credential during validation, because a missing key is a settings problem with a different
 remedy.
 
-Both are `READ_ONLY` and therefore unconfirmed. That is truthful — nothing is written — but they do
-send the query, or the origin and destination, to NAVER. The settings copy says so.
+Each capability also has its own persistent DataStore opt-in, defaulting to off. The interlock
+re-reads that value both before showing confirmation and immediately before execution. Turning a
+toggle off while the dialog is open therefore prevents the request. A settings read failure is
+treated as opt-out. The optional default origin is validated before storage and again before use;
+the UI exposes only whether one is stored, not the retained location string.
+
+Both remain `READ_ONLY` because they change no local or remote state. Each also declares
+`UserConfirmation` as its minimum confirmation: the canonical query, or origin and destination,
+is shown before execution because those strings will be disclosed to NAVER. Denial stops before
+the gateway is called. Persistent opt-in never substitutes for this per-request confirmation.
+Credential-presence validation is local and does not make a network request.
 
 ## What is verified, and what is not
 
@@ -83,9 +94,9 @@ Request construction and response parsing are covered by host unit tests against
 shapes, and the transport's refusals are covered by tests that never reach the network. The field
 paths come from the published API references:
 
-- [Directions 5 `driving`](https://api.ncloud-docs.com/docs/ai-naver-mapsdirections-driving)
-- [Geocoding](https://api.ncloud-docs.com/docs/ai-naver-mapsgeocoding-geocode)
-- [검색 > 웹문서](https://github.com/naver/naver-openapi-guide/blob/master/ko/service-apis/search/web/web.md)
+- [Directions 5 `driving`](https://api.ncloud-docs.com/docs/en/ai-naver-mapsdirections-driving)
+- [Geocoding](https://api.ncloud-docs.com/docs/en/ai-naver-mapsgeocoding-geocode)
+- [검색 > 웹문서](https://developers.naver.com/docs/serviceapi/search/web/web.md)
 
 **No live call has been made.** Verifying one needs real credentials, which only the device owner
 should hold. Until then, treat "the recorded shape matches production" as an assumption, not a

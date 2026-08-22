@@ -15,9 +15,9 @@ data class RouteEstimateResult(
 /**
  * Driving time between two places.
  *
- * READ_ONLY and unconfirmed, but it leaves the device: the origin and destination are sent to
- * NAVER. That is the point of the tool, and the settings copy says so, but it is the reason the
- * interlock treats NETWORK as a capability rather than assuming it.
+ * READ_ONLY because it changes no state, but confirmation-gated because it leaves the device: the
+ * origin and destination are sent to NAVER. [ToolCapability.NETWORK] protects the runtime
+ * precondition, while [ConfirmationRequirement.UserConfirmation] protects the disclosure itself.
  *
  * The origin defaults to the home address stored in settings, so "강남역까지 얼마나 걸려?" works
  * without the model inventing a starting point.
@@ -31,6 +31,7 @@ class RouteEstimateTool(
         name = NAME,
         description = "Estimate driving time and distance between two places in Korea",
         risk = ToolRisk.READ_ONLY,
+        minimumConfirmation = ConfirmationRequirement.UserConfirmation,
         requiredCapabilities = setOf(ToolCapability.NETWORK),
     )
 
@@ -56,6 +57,15 @@ class RouteEstimateTool(
         val origin = requestedOrigin
             ?: defaultOrigin()?.trim()?.takeIf(String::isNotEmpty)
             ?: return ValidationResult.Invalid("출발지를 알려주거나 설정에서 기본 출발지를 지정하세요.")
+
+        // Settings are persistent input and may predate the current UI validator. Revalidate the
+        // selected value here so a legacy or tampered default can never reach the network.
+        if (CalendarText.codePointLength(origin) > MAX_PLACE_CHARACTERS) {
+            return ValidationResult.Invalid("출발지는 ${MAX_PLACE_CHARACTERS}자 이하여야 합니다.")
+        }
+        if (!CalendarText.isSafeText(origin)) {
+            return ValidationResult.Invalid("출발지에 허용되지 않는 문자가 있습니다.")
+        }
 
         if (origin == destination) {
             return ValidationResult.Invalid("출발지와 도착지가 같습니다.")

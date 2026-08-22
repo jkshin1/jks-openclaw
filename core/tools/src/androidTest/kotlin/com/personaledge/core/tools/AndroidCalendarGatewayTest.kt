@@ -35,6 +35,7 @@ class AndroidCalendarGatewayTest {
 
     private lateinit var gateway: AndroidCalendarGateway
     private var calendarId: Long = 0
+    private val createdCalendarIds = mutableListOf<Long>()
 
     private fun at(local: String): Long =
         LocalDateTime.parse(local).atZone(zone).toInstant().toEpochMilli()
@@ -55,11 +56,16 @@ class AndroidCalendarGatewayTest {
                 instrumentation.uiAutomation.grantRuntimePermission(context.packageName, permission)
             }
 
+        calendarId = createLocalCalendar(CALENDAR_NAME)
+        gateway = AndroidCalendarGateway(context)
+    }
+
+    private fun createLocalCalendar(displayName: String): Long {
         val values = ContentValues().apply {
             put(CalendarContract.Calendars.ACCOUNT_NAME, ACCOUNT_NAME)
             put(CalendarContract.Calendars.ACCOUNT_TYPE, CalendarContract.ACCOUNT_TYPE_LOCAL)
-            put(CalendarContract.Calendars.NAME, CALENDAR_NAME)
-            put(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME, CALENDAR_NAME)
+            put(CalendarContract.Calendars.NAME, displayName)
+            put(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME, displayName)
             put(CalendarContract.Calendars.CALENDAR_COLOR, 0x2E7D32)
             put(
                 CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
@@ -72,23 +78,22 @@ class AndroidCalendarGatewayTest {
         }
         val uri = context.contentResolver
             .insert(syncAdapterUri(CalendarContract.Calendars.CONTENT_URI), values)
-        calendarId = requireNotNull(uri?.let(ContentUris::parseId))
-
-        gateway = AndroidCalendarGateway(context)
+        return requireNotNull(uri?.let(ContentUris::parseId)).also(createdCalendarIds::add)
     }
 
     @After
     fun removeLocalCalendar() {
-        if (calendarId > 0) {
+        createdCalendarIds.asReversed().forEach { createdId ->
             context.contentResolver.delete(
                 ContentUris.withAppendedId(
                     syncAdapterUri(CalendarContract.Calendars.CONTENT_URI),
-                    calendarId,
+                    createdId,
                 ),
                 null,
                 null,
             )
         }
+        createdCalendarIds.clear()
     }
 
     @Test
@@ -98,6 +103,7 @@ class AndroidCalendarGatewayTest {
         assertNotNull(calendar)
         assertEquals(CALENDAR_NAME, calendar!!.displayName)
         assertEquals(ACCOUNT_NAME, calendar.accountName)
+        assertEquals(CalendarContract.ACCOUNT_TYPE_LOCAL, calendar.accountType)
         assertEquals(zone.id, calendar.timeZoneId)
     }
 
@@ -122,14 +128,39 @@ class AndroidCalendarGatewayTest {
         assertEquals(at("2026-08-22T14:00"), found.startEpochMillis)
         assertEquals(at("2026-08-22T15:00"), found.endEpochMillis)
         assertFalse(found.allDay)
+        assertFalse(found.recurring)
         assertEquals(CALENDAR_NAME, found.calendarLabel)
 
         val inWindow = gateway.queryEvents(
+            calendarId = calendarId,
             startEpochMillis = at("2026-08-22T00:00"),
             endEpochMillis = at("2026-08-23T00:00"),
             limit = 10,
         )
         assertTrue(inWindow.any { event -> event.eventId == eventId })
+    }
+
+    @Test
+    fun anRdateOnlySeriesIsReportedAsRecurring() = runBlocking {
+        val values = ContentValues().apply {
+            put(CalendarContract.Events.CALENDAR_ID, calendarId)
+            put(CalendarContract.Events.TITLE, "명시 날짜 반복 일정")
+            put(CalendarContract.Events.DTSTART, at("2026-08-22T14:00"))
+            // CalendarContract series masters use DURATION instead of DTEND.
+            put(CalendarContract.Events.DURATION, "P3600S")
+            put(CalendarContract.Events.EVENT_TIMEZONE, zone.id)
+            put(
+                CalendarContract.Events.RDATE,
+                "20260822T050000Z,20260829T050000Z",
+            )
+        }
+        val uri = context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
+        val eventId = requireNotNull(uri?.let(ContentUris::parseId))
+
+        val found = gateway.findEvent(eventId)
+
+        assertNotNull(found)
+        assertTrue(found!!.recurring)
     }
 
     @Test
@@ -146,12 +177,51 @@ class AndroidCalendarGatewayTest {
         )
 
         val inWindow = gateway.queryEvents(
+            calendarId = calendarId,
             startEpochMillis = at("2026-08-22T00:00"),
             endEpochMillis = at("2026-08-23T00:00"),
             limit = 10,
         )
 
         assertFalse(inWindow.any { event -> event.eventId == eventId })
+    }
+
+    @Test
+    fun queryScopesCalendarIdBeforeApplyingTheLimit() = runBlocking {
+        val otherCalendarId = createLocalCalendar("Personal Edge Other")
+        repeat(3) { index ->
+            gateway.insertEvent(
+                CalendarEventDraft(
+                    calendarId = otherCalendarId,
+                    title = "다른 캘린더 $index",
+                    startEpochMillis = at("2026-08-22T08:0$index"),
+                    endEpochMillis = at("2026-08-22T08:3$index"),
+                    location = null,
+                    timeZoneId = zone.id,
+                ),
+            )
+        }
+        val targetEventId = requireNotNull(
+            gateway.insertEvent(
+                CalendarEventDraft(
+                    calendarId = calendarId,
+                    title = "선택 캘린더 일정",
+                    startEpochMillis = at("2026-08-22T14:00"),
+                    endEpochMillis = at("2026-08-22T15:00"),
+                    location = null,
+                    timeZoneId = zone.id,
+                ),
+            ),
+        )
+
+        val inWindow = gateway.queryEvents(
+            calendarId = calendarId,
+            startEpochMillis = at("2026-08-22T00:00"),
+            endEpochMillis = at("2026-08-23T00:00"),
+            limit = 1,
+        )
+
+        assertEquals(listOf(targetEventId), inWindow.map(CalendarEvent::eventId))
     }
 
     @Test
@@ -168,8 +238,9 @@ class AndroidCalendarGatewayTest {
         )!!
 
         val updated = gateway.updateEvent(
-            eventId,
-            CalendarEventPatch(
+            expectedCalendarId = calendarId,
+            eventId = eventId,
+            patch = CalendarEventPatch(
                 startEpochMillis = at("2026-08-22T16:00"),
                 endEpochMillis = at("2026-08-22T17:00"),
             ),
@@ -185,7 +256,50 @@ class AndroidCalendarGatewayTest {
     @Test
     fun anUnknownEventIdReadsAsNullAndCannotBeUpdated() = runBlocking {
         assertNull(gateway.findEvent(Long.MAX_VALUE))
-        assertFalse(gateway.updateEvent(Long.MAX_VALUE, CalendarEventPatch(title = "없음")))
+        assertFalse(
+            gateway.updateEvent(
+                expectedCalendarId = calendarId,
+                eventId = Long.MAX_VALUE,
+                patch = CalendarEventPatch(title = "없음"),
+            ),
+        )
+    }
+
+    @Test
+    fun updateRefusesAnEventMovedOutOfTheExpectedCalendar() = runBlocking {
+        val otherCalendarId = createLocalCalendar("Personal Edge Moved")
+        val eventId = requireNotNull(
+            gateway.insertEvent(
+                CalendarEventDraft(
+                    calendarId = calendarId,
+                    title = "이동 전 제목",
+                    startEpochMillis = at("2026-08-22T14:00"),
+                    endEpochMillis = at("2026-08-22T15:00"),
+                    location = null,
+                    timeZoneId = zone.id,
+                ),
+            ),
+        )
+        val moved = context.contentResolver.update(
+            ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
+            ContentValues().apply {
+                put(CalendarContract.Events.CALENDAR_ID, otherCalendarId)
+            },
+            null,
+            null,
+        )
+        assertEquals(1, moved)
+
+        val updated = gateway.updateEvent(
+            expectedCalendarId = calendarId,
+            eventId = eventId,
+            patch = CalendarEventPatch(title = "범위 밖 수정"),
+        )
+
+        assertFalse(updated)
+        val found = requireNotNull(gateway.findEvent(eventId))
+        assertEquals(otherCalendarId, found.calendarId)
+        assertEquals("이동 전 제목", found.title)
     }
 
     @Test

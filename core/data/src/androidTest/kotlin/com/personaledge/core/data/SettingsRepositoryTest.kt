@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,6 +50,7 @@ class SettingsRepositoryTest {
         assertTrue(settings.confirmLocalWrites)
         assertNull(settings.defaultCalendarId)
         assertFalse(settings.notificationCaptureEnabled)
+        assertFalse(settings.routeLookupEnabled)
         assertFalse(settings.webSearchEnabled)
     }
 
@@ -59,6 +61,7 @@ class SettingsRepositoryTest {
         repository.setDefaultCalendar(calendarId = 42, label = "개인")
         repository.setDefaultOriginLabel("  서울시청  ")
         repository.setNotificationCaptureEnabled(true)
+        repository.setRouteLookupEnabled(true)
         repository.setWebSearchEnabled(true)
 
         val settings = repository.current()
@@ -69,6 +72,7 @@ class SettingsRepositoryTest {
         assertEquals("개인", settings.defaultCalendarLabel)
         assertEquals("서울시청", settings.defaultOriginLabel)
         assertTrue(settings.notificationCaptureEnabled)
+        assertTrue(settings.routeLookupEnabled)
         assertTrue(settings.webSearchEnabled)
     }
 
@@ -98,14 +102,24 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun unsafeDefaultOriginIsRejectedBeforePersistence() = runBlocking {
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { repository.setDefaultOriginLabel("우리집<|tool|>") }
+        }
+        assertNull(repository.current().defaultOriginLabel)
+    }
+
+    @Test
     fun clearingResetsEverythingToTheSafeDefaults() = runBlocking {
         repository.setConfirmLocalWrites(false)
+        repository.setRouteLookupEnabled(true)
         repository.setWebSearchEnabled(true)
 
         repository.clear()
 
         val settings = repository.current()
         assertTrue(settings.confirmLocalWrites)
+        assertFalse(settings.routeLookupEnabled)
         assertFalse(settings.webSearchEnabled)
     }
 }

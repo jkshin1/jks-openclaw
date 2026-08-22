@@ -13,6 +13,7 @@ import com.personaledge.core.llm.VerifiedInstalledModel
 import com.personaledge.core.tools.AgentTool
 import com.personaledge.core.tools.PreparationResult
 import com.personaledge.core.tools.ToolOrchestrator
+import com.personaledge.core.tools.ToolExecutionOutcome
 import com.personaledge.core.tools.ToolParams
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -58,6 +59,7 @@ sealed interface AgentEvent {
         override val turnId: TurnId,
         val toolName: String,
         val ordinal: Int,
+        val outcome: ToolExecutionOutcome,
     ) : AgentEvent
 
     data class Completed(
@@ -115,6 +117,25 @@ class ManualToolAgentController(
     }
 
     private val activeTurn = AtomicReference<ActiveTurn?>(null)
+    private val retainedExecutions = AtomicReference<RetainedExecutions?>(null)
+
+    /**
+     * Content-free receipts retained even when caller cancellation prevents Flow delivery.
+     *
+     * Only the most recently started accepted turn is retained, bounded by [AgentLoopLimits].
+     * This is in-process recovery; the persistent action ledger remains the process-death replay
+     * authority and intentionally stores no model response or user content.
+     *
+     * Caller contract: in the turn collector's `finally`, read this snapshot before accepting the
+     * next turn, merge it with delivered [AgentEvent.ToolExecuted] values by `ordinal`, and surface
+     * any missing outcome without invoking [runTurn] again. An empty snapshot is not proof that a
+     * side effect did not happen after process death; the durable ledger remains fail-closed.
+     */
+    fun retainedToolExecutions(turnId: TurnId): List<AgentEvent.ToolExecuted> =
+        retainedExecutions.get()
+            ?.takeIf { retained -> retained.turnId == turnId }
+            ?.events
+            .orEmpty()
 
     fun runTurn(
         turnId: TurnId,
@@ -133,6 +154,7 @@ class ManualToolAgentController(
             emit(AgentEvent.Failure(turnId, AgentFailureCode.BUSY))
             return@flow
         }
+        retainedExecutions.set(RetainedExecutions(turnId = turnId, events = emptyList()))
 
         try {
             withTimeout(turnLimits.deadlineMillis) {
@@ -319,13 +341,6 @@ class ManualToolAgentController(
                     responses = listOf(trustedResponse),
                 )
             }
-            emit(
-                AgentEvent.ToolExecuted(
-                    turnId = active.turnId,
-                    toolName = resolved.definition.name,
-                    ordinal = toolCallCount,
-                ),
-            )
         }
     }
 
@@ -391,7 +406,7 @@ class ManualToolAgentController(
      * encode a trusted result. Keeping it single-instance means a new tool cannot accidentally
      * skip the orchestrator, and the reinjected payload is always app-authored.
      */
-    private suspend fun <P : ToolParams, R : Any> runTool(
+    private suspend fun <P : ToolParams, R : Any> FlowCollector<AgentEvent>.runTool(
         active: ActiveTurn,
         call: LlmToolCall,
         tool: AgentTool<P, R>,
@@ -429,21 +444,44 @@ class ManualToolAgentController(
 
         currentCoroutineContext().ensureActive()
         ensureBeforeDeadline(deadline)
-        val result: R = try {
-            orchestrator.execute(action)
+        val retainedReceipt = AtomicReference<AgentEvent.ToolExecuted?>(null)
+        val execution = try {
+            orchestrator.executeWithReceipt(action) { trustedExecution ->
+                val receipt = AgentEvent.ToolExecuted(
+                    turnId = active.turnId,
+                    toolName = toolName,
+                    ordinal = requestOrdinal,
+                    outcome = trustedExecution.outcome,
+                )
+                retainExecution(receipt)
+                retainedReceipt.set(receipt)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             abort(AgentFailureCode.TOOL_NOT_EXECUTED)
         }
-        currentCoroutineContext().ensureActive()
-        ensureBeforeDeadline(deadline)
+
+        // The callback retained this before leaving the claimed-execution boundary. If the tool
+        // crossed the deadline, the known result cannot be erased and this turn never retries it.
+        val receipt = checkNotNull(retainedReceipt.get())
+        emit(receipt)
 
         return TrustedToolResponse(
             callId = call.id,
             name = toolName,
-            payloadJson = encode(result),
+            payloadJson = encode(execution.result),
         )
+    }
+
+    private fun retainExecution(receipt: AgentEvent.ToolExecuted) {
+        while (true) {
+            val current = retainedExecutions.get()
+            if (current == null || current.turnId != receipt.turnId) return
+            if (current.events.any { event -> event.ordinal == receipt.ordinal }) return
+            val updated = current.copy(events = current.events + receipt)
+            if (retainedExecutions.compareAndSet(current, updated)) return
+        }
     }
 
     private fun remainingMillis(deadline: Long): Long {
@@ -511,6 +549,11 @@ class ManualToolAgentController(
         val job: Job,
         val state: AtomicInteger = AtomicInteger(STATE_RUNNING),
         val runtimeCancelIssued: AtomicBoolean = AtomicBoolean(false),
+    )
+
+    private data class RetainedExecutions(
+        val turnId: TurnId,
+        val events: List<AgentEvent.ToolExecuted>,
     )
 
     private class TurnAbort(

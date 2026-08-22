@@ -40,6 +40,7 @@ data class AgentSettings(
     val defaultOriginLabel: String? = null,
     val notificationCaptureEnabled: Boolean = false,
     val notificationRetentionDays: Int = DEFAULT_NOTIFICATION_RETENTION_DAYS,
+    val routeLookupEnabled: Boolean = false,
     val webSearchEnabled: Boolean = false,
     val recentMessageWindow: Int = ConversationRepository.DEFAULT_RECENT_MESSAGES,
 ) {
@@ -87,7 +88,10 @@ class SettingsRepository(
 
     suspend fun setDefaultOriginLabel(label: String?) {
         dataStore.edit { preferences ->
-            val trimmed = label?.trim().orEmpty().take(MAX_LABEL_CHARACTERS)
+            val trimmed = label?.trim().orEmpty()
+            require(trimmed.isEmpty() || isSafeDefaultOrigin(trimmed)) {
+                "Default origin contains unsupported text."
+            }
             if (trimmed.isEmpty()) {
                 preferences.remove(KEY_DEFAULT_ORIGIN_LABEL)
             } else {
@@ -112,6 +116,10 @@ class SettingsRepository(
         dataStore.edit { preferences -> preferences[KEY_WEB_SEARCH] = enabled }
     }
 
+    suspend fun setRouteLookupEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[KEY_ROUTE_LOOKUP] = enabled }
+    }
+
     suspend fun setRecentMessageWindow(messages: Int) {
         val bounded = messages.coerceIn(1, ConversationRepository.MAX_MESSAGES_PER_READ)
         dataStore.edit { preferences -> preferences[KEY_RECENT_MESSAGE_WINDOW] = bounded }
@@ -129,7 +137,9 @@ class SettingsRepository(
         confirmLocalWrites = preferences[KEY_CONFIRM_LOCAL_WRITES] ?: true,
         defaultCalendarId = preferences[KEY_DEFAULT_CALENDAR_ID],
         defaultCalendarLabel = preferences[KEY_DEFAULT_CALENDAR_LABEL]?.takeIf(String::isNotBlank),
-        defaultOriginLabel = preferences[KEY_DEFAULT_ORIGIN_LABEL]?.takeIf(String::isNotBlank),
+        defaultOriginLabel = preferences[KEY_DEFAULT_ORIGIN_LABEL]
+            ?.trim()
+            ?.takeIf(::isSafeDefaultOrigin),
         notificationCaptureEnabled = preferences[KEY_NOTIFICATION_CAPTURE] ?: false,
         notificationRetentionDays = (
             preferences[KEY_NOTIFICATION_RETENTION_DAYS]
@@ -138,6 +148,7 @@ class SettingsRepository(
             AgentSettings.MIN_NOTIFICATION_RETENTION_DAYS,
             AgentSettings.MAX_NOTIFICATION_RETENTION_DAYS,
         ),
+        routeLookupEnabled = preferences[KEY_ROUTE_LOOKUP] ?: false,
         webSearchEnabled = preferences[KEY_WEB_SEARCH] ?: false,
         recentMessageWindow = (
             preferences[KEY_RECENT_MESSAGE_WINDOW]
@@ -148,6 +159,7 @@ class SettingsRepository(
     companion object {
         const val STORE_FILE_NAME = "agent-settings.preferences_pb"
         private const val MAX_LABEL_CHARACTERS = 120
+        private const val MAX_DEFAULT_ORIGIN_CODE_POINTS = 80
 
         private val KEY_PREFERRED_BACKEND = stringPreferencesKey("preferred_backend")
         private val KEY_CONFIRM_LOCAL_WRITES = booleanPreferencesKey("confirm_local_writes")
@@ -156,8 +168,22 @@ class SettingsRepository(
         private val KEY_DEFAULT_ORIGIN_LABEL = stringPreferencesKey("default_origin_label")
         private val KEY_NOTIFICATION_CAPTURE = booleanPreferencesKey("notification_capture_enabled")
         private val KEY_NOTIFICATION_RETENTION_DAYS = intPreferencesKey("notification_retention_days")
+        private val KEY_ROUTE_LOOKUP = booleanPreferencesKey("route_lookup_enabled")
         private val KEY_WEB_SEARCH = booleanPreferencesKey("web_search_enabled")
         private val KEY_RECENT_MESSAGE_WINDOW = intPreferencesKey("recent_message_window")
+
+        private fun isSafeDefaultOrigin(value: String): Boolean =
+            value.codePointCount(0, value.length) in 1..MAX_DEFAULT_ORIGIN_CODE_POINTS &&
+                !value.contains("<|") && !value.contains("|>") &&
+                value.codePoints().noneMatch { codePoint ->
+                    Character.isISOControl(codePoint) || when (Character.getType(codePoint)) {
+                        Character.FORMAT.toInt(),
+                        Character.LINE_SEPARATOR.toInt(),
+                        Character.PARAGRAPH_SEPARATOR.toInt(),
+                        -> true
+                        else -> false
+                    }
+                }
 
         /** The settings file also stays outside the backup set; it names a calendar and a home area. */
         fun storeFile(context: Context): File =

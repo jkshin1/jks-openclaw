@@ -58,9 +58,9 @@ sealed interface CredentialStoreResult {
 /**
  * The settings-screen view of the Keystore vault.
  *
- * Values move one way: in. The vault encrypts under a hardware-backed AES key that cannot leave
- * the device, so the ciphertext on disk is useless anywhere else, and losing the key — a reinstall,
- * a factory reset, a new phone — means re-entering the credential rather than recovering it.
+ * Values move one way: in. The vault encrypts under an app-scoped Android Keystore key whose key
+ * material is not exposed to this app, so losing the key — a reinstall, a factory reset, a new
+ * phone — means re-entering the credential rather than recovering it.
  */
 class CredentialSettings(
     private val vault: SecretVault,

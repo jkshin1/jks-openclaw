@@ -9,6 +9,9 @@ import java.io.File
 internal interface SecureDiagnosticsFileSystem {
     fun ensureLogDirectory(): File
 
+    /** Returns the direct children of the already-validated diagnostics log directory. */
+    fun listLogFiles(): Set<File>
+
     /** Returns null when absent and throws when the existing node is not a private single-link file. */
     fun secureFileSize(file: File): Long?
 
@@ -39,8 +42,13 @@ internal data class DiagnosticsPaths(
     val checkpoint = File(trustedRoot, CHECKPOINT_NAME)
     val checkpointTemporary = File(trustedRoot, CHECKPOINT_TEMPORARY_NAME)
 
+    val allowedLogFiles: Set<File> =
+        (listOf(activeLog) + archiveLogs)
+            .map(File::getAbsoluteFile)
+            .toSet()
+
     val allowedFiles: Set<File> =
-        (listOf(activeLog, checkpoint, checkpointTemporary) + archiveLogs)
+        (allowedLogFiles + listOf(checkpoint, checkpointTemporary))
             .map(File::getAbsoluteFile)
             .toSet()
 
@@ -104,6 +112,20 @@ internal class AndroidSecureDiagnosticsFileSystem(
             "Diagnostics directory escaped its trusted root"
         }
         return directory
+    }
+
+    override fun listLogFiles(): Set<File> {
+        val directory = ensureLogDirectory()
+        val children = checkNotNull(directory.listFiles()) {
+            "Unable to inspect diagnostics directory"
+        }
+        return children.mapTo(linkedSetOf()) { child ->
+            child.absoluteFile.also { absolute ->
+                check(absolute.parentFile == directory) {
+                    "Diagnostics child escaped its trusted directory"
+                }
+            }
+        }
     }
 
     override fun secureFileSize(file: File): Long? {

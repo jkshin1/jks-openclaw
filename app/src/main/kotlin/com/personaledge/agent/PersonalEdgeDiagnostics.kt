@@ -11,7 +11,15 @@ import com.personaledge.core.diagnostics.DiagnosticToolRisk
 import com.personaledge.core.diagnostics.DiagnosticToolStage
 import com.personaledge.core.llm.LlmFailureCode
 import com.personaledge.core.llm.ModelStoreErrorCode
+import com.personaledge.core.tools.AlarmNextTool
+import com.personaledge.core.tools.AlarmSetTool
+import com.personaledge.core.tools.CalendarCreateEventTool
+import com.personaledge.core.tools.CalendarQueryTool
+import com.personaledge.core.tools.CalendarUpdateEventTool
 import com.personaledge.core.tools.FakeArrivalNoticeTool
+import com.personaledge.core.tools.NotificationSearchTool
+import com.personaledge.core.tools.RouteEstimateTool
+import com.personaledge.core.tools.WebSearchTool
 
 /** Diagnostics are best-effort and must never alter the app's control flow. */
 internal fun DiagnosticSink.recordSafely(event: DiagnosticEvent): Boolean =
@@ -25,22 +33,43 @@ internal fun Throwable.toDiagnosticFailureOrNull(): DiagnosticFailure? =
         null
     }
 
+private data class KnownDiagnosticTool(
+    val name: DiagnosticToolName,
+    val risk: DiagnosticToolRisk,
+)
+
 /**
- * Records only the one closed-registry tool in this vertical slice. Model-originated names,
- * arguments, previews, action IDs and confirmation digests are deliberately not retained.
+ * Closed allowlist matching the demonstration registry and the eight tools shipped on-device.
+ * Invalid constants fail closed during construction, and model-originated names can never add an
+ * entry. Arguments, previews, action IDs and confirmation digests are deliberately not retained.
  */
+private val knownDiagnosticTools: Map<String, KnownDiagnosticTool> = listOf(
+    FakeArrivalNoticeTool.NAME to DiagnosticToolRisk.READ_ONLY,
+    CalendarQueryTool.NAME to DiagnosticToolRisk.READ_ONLY,
+    CalendarCreateEventTool.NAME to DiagnosticToolRisk.DATA_WRITE,
+    CalendarUpdateEventTool.NAME to DiagnosticToolRisk.DATA_WRITE,
+    AlarmSetTool.NAME to DiagnosticToolRisk.DATA_WRITE,
+    AlarmNextTool.NAME to DiagnosticToolRisk.READ_ONLY,
+    NotificationSearchTool.NAME to DiagnosticToolRisk.READ_ONLY,
+    RouteEstimateTool.NAME to DiagnosticToolRisk.READ_ONLY,
+    WebSearchTool.NAME to DiagnosticToolRisk.READ_ONLY,
+).mapNotNull { (name, risk) ->
+    DiagnosticToolName.parse(name)?.let { safeName ->
+        name to KnownDiagnosticTool(name = safeName, risk = risk)
+    }
+}.toMap()
+
 internal fun DiagnosticSink.recordKnownToolPhase(
     toolName: String,
     stage: DiagnosticToolStage,
     outcome: DiagnosticConfirmationOutcome,
 ): Boolean {
-    if (toolName != FakeArrivalNoticeTool.NAME) return false
-    val safeName = DiagnosticToolName.parse(FakeArrivalNoticeTool.NAME) ?: return false
+    val tool = knownDiagnosticTools[toolName] ?: return false
     return recordSafely(
         DiagnosticEvent.ToolPhase(
-            name = safeName,
+            name = tool.name,
             stage = stage,
-            risk = DiagnosticToolRisk.READ_ONLY,
+            risk = tool.risk,
             confirmationOutcome = outcome,
         ),
     )

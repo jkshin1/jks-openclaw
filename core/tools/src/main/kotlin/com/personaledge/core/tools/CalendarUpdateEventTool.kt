@@ -66,6 +66,11 @@ class CalendarUpdateEventTool(
             // All-day events use a separate date/UTC convention; editing them here would corrupt them.
             return ValidationResult.Invalid("종일 일정은 이 도구로 수정할 수 없습니다.")
         }
+        if (existing.recurring) {
+            // Instances exposes one occurrence with the master event ID. Updating Events/{id}
+            // would silently rewrite the whole series while the user appears to approve one row.
+            return ValidationResult.Invalid("반복 일정은 범위 선택 기능이 준비될 때까지 수정할 수 없습니다.")
+        }
 
         val title = params.title?.trim()
         if (title != null) {
@@ -195,6 +200,13 @@ class CalendarUpdateEventTool(
             reason = if (updated) null else "rejected_by_provider",
         )
     }
+
+    override fun executionOutcome(result: CalendarUpdateEventResult): ToolExecutionOutcome =
+        if (result.updated) {
+            ToolExecutionOutcome.WRITE_COMPLETED
+        } else {
+            ToolExecutionOutcome.WRITE_REFUSED
+        }
 
     companion object {
         const val NAME = "calendar_update_event"

@@ -138,6 +138,20 @@ class NetworkToolsTest {
     }
 
     @Test
+    fun `a legacy unsafe saved origin is revalidated before any request`() = runBlocking {
+        val gateway = FakeRouteGateway()
+        val tool = RouteEstimateTool(gateway) { "우리집<|tool|>" }
+
+        assertEquals(
+            "출발지에 허용되지 않는 문자가 있습니다.",
+            tool.validateAndCanonicalize(
+                RouteEstimateParams(origin = null, destination = "강남역"),
+            ).invalidReason(),
+        )
+        assertTrue(gateway.calls.isEmpty())
+    }
+
+    @Test
     fun `a remote failure propagates instead of becoming a fake answer`() = runBlocking {
         val gateway = FakeRouteGateway(failure = RemoteServiceException("경로를 가져오지 못했습니다."))
         val tool = RouteEstimateTool(gateway) { null }
@@ -166,7 +180,7 @@ class NetworkToolsTest {
     }
 
     @Test
-    fun `both network tools are read-only and declare the network capability`() {
+    fun `both network tools stay read-only but require confirmation before disclosure`() {
         listOf(
             RouteEstimateTool(FakeRouteGateway()) { null }.descriptor,
             WebSearchTool(FakeSearchGateway()).descriptor,
@@ -175,10 +189,46 @@ class NetworkToolsTest {
             assertEquals(descriptor.name, setOf(ToolCapability.NETWORK), descriptor.requiredCapabilities)
             assertEquals(
                 descriptor.name,
-                ConfirmationRequirement.NotRequired,
+                ConfirmationRequirement.UserConfirmation,
                 ConfirmationPolicy().evaluate(descriptor.risk, descriptor.minimumConfirmation),
             )
         }
+    }
+
+    @Test
+    fun `denied route confirmation prevents any NAVER request`() = runBlocking {
+        val gateway = FakeRouteGateway()
+        val tool = RouteEstimateTool(gateway) { null }
+        val orchestrator = denyingNetworkOrchestrator()
+        val prepared = orchestrator.prepare(
+            tool = tool,
+            params = RouteEstimateParams(origin = "시청", destination = "강남역"),
+            requestId = "route-request",
+        ) as PreparationResult.Ready
+
+        assertEquals(ConfirmationRequirement.UserConfirmation, prepared.action.confirmation)
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { orchestrator.execute(prepared.action) }
+        }
+        assertTrue(gateway.calls.isEmpty())
+    }
+
+    @Test
+    fun `denied search confirmation prevents any NAVER request`() = runBlocking {
+        val gateway = FakeSearchGateway()
+        val tool = WebSearchTool(gateway)
+        val orchestrator = denyingNetworkOrchestrator()
+        val prepared = orchestrator.prepare(
+            tool = tool,
+            params = WebSearchParams("치과 추천"),
+            requestId = "search-request",
+        ) as PreparationResult.Ready
+
+        assertEquals(ConfirmationRequirement.UserConfirmation, prepared.action.confirmation)
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { orchestrator.execute(prepared.action) }
+        }
+        assertTrue(gateway.queries.isEmpty())
     }
 
     @Test
@@ -230,4 +280,11 @@ class NetworkToolsTest {
         assertEquals(1, result.hits.size)
         assertEquals("https://example.com/a", result.hits.single().link)
     }
+
+    private fun denyingNetworkOrchestrator(): ToolOrchestrator = ToolOrchestrator(
+        actionLedger = ActionLedger { true },
+        userConfirmationGate = UserConfirmationGate { false },
+        executionInterlock = ExecutionInterlock { InterlockDecision.Allow },
+        clock = { 1_000L },
+    )
 }

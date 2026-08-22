@@ -14,6 +14,11 @@ class ExecutionInterlockTest {
         val claims = mutableSetOf<String>()
 
         override suspend fun claim(idempotencyKey: String): Boolean = claims.add(idempotencyKey)
+
+        override suspend fun recordState(
+            idempotencyKey: String,
+            state: ActionExecutionState,
+        ): Boolean = idempotencyKey in claims
     }
 
     private class CalendarWriteTool : AgentTool<EventParams, String> {

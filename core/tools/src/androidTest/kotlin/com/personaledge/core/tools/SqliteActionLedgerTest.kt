@@ -1,5 +1,6 @@
 package com.personaledge.core.tools
 
+import android.database.sqlite.SQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -65,8 +66,82 @@ class SqliteActionLedgerTest {
         val ledger = openLedger()
 
         assertTrue(ledger.claim("key-single-use"))
+        assertEquals(ActionExecutionState.CLAIMED, ledger.stateOf("key-single-use"))
         assertFalse(ledger.claim("key-single-use"))
         assertEquals(1L, ledger.claimCount())
+    }
+
+    @Test
+    fun terminalStateSurvivesReopeningAndCannotBeRewritten() = runBlocking {
+        val ledger = openLedger()
+        assertTrue(ledger.claim("key-terminal"))
+        assertTrue(ledger.recordState("key-terminal", ActionExecutionState.REFUSED))
+        assertTrue(ledger.recordState("key-terminal", ActionExecutionState.REFUSED))
+        assertFalse(ledger.recordState("key-terminal", ActionExecutionState.COMPLETED))
+        openLedgers.removeLast().close()
+
+        val reopened = openLedger()
+        assertEquals(ActionExecutionState.REFUSED, reopened.stateOf("key-terminal"))
+        assertFalse(reopened.claim("key-terminal"))
+    }
+
+    @Test
+    fun unresolvedCheckCountsOnlyClaimedAndUnknownStatesAcrossReopen() = runBlocking {
+        val ledger = openLedger()
+        assertEquals(UnresolvedActionCheck.Available(0), ledger.unresolvedActionCheck())
+
+        assertTrue(ledger.claim("key-claimed"))
+        assertTrue(ledger.claim("key-unknown"))
+        assertTrue(
+            ledger.recordState("key-unknown", ActionExecutionState.UNKNOWN_AFTER_CLAIM),
+        )
+        assertTrue(ledger.claim("key-completed"))
+        assertTrue(ledger.recordState("key-completed", ActionExecutionState.COMPLETED))
+        assertTrue(ledger.claim("key-refused"))
+        assertTrue(ledger.recordState("key-refused", ActionExecutionState.REFUSED))
+        assertEquals(UnresolvedActionCheck.Available(2), ledger.unresolvedActionCheck())
+
+        openLedgers.removeLast().close()
+        assertEquals(
+            UnresolvedActionCheck.Available(2),
+            openLedger().unresolvedActionCheck(),
+        )
+    }
+
+    @Test
+    fun unreadableDatabaseFailsClosedAsUnavailable() = runBlocking {
+        val ledger = openLedger()
+        assertTrue(databaseFile.mkdir())
+
+        assertEquals(UnresolvedActionCheck.Unavailable, ledger.unresolvedActionCheck())
+    }
+
+    @Test
+    fun versionOneClaimsMigrateWithoutReopeningReplay() = runBlocking {
+        SQLiteDatabase.openOrCreateDatabase(databaseFile, null).use { database ->
+            database.execSQL(
+                """
+                CREATE TABLE ${SqliteActionLedger.TABLE_NAME} (
+                    ${SqliteActionLedger.COLUMN_IDEMPOTENCY_KEY} TEXT NOT NULL PRIMARY KEY,
+                    ${SqliteActionLedger.COLUMN_CLAIMED_AT} INTEGER NOT NULL
+                ) WITHOUT ROWID
+                """.trimIndent(),
+            )
+            database.execSQL(
+                "INSERT INTO ${SqliteActionLedger.TABLE_NAME} VALUES (?, ?)",
+                arrayOf<Any>("legacy-key", now),
+            )
+            database.version = 1
+        }
+
+        val migrated = openLedger()
+
+        assertEquals(
+            ActionExecutionState.UNKNOWN_AFTER_CLAIM,
+            migrated.stateOf("legacy-key"),
+        )
+        assertFalse(migrated.claim("legacy-key"))
+        assertEquals(1L, migrated.claimCount())
     }
 
     @Test

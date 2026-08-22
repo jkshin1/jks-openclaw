@@ -15,6 +15,7 @@ import com.personaledge.core.tools.ActionLedger
 import com.personaledge.core.tools.FakeArrivalNoticeTool
 import com.personaledge.core.tools.InProcessActionLedger
 import com.personaledge.core.tools.ToolOrchestrator
+import com.personaledge.core.tools.ToolExecutionOutcome
 import com.personaledge.core.tools.UserConfirmationGate
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicInteger
@@ -69,7 +70,10 @@ class ManualToolAgentControllerTest {
                 """{"simulated":true}""",
                 reinjection.responses.single().payloadJson,
             )
-            assertTrue(events.any { it is AgentEvent.ToolExecuted })
+            assertEquals(
+                ToolExecutionOutcome.READ_COMPLETED,
+                events.filterIsInstance<AgentEvent.ToolExecuted>().single().outcome,
+            )
             assertEquals(AgentEvent.Completed(turnId), events.last())
             assertEquals(0, fixture.runtime.cancelCount.get())
         }
@@ -420,6 +424,75 @@ class ManualToolAgentControllerTest {
         assertFailure(events, AgentFailureCode.DEADLINE_EXCEEDED)
         assertEquals(1, fixture.runtime.cancelCount.get())
     }
+
+    @Test
+    fun `deadline crossing after execution emits the receipt before failing the turn`() =
+        runBlocking {
+            val clock = AtomicLong(0L)
+            val turnId = TurnId("turn-post-execute-deadline")
+            val ledger = object : ActionLedger {
+                override suspend fun claim(idempotencyKey: String): Boolean = true
+
+                override suspend fun recordState(
+                    idempotencyKey: String,
+                    state: com.personaledge.core.tools.ActionExecutionState,
+                ): Boolean {
+                    clock.set(AgentLoopLimits().deadlineMillis + 1)
+                    return true
+                }
+            }
+            val fixture = fixture(ledger = ledger, monotonicClock = clock::get)
+            fixture.runtime.enqueueUser(toolStep(turnId, call("call-1")))
+
+            val events = fixture.controller.runTurn(turnId, "do it").toList()
+
+            val receipt = events.filterIsInstance<AgentEvent.ToolExecuted>().single()
+            assertEquals(ToolExecutionOutcome.READ_COMPLETED, receipt.outcome)
+            assertFailure(events, AgentFailureCode.DEADLINE_EXCEEDED)
+            assertEquals(listOf(receipt), fixture.controller.retainedToolExecutions(turnId))
+            assertTrue(fixture.runtime.responseInvocations.isEmpty())
+        }
+
+    @Test
+    fun `read-only execution remains cancellable while recording its outcome`() =
+        runBlocking {
+            val terminalRecordingStarted = CompletableDeferred<Unit>()
+            val releaseTerminalRecording = CompletableDeferred<Unit>()
+            val claims = AtomicInteger(0)
+            val ledger = object : ActionLedger {
+                override suspend fun claim(idempotencyKey: String): Boolean {
+                    claims.incrementAndGet()
+                    return true
+                }
+
+                override suspend fun recordState(
+                    idempotencyKey: String,
+                    state: com.personaledge.core.tools.ActionExecutionState,
+                ): Boolean {
+                    terminalRecordingStarted.complete(Unit)
+                    releaseTerminalRecording.await()
+                    return true
+                }
+            }
+            val turnId = TurnId("turn-cancel-after-execute")
+            val fixture = fixture(ledger = ledger)
+            fixture.runtime.enqueueUser(toolStep(turnId, call("call-1")))
+            val observed = mutableListOf<AgentEvent>()
+            val collection = launch {
+                fixture.controller.runTurn(turnId, "do it").collect(observed::add)
+            }
+
+            terminalRecordingStarted.await()
+            assertTrue(fixture.controller.cancel(turnId))
+            releaseTerminalRecording.complete(Unit)
+            collection.join()
+
+            assertTrue(collection.isCancelled)
+            assertEquals(1, claims.get())
+            assertTrue(fixture.runtime.responseInvocations.isEmpty())
+            assertTrue(fixture.controller.retainedToolExecutions(turnId).isEmpty())
+            assertTrue(observed.none { it is AgentEvent.Completed })
+        }
 
     @Test
     fun `model failure is typed and cannot trigger tool work`() = runBlocking {

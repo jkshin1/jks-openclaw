@@ -89,7 +89,20 @@ class CalendarCreateEventTool(
                     put(FIELD_START, start.toString())
                     put(FIELD_END, end.toString())
                     put(FIELD_CALENDAR_ID, calendar.id.toString())
-                    put(FIELD_CALENDAR_LABEL, calendar.displayName)
+                    put(
+                        FIELD_CALENDAR_LABEL,
+                        CalendarText.sanitizeForModel(
+                            calendar.displayName,
+                            CalendarText.MAX_TITLE_CHARACTERS,
+                        ).ifEmpty { "(이름 없음)" },
+                    )
+                    put(
+                        FIELD_CALENDAR_ACCOUNT_TYPE,
+                        CalendarText.sanitizeForModel(
+                            calendar.accountType,
+                            CalendarText.MAX_TITLE_CHARACTERS,
+                        ).ifEmpty { "(유형 없음)" },
+                    )
                     put(FIELD_TIME_ZONE, calendar.timeZoneId ?: zone.id)
                     if (location.isNotEmpty()) put(FIELD_LOCATION, location)
                 },
@@ -110,7 +123,9 @@ class CalendarCreateEventTool(
                 append("\"${fields.requiredString(FIELD_TITLE)}\"\n")
                 append("$start ~ $end\n")
                 if (location != null) append("장소: $location\n")
-                append("캘린더: ${fields.requiredString(FIELD_CALENDAR_LABEL)}")
+                append("캘린더: ${fields.requiredString(FIELD_CALENDAR_LABEL)} ")
+                append("(ID ${fields.requiredLong(FIELD_CALENDAR_ID)}, ")
+                append("유형 ${fields.requiredString(FIELD_CALENDAR_ACCOUNT_TYPE)})")
             },
         )
     }
@@ -139,6 +154,13 @@ class CalendarCreateEventTool(
         return CalendarCreateEventResult(created = eventId != null, eventId = eventId)
     }
 
+    override fun executionOutcome(result: CalendarCreateEventResult): ToolExecutionOutcome =
+        if (result.created) {
+            ToolExecutionOutcome.WRITE_COMPLETED
+        } else {
+            ToolExecutionOutcome.WRITE_REFUSED
+        }
+
     private suspend fun writableCalendarOrNull(calendarId: Long): CalendarAccount? = try {
         gateway.writableCalendars().firstOrNull { calendar -> calendar.id == calendarId }
     } catch (_: CalendarAccessException) {
@@ -153,6 +175,7 @@ class CalendarCreateEventTool(
         internal const val FIELD_LOCATION = "location"
         internal const val FIELD_CALENDAR_ID = "calendar_id"
         internal const val FIELD_CALENDAR_LABEL = "calendar_label"
+        internal const val FIELD_CALENDAR_ACCOUNT_TYPE = "calendar_account_type"
         internal const val FIELD_TIME_ZONE = "time_zone"
     }
 }

@@ -37,7 +37,15 @@ class StoredNotificationGateway(
     suspend fun captureEnabled(): Boolean =
         runCatching { settings.settings.first().notificationCaptureEnabled }.getOrDefault(false)
 
-    suspend fun storedCount(): Long = runCatching { notifications.count() }.getOrDefault(0)
+    /**
+     * This is read on every settings-screen resume, so it also clears rows that expired while the
+     * listener was idle. A settings failure returns no count rather than guessing a wider window
+     * or exposing a stale count; maintenance resumes when the settings store recovers.
+     */
+    suspend fun storedCount(): Long = runCatching {
+        notifications.prune(settings.current().notificationRetentionDays)
+        notifications.count()
+    }.getOrDefault(0)
 
     suspend fun deleteAll(): Int = runCatching { notifications.deleteAll() }.getOrDefault(0)
 
@@ -45,14 +53,17 @@ class StoredNotificationGateway(
         query: String?,
         postedAtOrAfter: Long,
         limit: Int,
-    ): List<CapturedMessageSummary> = notifications
-        .search(
+    ): List<CapturedMessageSummary> {
+        val current = settings.current()
+        return notifications.search(
             packageNames = allowedPackages.toList(),
             query = query,
             postedAtOrAfter = postedAtOrAfter,
+            retentionDays = current.notificationRetentionDays,
             limit = limit,
         )
-        .map { message -> message.toSummary(zoneProvider()) }
+            .map { message -> message.toSummary(zoneProvider()) }
+    }
 }
 
 private val RECEIVED_AT_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
