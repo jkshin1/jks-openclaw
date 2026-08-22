@@ -96,6 +96,9 @@ That is a design choice, not an omission. It also means a new phone starts empty
 2. `./scripts/download-model.sh && ./scripts/verify-model.sh`
 3. `./gradlew :app:assembleRelease && ./scripts/verify-release-signing.sh`
 4. `adb -s DEVICE_SERIAL install -r app/build/outputs/apk/release/app-release.apk`
-5. In the app: import the model, grant calendar permission, pin the calendar.
-6. Re-enter any third-party credentials — the previous ciphertext cannot be decrypted on new
-   hardware.
+5. In the app: import the model, grant calendar permission and pin the calendar, and — if you use
+   it — grant notification access and turn capture on. Both grants are per-install.
+6. Re-enter the NAVER keys — the previous ciphertext cannot be decrypted on new hardware.
+
+Captured notifications and conversation history do not come back, by design. A new phone starts
+with an empty transcript and an empty action ledger.
