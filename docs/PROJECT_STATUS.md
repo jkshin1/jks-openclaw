@@ -1,6 +1,6 @@
 # Project Status
 
-Last reviewed: 2026-08-21 at commit `bd65501` plus the alarm-tool change.
+Last reviewed: 2026-08-22 at commit `730c9bb`.
 
 This document is the current scope and evidence ledger. Treat these states separately:
 
@@ -16,8 +16,8 @@ Do not promote a feature merely because a lower state passed.
 |---|---|---|
 | Gemma/LiteRT runtime | Physical accepted for the 4K GPU slice | Verified model import, streaming, cancellation, recovery, and natural `SEVERE` continuation passed on the Fold8. Natural `CRITICAL`, battery, fold/background, and 8K/16K remain unverified. Exact requested output length also failed in the sustained probe. |
 | Tool safety | Emulator verified | Manual Tool calling, typed validation, confirmation, execution interlock, and durable SQLite at-most-once claims are wired. This is not exactly-once execution. |
-| Local data foundation | Emulator verified | Room conversation/message/notification schema, DataStore settings, and Keystore AES-GCM vault passed 20 instrumentation tests. Notification capture and provider credentials are still not connected to any UI or runtime path. |
-| Chat history | Emulator verified | Turns persist to Room and restore on launch; the history dialog switches, deletes one thread, and deletes all. Verified on the AVD by seeding the real database and driving the UI. **Bounded summaries are not implemented**: `replaceSummary` and `loadContext` exist and are tested, but nothing calls them, and no stored context is fed back into a turn. Turns remain stateless. |
+| Local data foundation | Emulator verified | Room conversation/message/notification schema, DataStore settings, and Keystore AES-GCM vault. Every store is now wired to a UI and a runtime path: chat history, notification capture, settings, and the NAVER keys. |
+| Chat history | Emulator verified | Turns persist to Room and restore on launch; the history dialog switches, deletes one thread, and deletes all. Verified on the AVD by seeding the real database and driving the UI. Summarization is a separate row below. |
 | CalendarContract tools | Emulator verified | Query, create, and update are scoped to one pinned writable calendar; confirmation, replay protection, change digest, permissions, and setup UI are implemented. Tests used a local AVD calendar. |
 | NAVER Calendar | **Not physically accepted** | The app has no direct NAVER login/API/CalDAV implementation. No real NAVER account, remote sync, Fold8, or Gemma calendar E2E receipt exists. |
 | Standard alarm tools | Emulator verified | `alarm_set` creates one-shot and repeating alarms through `AlarmClock.ACTION_SET_ALARM`; `alarm_next` reads `getNextAlarmClock()`. Both confirmed on the API 37 AVD from the app's own foreground. The platform offers no way to list, edit, or delete alarms, so no such tool exists. Not exercised through a real Gemma turn or on the Fold8. |
@@ -27,7 +27,7 @@ Do not promote a feature merely because a lower state passed.
 | Conversation summaries | Emulator verified, **model path unproven** | After a turn, a thread with 10+ unsummarized messages is compressed on the tool-free budget (`maxSteps = 1`, so a tool call aborts before anything is prepared and no dialog can appear in the background). The stored summary is injected into the next turn's preamble within a 480-byte cap. Threshold logic, prompt construction, and storage are tested; the **actual model summary has never been generated**, so quality and added latency are unmeasured. |
 | Setup and settings UI | Emulator verified | Model import, calendar permission and pinning, notification access and capture toggle, credential entry, and conversation history are all reachable from one screen. The four setup cards collapse behind a toggle and scroll inside a bounded area, because at phone width they had been pushing the prompt field off-screen entirely. Verified at 1080x2316 as well as the unfolded size. |
 | Diagnostics and thermal policy | Physical accepted for current slice | Content-free rotating diagnostics and evidence collection work. `NONE` through `SEVERE` continue, `CRITICAL` cooperatively cancels, and `EMERGENCY+` immediately cancels; the latter two branches lack natural physical evidence. |
-| Personal installation | Partially ready | Signing scripts exist, but a stable personal key and signed update-preservation receipt are still required. Play Store, AAB, and public CI are out of scope. |
+| Personal installation | Blocked on the owner | Signing wiring, the keystore script, and a verifier that recognises the unsigned artifact all exist. The key itself cannot be created here: the script prompts for a password only the owner should choose. Until then `assembleRelease` emits `app-release-unsigned.apk`, which cannot be installed. Play Store, AAB, and public CI are out of scope. |
 
 At this snapshot, host unit tests report 209 passes. API 37 instrumentation reports 96 tests: 95 passes and one expected SELinux hard-link skip. Lint has no errors, and debug plus unsigned release APKs build.
 
