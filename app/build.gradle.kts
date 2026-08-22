@@ -74,8 +74,11 @@ android {
                 storePassword = releaseStorePassword
                 keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword
-                // minSdk 31 always verifies APK Signature Scheme v2/v3. The JAR signature
-                // is redundant, and v4 only helps incremental installs this app does not use.
+                // minSdk 31 verifies signature-scheme blocks, so the JAR signature is redundant
+                // and v4 only helps incremental installs this app does not use. Measured with
+                // build-tools 37.0.0: AGP emits a v3 block only, which is the stronger scheme
+                // because it carries rotation information. verify-release-signing.sh therefore
+                // accepts v2 or v3 rather than demanding both.
                 enableV1Signing = false
                 enableV2Signing = true
                 enableV3Signing = true

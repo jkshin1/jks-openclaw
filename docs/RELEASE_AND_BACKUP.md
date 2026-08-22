@@ -52,8 +52,12 @@ cannot be installed.
 ```
 
 The verifier fails if the APK is unsigned, is signed with the shared Android debug certificate, or
-lacks an APK Signature Scheme v2 signature. Record the printed SHA-256 in your notes: every later
-build must show the same value.
+carries neither an APK Signature Scheme v2 nor v3 block. On build-tools 37.0.0 this app signs with
+v3 only, which is the stronger scheme. Record the printed certificate SHA-256 in your notes: every
+later build must show the same value.
+
+The whole path was exercised on 2026-08-22 with a disposable keystore — build, artifact name, and
+verifier output — so the only untested part is your own key and password.
 
 Without a key configured, the build still succeeds but names its output
 `app-release-unsigned.apk`, which cannot be installed. The verifier recognises that artifact and

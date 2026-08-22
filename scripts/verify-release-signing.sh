@@ -50,7 +50,11 @@ if ! verify_output="$("$apksigner_path" verify --print-certs --verbose "$apk_pat
     exit 1
 fi
 
-printf '%s\n' "$verify_output" | grep -E '^(Verified using v[0-9]|Signer #1 certificate (DN|SHA-256 digest))'
+printf '%s\n' "$verify_output" | grep -E '^Verified using v[0-9]'
+# apksigner labels the signer differently across versions: "Signer #1 certificate ..." on older
+# build-tools, "V3.0 Signer: certificate ..." on newer ones. Match both so the fingerprint the
+# owner is told to record actually gets printed.
+printf '%s\n' "$verify_output" | grep -E 'Signer.*certificate (DN|SHA-256 digest)'
 
 # The shared Android debug certificate is well known and must never sign a release build.
 if printf '%s\n' "$verify_output" | grep -qi 'CN=Android Debug'; then
@@ -58,9 +62,19 @@ if printf '%s\n' "$verify_output" | grep -qi 'CN=Android Debug'; then
     exit 1
 fi
 
-if ! printf '%s\n' "$verify_output" | grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true'; then
-    echo "FAIL APK Signature Scheme v2 is missing." >&2
+# v2 or v3 - not both. AGP signs this minSdk 31 app with v3 only, and v3 is the stronger scheme
+# (it carries rotation information). Requiring v2 specifically would fail a perfectly good build.
+# What must never pass is v1-only or unsigned, since a JAR signature alone is not sufficient here.
+signature_scheme=""
+if printf '%s\n' "$verify_output" | grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true'; then
+    signature_scheme="v3"
+elif printf '%s\n' "$verify_output" | grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true'; then
+    signature_scheme="v2"
+fi
+
+if [[ -z "$signature_scheme" ]]; then
+    echo "FAIL Neither APK Signature Scheme v2 nor v3 is present." >&2
     exit 1
 fi
 
-echo "OK   Release APK carries a non-debug certificate with a v2 signature."
+echo "OK   Release APK carries a non-debug certificate with a $signature_scheme signature."
