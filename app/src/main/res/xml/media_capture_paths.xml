@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    One directory, inside the app's own cache. The camera app receives a grant to exactly this
+    path and nothing else, and MediaCaptureStaging keeps at most one file in it.
+-->
+<paths>
+    <cache-path
+        name="media-capture"
+        path="media-capture/" />
+</paths>

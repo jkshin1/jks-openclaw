@@ -73,6 +73,7 @@ import com.personaledge.agent.MemorySetupState
 import com.personaledge.agent.NotificationSetupState
 import com.personaledge.agent.ReminderSetupState
 import com.personaledge.agent.PendingConfirmation
+import com.personaledge.agent.ModelUiStatus
 import com.personaledge.agent.PersonalEdgeUiState
 import com.personaledge.agent.R
 import com.personaledge.agent.ui.components.StatusPill
@@ -169,6 +170,15 @@ internal fun PersonalEdgeScreen(
     onRefreshSetup: () -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit,
+    onSetMediaInputEnabled: (Boolean) -> Unit = {},
+    onTakePhoto: () -> Unit = {},
+    onPickImage: () -> Unit = {},
+    onStartDictation: () -> Unit = {},
+    onStartVoiceAttachment: () -> Unit = {},
+    onStopRecording: () -> Unit = {},
+    onCancelRecording: () -> Unit = {},
+    onRemoveAttachment: () -> Unit = {},
+    onDismissMediaNotice: () -> Unit = {},
     onTurnRecovery: (ChatRecoveryAction) -> Unit = {},
     onConfirmation: (String, Boolean) -> Unit,
 ) {
@@ -182,6 +192,23 @@ internal fun PersonalEdgeScreen(
         MutableSharedFlow<WorkspaceShortcutCommand>(extraBufferCapacity = 8)
     }
     val turnActive = state.activeTurnId != null
+    val composerMedia = ComposerMediaState(
+        visible = state.mediaInputEnabled,
+        // Shown but refusing is deliberate: a control that disappears mid-turn moves the other
+        // controls under the owner's thumb. Disabled keeps the row's geometry stable.
+        enabled = state.mediaInputEnabled && !turnActive && !state.transcribing &&
+            state.voiceRecording == null && state.pendingAttachment == null &&
+            state.modelStatus == ModelUiStatus.READY,
+        attachment = state.pendingAttachment,
+        recording = state.voiceRecording,
+        onTakePhoto = onTakePhoto,
+        onPickImage = onPickImage,
+        onStartDictation = onStartDictation,
+        onStartVoiceAttachment = onStartVoiceAttachment,
+        onStopRecording = onStopRecording,
+        onCancelRecording = onCancelRecording,
+        onRemoveAttachment = onRemoveAttachment,
+    )
 
     androidx.compose.runtime.LaunchedEffect(openReminderSourceId) {
         if (openReminderSourceId != null) {
@@ -379,6 +406,7 @@ internal fun PersonalEdgeScreen(
                         onCancel = onCancel,
                         onTurnRecovery = onTurnRecovery,
                         onOpenSettings = openSettings,
+                        media = composerMedia,
                         composerFocusRequester = composerFocusRequester,
                         modifier = Modifier.weight(1f),
                     )
@@ -413,6 +441,7 @@ internal fun PersonalEdgeScreen(
                             onCancel = onCancel,
                             onTurnRecovery = onTurnRecovery,
                             onOpenSettings = openSettings,
+                            media = composerMedia,
                             composerFocusRequester = composerFocusRequester,
                             modifier = Modifier.weight(1f),
                         )
@@ -459,6 +488,7 @@ internal fun PersonalEdgeScreen(
                                 onCancel = onCancel,
                                 onTurnRecovery = onTurnRecovery,
                                 onOpenSettings = openSettings,
+                                media = composerMedia,
                                 composerFocusRequester = composerFocusRequester,
                                 modifier = Modifier.weight(1f),
                             )
@@ -506,6 +536,7 @@ internal fun PersonalEdgeScreen(
                                 onCancel = onCancel,
                                 onTurnRecovery = onTurnRecovery,
                                 onOpenSettings = openSettings,
+                                media = composerMedia,
                                 composerFocusRequester = composerFocusRequester,
                                 modifier = Modifier.weight(1f),
                             )
@@ -545,6 +576,7 @@ internal fun PersonalEdgeScreen(
             onSetWebSearchEnabled = onSetWebSearchEnabled,
             onStoreDefaultOrigin = onStoreDefaultOrigin,
             onDeleteDefaultOrigin = onDeleteDefaultOrigin,
+            onSetMediaInputEnabled = onSetMediaInputEnabled,
             onSetMemoryEnabled = onSetMemoryEnabled,
             onStoreMemory = onStoreMemory,
             onReplaceMemory = onReplaceMemory,
@@ -735,6 +767,7 @@ private fun ConversationWorkspace(
     onCancel: () -> Unit,
     onTurnRecovery: (ChatRecoveryAction) -> Unit,
     onOpenSettings: () -> Unit,
+    media: ComposerMediaState,
     composerFocusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
@@ -778,8 +811,11 @@ private fun ConversationWorkspace(
                 modelStatus = state.modelStatus,
                 thermalStatus = state.thermalStatus,
                 turnActive = turnActive,
-                inputWarning = state.promptInputWarning,
+                // The media notice is the more specific of the two and answers a question the
+                // owner just asked by tapping a control, so it wins the one notice slot.
+                inputWarning = state.mediaNotice ?: state.promptInputWarning,
             ),
+            media = media,
             onSend = onSend,
             onCancel = onCancel,
             onOpenSettings = onOpenSettings,

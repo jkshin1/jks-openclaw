@@ -148,7 +148,7 @@ class ConversationSummarizer(
                 maximumPromptBytes - usedBytes - prefix.utf8ByteSize() - suffix.utf8ByteSize(),
             )
             if (contentBudget < MIN_QUOTED_MESSAGE_UTF8_BYTES) break
-            val quotedText = message.text.takeHeadAndTailUtf8(contentBudget)
+            val quotedText = message.contentFreeContextText().takeHeadAndTailUtf8(contentBudget)
             if (quotedText.isBlank()) break
             val block = prefix + quotedText + suffix
             val blockBytes = block.utf8ByteSize()
@@ -187,6 +187,7 @@ class ConversationSummarizer(
         role = message.role,
         text = message.text,
         createdAtEpochMillis = message.createdAtEpochMillis,
+        attachmentSummary = message.attachmentSummary,
     )
 
     /**
@@ -198,7 +199,8 @@ class ConversationSummarizer(
         if (pending.size >= messagesBeforeSummary) return true
         var sourceBytes = 0
         for (message in pending) {
-            val next = message.role.label().utf8ByteSize() + 2 + message.text.utf8ByteSize() + 1
+            val next = message.role.label().utf8ByteSize() + 2 +
+                message.contentFreeContextText().utf8ByteSize() + 1
             sourceBytes = (sourceBytes + next).coerceAtMost(sourceBytesBeforeSummary)
             if (sourceBytes >= sourceBytesBeforeSummary) return true
         }

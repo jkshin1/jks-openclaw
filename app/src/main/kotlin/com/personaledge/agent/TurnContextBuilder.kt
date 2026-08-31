@@ -18,6 +18,8 @@ internal data class TurnContextBuildResult(
     val deviceContextIncluded: Boolean,
     /** Number of complete memory records that actually fit in [text]. */
     val includedMemoryCount: Int = 0,
+    /** True only when the exact guarded prior answer row was rendered into [text]. */
+    val requiredPriorAnswerIncluded: Boolean = false,
 )
 
 /**
@@ -35,7 +37,15 @@ internal object TurnContextBuilder {
         conversation: ConversationContext?,
         memories: List<String> = emptyList(),
         maximumBytes: Int,
-    ): String = buildResult(prompt, device, conversation, memories, maximumBytes).text
+        requiredPriorAnswer: PriorWebResultReference? = null,
+    ): String = buildResult(
+        prompt = prompt,
+        device = device,
+        conversation = conversation,
+        memories = memories,
+        maximumBytes = maximumBytes,
+        requiredPriorAnswer = requiredPriorAnswer,
+    ).text
 
     fun buildResult(
         prompt: String,
@@ -43,6 +53,7 @@ internal object TurnContextBuilder {
         conversation: ConversationContext?,
         memories: List<String> = emptyList(),
         maximumBytes: Int,
+        requiredPriorAnswer: PriorWebResultReference? = null,
     ): TurnContextBuildResult {
         require(maximumBytes > 0)
         val promptBytes = prompt.utf8Size()
@@ -157,11 +168,22 @@ internal object TurnContextBuilder {
             (innerBudget - recentHeader.utf8Size()).coerceAtLeast(0),
             if (focusPreviousWebAnswer) MAX_FOCUSED_RECENT_BLOCK_BYTES else MAX_RECENT_BLOCK_BYTES,
         )
-        val recentBlocks = selectRecentBlocks(
+        val recentSelection = selectRecentBlocks(
             messages = recentMessages,
             maximumBytes = recentContentBudget,
             focusPreviousWebAnswer = focusPreviousWebAnswer,
+            requiredPriorAssistantOrdinal = requiredPriorAnswer?.assistantMessageOrdinal,
         )
+        val recentBlocks = recentSelection.blocks
+        val requiredPriorAnswerIncluded = requiredPriorAnswer?.let { required ->
+            context?.conversationId == required.conversationId &&
+                recentMessages.any { message ->
+                    message.ordinal == required.assistantMessageOrdinal &&
+                        message.role == MessageRole.ASSISTANT &&
+                        message.text.isNotBlank()
+                } &&
+                required.assistantMessageOrdinal in recentSelection.includedMessageOrdinals
+        } ?: false
         val recentBytes = recentBlocks.sumOf { block -> block.utf8Size() } +
             if (recentBlocks.isEmpty()) 0 else recentHeader.utf8Size()
         innerBudget -= recentBytes
@@ -230,6 +252,7 @@ internal object TurnContextBuilder {
             text = built,
             deviceContextIncluded = true,
             includedMemoryCount = memoryBlocks.size,
+            requiredPriorAnswerIncluded = requiredPriorAnswerIncluded,
         )
     }
 
@@ -254,11 +277,21 @@ internal object TurnContextBuilder {
         messages: List<StoredMessage>,
         maximumBytes: Int,
         focusPreviousWebAnswer: Boolean,
-    ): List<String> {
-        if (messages.isEmpty() || maximumBytes <= MIN_MESSAGE_BLOCK_BYTES) return emptyList()
+        requiredPriorAssistantOrdinal: Long?,
+    ): RecentBlockSelection {
+        if (messages.isEmpty() || maximumBytes <= MIN_MESSAGE_BLOCK_BYTES) {
+            return RecentBlockSelection(emptyList(), emptySet())
+        }
 
         val latestUserIndex = messages.indexOfLast { message -> message.role == MessageRole.USER }
-        val responseIndex = if (latestUserIndex < 0) {
+        val requiredAssistantIndex = requiredPriorAssistantOrdinal?.let { requiredOrdinal ->
+            messages.indexOfLast { message ->
+                message.ordinal == requiredOrdinal && message.role == MessageRole.ASSISTANT
+            }
+        } ?: -1
+        val responseIndex = if (requiredAssistantIndex >= 0) {
+            requiredAssistantIndex
+        } else if (latestUserIndex < 0) {
             -1
         } else {
             (messages.lastIndex downTo latestUserIndex + 1).firstOrNull { index ->
@@ -276,7 +309,13 @@ internal object TurnContextBuilder {
             anchors.size > 1 &&
             maximumBytes - anchorOverhead < anchors.size * MIN_ANCHOR_CONTENT_BYTES
         ) {
-            anchors = listOf(if (latestUserIndex >= 0) latestUserIndex else messages.lastIndex)
+            anchors = listOf(
+                when {
+                    requiredAssistantIndex >= 0 -> requiredAssistantIndex
+                    latestUserIndex >= 0 -> latestUserIndex
+                    else -> messages.lastIndex
+                },
+            )
         }
 
         val selected = mutableMapOf<Int, String>()
@@ -315,8 +354,19 @@ internal object TurnContextBuilder {
             selected[index] = block
             remaining -= block.utf8Size()
         }
-        return selected.toSortedMap().values.toList()
+        val ordered = selected.toSortedMap()
+        return RecentBlockSelection(
+            blocks = ordered.values.toList(),
+            includedMessageOrdinals = ordered.keys.mapTo(linkedSetOf()) { index ->
+                messages[index].ordinal
+            },
+        )
     }
+
+    private data class RecentBlockSelection(
+        val blocks: List<String>,
+        val includedMessageOrdinals: Set<Long>,
+    )
 
     private fun allocateAnchorContentBudgets(
         messages: List<StoredMessage>,
@@ -334,7 +384,7 @@ internal object TurnContextBuilder {
             } else {
                 MAX_RECENT_MESSAGE_BYTES
             }
-            minOf(sanitizeFully(message.text).utf8Size(), limit)
+            minOf(sanitizeFully(message.contentFreeContextText()).utf8Size(), limit)
         }
         val initialShare = maximumBytes / indices.size
         val budgets = MutableList(indices.size) { position ->
@@ -370,12 +420,13 @@ internal object TurnContextBuilder {
     ): String? {
         if (contentBudget <= 0) return null
         val (prefix, suffix) = messageDelimiters(message)
+        val contextualText = message.contentFreeContextText()
         val content = if (focusedAssistant) {
-            sanitizeFocusedAssistant(message.text, contentBudget)
+            sanitizeFocusedAssistant(contextualText, contentBudget)
         } else if (message.role == MessageRole.USER) {
-            sanitizeHeadAndTail(message.text, contentBudget)
+            sanitizeHeadAndTail(contextualText, contentBudget)
         } else {
-            sanitize(message.text, contentBudget)
+            sanitize(contextualText, contentBudget)
         }
         return if (content.isBlank()) null else prefix + content + suffix
     }

@@ -198,7 +198,11 @@ internal fun ChatTranscript(
 
             items(messages, key = ChatEntry::id) { entry ->
                 when (entry.role) {
-                    ChatRole.USER -> UserBubble(entry.text, maxBubbleWidth)
+                    ChatRole.USER -> UserBubble(
+                        text = entry.text,
+                        attachmentLabel = entry.attachmentLabel,
+                        maxWidth = maxBubbleWidth,
+                    )
                     ChatRole.ASSISTANT -> {
                         val streaming = ChatPresentationPolicy.isStreamingAssistant(
                             role = entry.role,
@@ -247,7 +251,7 @@ internal fun ChatTranscript(
 private val HorizontalGutter = 16.dp
 
 @Composable
-private fun UserBubble(text: String, maxWidth: Dp) {
+private fun UserBubble(text: String, attachmentLabel: String?, maxWidth: Dp) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Surface(
             shape = UserBubbleShape,
@@ -260,12 +264,25 @@ private fun UserBubble(text: String, maxWidth: Dp) {
                     )
                 },
         ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            )
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                if (attachmentLabel != null) {
+                    // An app-authored caption, never a thumbnail: the media is gone once the turn
+                    // ends, so the transcript records that it was there and nothing more.
+                    Text(
+                        text = attachmentLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+                        modifier = Modifier.padding(bottom = if (text.isEmpty()) 0.dp else 4.dp),
+                    )
+                }
+                if (text.isNotEmpty()) {
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                }
+            }
         }
     }
 }

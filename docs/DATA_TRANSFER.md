@@ -4,13 +4,16 @@ Android automatic backup stays disabled. Device replacement is an explicit user-
 the user chooses categories, reviews counts, supplies a passphrase, and selects a destination or
 source with the Storage Access Framework.
 
-The live application database is Room schema 10. The archive remains binary format version 1 with
-its existing transfer-compatibility schema marker `5`; that marker describes the stable selected-
-data payload, not the current Room schema. Keeping it unchanged preserves compatible archives.
+The live application database is Room schema 11. The archive envelope remains binary format version
+1, while the current selected-data transfer schema marker is `6` with payload version `2`. Those
+versions describe the encrypted transfer format, not the current Room schema. Import also accepts
+legacy marker `5` with payload version `1`; its messages predate attachment summaries and therefore
+restore that field as `null`.
 
 ## Included by selection
 
-- conversations and messages;
+- conversations and messages, including the app-written content-free
+  `messages.attachment_summary` kind/source/whole-second code;
 - approved typed memories, including validity, reconfirmation, and supersession metadata;
 - app-owned reminders and bounded delivery history; and
 - pending or handled commitment proposals.
@@ -24,9 +27,9 @@ data payload, not the current Room schema. Keeping it unchanged preserves compat
 - captured KakaoTalk notification rows and source keys;
 - model artifacts, diagnostics, settings consent, permissions, and provider row IDs.
 
-Only a calendar label hint may cross the archive. Import marks calendar remapping as required; the
-new device must grant access and explicitly select its read calendars and one writable calendar.
-A label is never treated as provider identity.
+Of calendar metadata, only a label hint may cross the archive. Import marks calendar remapping as
+required; the new device must grant access and explicitly select its read calendars and one writable
+calendar. A label is never treated as provider identity.
 
 ## Archive boundary
 
@@ -34,6 +37,11 @@ Version 1 uses PBKDF2-HMAC-SHA256 with a random 16-byte salt, 210,000 iterations
 and AES-GCM with a random 12-byte nonce. The authenticated header binds magic, archive and transfer-
 schema versions, selection flags, plaintext length, salt, nonce, and plaintext SHA-256. Passphrases
 must contain 12–128 Unicode code points.
+
+Transfer schema `6` adds one nullable field after each message's existing payload: the bounded
+attachment summary. Its validator accepts only canonical image or audio shape codes and never media
+bytes, file names, paths, URIs, dimensions, millisecond timing, or captured content. The schema and
+payload versions advance together so a legacy schema `5` archive remains unambiguous and importable.
 
 Version words are interpreted without narrowing through a signed `Int`; unsupported values,
 including injected `Long.MAX_VALUE` byte patterns, fail closed. Plaintext and ciphertext lengths

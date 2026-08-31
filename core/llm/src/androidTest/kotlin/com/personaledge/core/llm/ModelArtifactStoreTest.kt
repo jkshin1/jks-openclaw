@@ -178,6 +178,8 @@ class ModelArtifactStoreTest {
         litertLmVersion = "test",
         contextTokens = 32,
         maxOutputTokens = 8,
+        supportsImageInput = false,
+        supportsAudioInput = false,
     )
 
     private fun namespace(): String = UUID.randomUUID().toString().replace("-", "")

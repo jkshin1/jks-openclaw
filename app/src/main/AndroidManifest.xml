@@ -16,6 +16,18 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!--
+        Voice input records straight into the 16 kHz mono PCM the on-device audio encoder wants,
+        so the microphone is read in process. Nothing recorded leaves the device or is written to
+        storage: the clip lives in memory from AudioRecord until the turn ends.
+
+        There is deliberately no CAMERA permission. Photos come from the system photo picker,
+        which needs no permission at all, or from the camera app through ACTION_IMAGE_CAPTURE,
+        which only requires one when the app declares CAMERA itself. This app never opens the
+        camera directly, so it never asks.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Normal permission: creating an alarm goes through the clock app, not AlarmManager. -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
@@ -32,6 +44,9 @@
         <package android:name="com.kakao.talk" />
         <intent>
             <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>
     </queries>
 
@@ -69,6 +84,21 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!--
+            The camera app cannot return bytes in process, so it writes to a URI this app grants.
+            The authority is app-private, unexported, and scoped by @xml/media_capture_paths to a
+            single cache directory holding at most one short-lived capture file.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.mediacapture"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/media_capture_paths" />
+        </provider>
 
         <receiver
             android:name=".ReminderAlarmReceiver"

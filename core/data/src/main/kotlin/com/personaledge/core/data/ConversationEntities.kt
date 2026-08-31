@@ -67,6 +67,17 @@ data class MessageEntity(
     val text: String,
     @ColumnInfo(name = "created_at_epoch_millis")
     val createdAtEpochMillis: Long,
+    /**
+     * Content-free record that this message carried a photo or a voice clip.
+     *
+     * Media payloads never enter Room. A camera capture may exist briefly in the app's private
+     * cache until it is read and deletion is attempted; normalized image bytes and recorded audio
+     * stay in memory. This column lets a restored conversation still say an attachment was there,
+     * and holds only a short app-written kind/source/whole-second code, with no pixels, samples,
+     * dimensions, file name, path, or URI in it.
+     */
+    @ColumnInfo(name = "attachment_summary")
+    val attachmentSummary: String? = null,
 )
 
 enum class MemoryCategory {

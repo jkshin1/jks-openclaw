@@ -234,7 +234,7 @@ class GroundedEvidenceTest {
         assertEquals(2, plan.hits.size)
         val answer = WebSearchAnswerPolicy.answerFromModelOrNull(
             plan,
-            "OpenAI는 새로운 모델을 공개했고 개발자 문서를 업데이트했습니다.",
+            "OpenAI는 새로운 모델을 공개했습니다. OpenAI 개발자 문서는 업데이트됐습니다.",
         )
 
         requireNotNull(answer)
@@ -242,6 +242,175 @@ class GroundedEvidenceTest {
         assertTrue(answer.contains("\n\n출처\n1. OpenAI 새 모델 공개"))
         assertTrue(answer.contains("\n2. OpenAI 개발자 문서 업데이트"))
         assertFalse(answer.contains("동명이인"))
+        assertNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                plan,
+                "OpenAI는 개발자 문서를 공개했습니다.",
+            ),
+        )
+        assertNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                plan,
+                "공개 검색 자료에서 OpenAI 관련 내용을 확인했습니다.",
+            ),
+        )
+        assertNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                plan,
+                "OpenAI의 최신 정보를 확인했습니다.",
+            ),
+        )
+    }
+
+    @Test
+    fun `web synthesis enforces english one sentence owner contract`() {
+        val plan = WebSearchAnswerPolicy.prepare(
+            query = "OpenAI latest news",
+            result = WebSearchResult(
+                provider = WebSearchProvider.TAVILY,
+                hits = listOf(
+                    WebSearchHit(
+                        title = "OpenAI releases Orion model",
+                        link = "https://openai.com/news/orion",
+                        snippet = "OpenAI released the Orion model for developers.",
+                    ),
+                ),
+            ),
+            intent = WebSearchAnswerIntent.GENERAL,
+            responseContract = WebSearchResponseContract(
+                language = WebSearchResponseContract.Language.ENGLISH,
+                exactSentenceCount = 1,
+            ),
+        )
+
+        val prompt = requireNotNull(WebSearchAnswerPolicy.synthesisPromptOrNull(plan))
+        assertTrue(prompt.contains("영어로만"))
+        assertTrue(prompt.contains("정확히 1개"))
+        val accepted = requireNotNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                plan,
+                "OpenAI released the Orion model for developers.",
+            ),
+        )
+        assertTrue(accepted.startsWith("OpenAI released"))
+        assertTrue(accepted.contains("\n\nSources\n1. "))
+        assertNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                plan,
+                "OpenAI는 Orion 모델을 개발자에게 공개했습니다.",
+            ),
+        )
+        assertNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                plan,
+                "OpenAI released the Orion model. The release targets developers.",
+            ),
+        )
+    }
+
+    @Test
+    fun `sources only contract skips synthesis and returns no provider prose`() {
+        val plan = WebSearchAnswerPolicy.prepare(
+            query = "OpenAI latest news",
+            result = WebSearchResult(
+                provider = WebSearchProvider.TAVILY,
+                hits = listOf(
+                    WebSearchHit(
+                        title = "OpenAI releases Orion model",
+                        link = "https://openai.com/news/orion",
+                        snippet = "Provider prose must not be rendered in sources-only mode.",
+                    ),
+                ),
+            ),
+            intent = WebSearchAnswerIntent.GENERAL,
+            responseContract = WebSearchResponseContract(
+                language = WebSearchResponseContract.Language.ENGLISH,
+                sourcesOnly = true,
+            ),
+        )
+
+        assertNull(WebSearchAnswerPolicy.synthesisPromptOrNull(plan))
+        assertNull(WebSearchAnswerPolicy.answerFromModelOrNull(plan, "Provider prose."))
+        val answer = WebSearchAnswerPolicy.fallbackAnswer(plan)
+        assertTrue(answer.startsWith("Sources\n1. OpenAI releases Orion model"))
+        assertTrue(answer.contains("https://openai.com/news/orion"))
+        assertFalse(answer.contains("Provider prose must not be rendered"))
+    }
+
+    @Test
+    fun `sources only contract states explicitly when no verified source survived filtering`() {
+        val plan = WebSearchAnswerPolicy.prepare(
+            query = "OpenAI latest news",
+            result = WebSearchResult(
+                provider = WebSearchProvider.TAVILY,
+                hits = emptyList(),
+            ),
+            intent = WebSearchAnswerIntent.GENERAL,
+            responseContract = WebSearchResponseContract(
+                language = WebSearchResponseContract.Language.ENGLISH,
+                sourcesOnly = true,
+            ),
+        )
+
+        assertEquals("No verified sources were found.", WebSearchAnswerPolicy.fallbackAnswer(plan))
+    }
+
+    @Test
+    fun `model synthesis cannot flip negative evidence into an affirmative claim`() {
+        val english = WebSearchAnswerPolicy.prepare(
+            query = "Acme feature availability",
+            result = WebSearchResult(
+                provider = WebSearchProvider.TAVILY,
+                hits = listOf(
+                    WebSearchHit(
+                        title = "Acme feature availability",
+                        link = "https://example.test/acme",
+                        snippet = "The Acme feature is not available on Android.",
+                    ),
+                ),
+            ),
+            intent = WebSearchAnswerIntent.GENERAL,
+            responseContract = WebSearchResponseContract(
+                language = WebSearchResponseContract.Language.ENGLISH,
+                exactSentenceCount = 1,
+            ),
+        )
+
+        assertNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                english,
+                "The Acme feature is available on Android.",
+            ),
+        )
+        assertTrue(
+            requireNotNull(
+                WebSearchAnswerPolicy.answerFromModelOrNull(
+                    english,
+                    "The Acme feature is not available on Android.",
+                ),
+            ).startsWith("The Acme feature is not available"),
+        )
+
+        val korean = WebSearchAnswerPolicy.prepare(
+            query = "아크미 기능 사용 가능 여부",
+            result = WebSearchResult(
+                provider = WebSearchProvider.YOU_COM,
+                hits = listOf(
+                    WebSearchHit(
+                        title = "아크미 기능 사용 안내",
+                        link = "https://example.test/acme-ko",
+                        snippet = "아크미 기능은 안드로이드에서 사용할 수 없습니다.",
+                    ),
+                ),
+            ),
+            intent = WebSearchAnswerIntent.GENERAL,
+        )
+        assertNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                korean,
+                "아크미 기능은 안드로이드에서 사용할 수 있습니다.",
+            ),
+        )
     }
 
     @Test

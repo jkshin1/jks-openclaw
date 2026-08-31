@@ -129,6 +129,41 @@
 -keepclassmembers class com.personaledge.agent.NetworkSetupState { public *; }
 -keepclassmembers class com.personaledge.agent.CredentialsState { public *; }
 
+# The opt-in Fold8 media receipt drives the production runtime directly, in the same shape as the
+# existing runtime smokes, because the ViewModel exposes no way to read a conversation's native
+# token count and that count is the only signal that separates "the encoder ran" from "the model
+# answered without it". These are existing public boundaries; class names stay obfuscatable and no
+# production capability is broadened. Without them the separately packaged release test fails with
+# NoClassDefFoundError before reaching its own gate.
+-keep,allowobfuscation interface com.personaledge.core.llm.LlmRuntime { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.LlmState { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.InstalledModelState { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.ModelEvent { *; }
+-keep,allowobfuscation enum com.personaledge.core.llm.LlmFailureCode { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.LlmToolDefinition { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.TrustedToolResponse { *; }
+-keep,allowobfuscation enum com.personaledge.core.llm.TurnMediaFormat { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.PinnedModelManifest { *; }
+-keepclassmembers,allowobfuscation class com.personaledge.core.llm.ModelManifest { public *; }
+-keep,allowobfuscation class com.personaledge.core.llm.ModelArtifactStore { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.InstalledModelState$Ready { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.VerifiedInstalledModel { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.LiteRtLlmRuntime { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.LlmState$Ready { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.LlmTurnToolScope { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.LlmTurnToolScope$Companion { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.ModelEvent$* { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.TurnMediaAttachment { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.TurnMediaAttachment$Companion { *; }
+-keep,allowobfuscation class com.personaledge.core.llm.TurnMediaBudget { *; }
+-keep,allowobfuscation enum com.personaledge.core.llm.TurnMediaKind { *; }
+-keep,allowobfuscation enum com.personaledge.core.llm.InferenceBackend { *; }
+-keep,allowobfuscation class com.personaledge.core.agent.TurnMediaPolicy { *; }
+-keepclassmembers,allowobfuscation class com.personaledge.core.agent.TurnMediaPlan { public *; }
+-keep,allowobfuscation enum com.personaledge.core.agent.TurnMediaIntent { *; }
+-keep,allowobfuscation class com.personaledge.agent.VoiceCapturePolicy { *; }
+-keep,allowobfuscation class com.personaledge.agent.WavEncoder { *; }
+
 # The release-target AndroidX runner and the small physical acceptance suite resolve these Kotlin
 # facades from the target package. Keep only the classes present in the release test APK's external
 # reference set; the rest of kotlin-stdlib remains fully optimizable.
@@ -165,3 +200,5 @@
 -keep class kotlinx.coroutines.BuildersKt { *; }
 -keep class kotlinx.coroutines.DelayKt { *; }
 -keep class kotlinx.coroutines.TimeoutKt { *; }
+# The media receipt collects a turn's event Flow across the split-APK boundary.
+-keep class kotlinx.coroutines.flow.FlowKt { *; }

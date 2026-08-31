@@ -108,6 +108,7 @@ internal fun SettingsSheet(
     onSetWebSearchEnabled: (Boolean) -> Unit,
     onStoreDefaultOrigin: (String) -> Unit,
     onDeleteDefaultOrigin: () -> Unit,
+    onSetMediaInputEnabled: (Boolean) -> Unit = {},
     onSetMemoryEnabled: (Boolean) -> Unit = {},
     onStoreMemory: (String, MemoryCategory, String?) -> Unit = { _, _, _ -> },
     onReplaceMemory: (String, String, MemoryCategory, String?) -> Unit = { _, _, _, _ -> },
@@ -171,6 +172,10 @@ internal fun SettingsSheet(
                     onPinCalendar = onPinCalendar,
                     onUnpinCalendar = onUnpinCalendar,
                     onSetReadEnabled = onSetCalendarReadEnabled,
+                )
+                MediaInputSection(
+                    enabled = state.mediaInputEnabled,
+                    onSetEnabled = onSetMediaInputEnabled,
                 )
                 NetworkSection(
                     setup = networkSetup,

@@ -232,7 +232,7 @@ new_avd_regression_fixture() {
 
     local source_root source_count source_index source_root_and_count
     for source_root_and_count in \
-        "$fixture/app/src/androidTest:34" \
+        "$fixture/app/src/androidTest:39" \
         "$fixture/core/data/src/androidTest:12" \
         "$fixture/core/diagnostics/src/androidTest:1" \
         "$fixture/core/llm/src/androidTest:3" \
@@ -333,13 +333,13 @@ case "$command_name" in
             fi
             case "$component" in
                 com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner)
-                    expected_classes='com.personaledge.agent.AlarmForegroundRequestTest,com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.ChatHistoryCoordinatorTest,com.personaledge.agent.ConversationSummarizerTest,com.personaledge.agent.CredentialSettingsTest,com.personaledge.agent.DeviceExecutionInterlockTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KakaoReplySettingsTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.NotificationCaptureCoordinatorTest,com.personaledge.agent.NotificationCaptureSinkTest,com.personaledge.agent.NotificationPostReaderTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.StoredNotificationGatewayTest,com.personaledge.agent.ThermalStatusMonitorInstrumentedTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
+                    expected_classes='com.personaledge.agent.AlarmForegroundRequestTest,com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.ChatHistoryCoordinatorTest,com.personaledge.agent.ConversationSummarizerTest,com.personaledge.agent.CredentialSettingsTest,com.personaledge.agent.DeviceExecutionInterlockTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8MediaTurnAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.GroundedWebSearchJourneyTest,com.personaledge.agent.ImageAttachmentLoaderTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KakaoReplySettingsTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.MediaCaptureStagingTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.NotificationCaptureCoordinatorTest,com.personaledge.agent.NotificationCaptureSinkTest,com.personaledge.agent.NotificationPostReaderTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.StoredNotificationGatewayTest,com.personaledge.agent.ThermalStatusMonitorInstrumentedTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
                     [[ " $* " == *" -e class $expected_classes "* ]] || exit 94
-                    emit_success 119 90 29
+                    emit_success 151 121 30
                     ;;
                 com.personaledge.core.data.test/androidx.test.runner.AndroidJUnitRunner)
                     [[ " $* " == *" -e class "* ]] || exit 94
-                    emit_success 84 84 0
+                    emit_success 90 90 0
                     ;;
                 com.personaledge.core.diagnostics.test/androidx.test.runner.AndroidJUnitRunner)
                     [[ " $* " == *" -e class "* ]] || exit 94
@@ -347,7 +347,7 @@ case "$command_name" in
                     ;;
                 com.personaledge.core.llm.test/androidx.test.runner.AndroidJUnitRunner)
                     [[ " $* " == *" -e class "* ]] || exit 94
-                    emit_success 10 9 1
+                    emit_success 12 11 1
                     ;;
                 com.personaledge.core.tools.test/androidx.test.runner.AndroidJUnitRunner)
                     [[ " $* " == *" -e class "* ]] || exit 94
@@ -386,7 +386,7 @@ new_avd_release_readiness_fixture() {
     release_fixture_certificate="e0f66d4b4c8064db6a9d46097d77903cf13fbccacbdfc6e49e9f7c380b8e457a"
 
     local source_index=1
-    while (( source_index <= 34 )); do
+    while (( source_index <= 39 )); do
         : > "$fixture/app/src/androidTest/Fixture${source_index}Test.kt"
         source_index=$((source_index + 1))
     done
@@ -500,7 +500,7 @@ case "$command_name" in
             all_arguments=" $* "
             abi_method='com.personaledge.agent.ReleasePhysicalAbiLinkageTest#boundedPostGuardEntrypointsResolveFromTheMinifiedTarget'
             canary_classes='com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KoreanToolSelectionTest,com.personaledge.agent.PastedMailScheduleAcceptanceTest'
-            physical_classes='com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
+            physical_classes='com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8MediaTurnAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
             if [[ "$all_arguments" == *" -e class $abi_method "* ]]; then
                 suite=abi
             elif [[ "$all_arguments" == *" -e class $canary_classes "* ]]; then
@@ -525,7 +525,7 @@ case "$command_name" in
                     emit_result 1 1 0
                     ;;
                 canary) emit_result 5 0 5 ;;
-                physical) emit_result 28 0 28 ;;
+                physical) emit_result 29 0 29 ;;
             esac
         else
             exit 98
@@ -1417,11 +1417,11 @@ test_avd_regression_runs_scoped_suites_and_owner_exclusions() {
     if grep -F -- $'\t-e\tnotClass\t' "$adb_log" >/dev/null; then
         fail "AVD runner used a future-open negative class filter"
     fi
-    grep -F 'tests.selected=239' "$fixture/success.log" >/dev/null ||
+    grep -F 'tests.selected=279' "$fixture/success.log" >/dev/null ||
         fail "AVD runner did not account for every selected test"
-    grep -F 'tests.passed=209' "$fixture/success.log" >/dev/null ||
+    grep -F 'tests.passed=248' "$fixture/success.log" >/dev/null ||
         fail "AVD runner pass accounting is wrong"
-    grep -F 'tests.guardedSkip=30' "$fixture/success.log" >/dev/null ||
+    grep -F 'tests.guardedSkip=31' "$fixture/success.log" >/dev/null ||
         fail "AVD runner guarded-skip accounting is wrong"
     grep -F 'tests.failed=0' "$fixture/success.log" >/dev/null ||
         fail "AVD runner did not emit a zero-failure receipt"
@@ -1529,11 +1529,14 @@ test_avd_release_readiness_runs_exact_paired_release_lane() {
     if grep -F 'AlarmForegroundRequestTest' "$adb_log" >/dev/null; then
         fail "release AVD runner selected a debug-only instrumentation class"
     fi
-    grep -F 'tests.selected=34' "$fixture/success.log" >/dev/null ||
+    if grep -F 'GroundedWebSearchJourneyTest' "$adb_log" >/dev/null; then
+        fail "release AVD runner selected the unverified minified web journey"
+    fi
+    grep -F 'tests.selected=35' "$fixture/success.log" >/dev/null ||
         fail "release AVD runner selected-count receipt is wrong"
     grep -F 'tests.passed=1' "$fixture/success.log" >/dev/null ||
         fail "release AVD runner pass receipt is wrong"
-    grep -F 'tests.guardedSkip=33' "$fixture/success.log" >/dev/null ||
+    grep -F 'tests.guardedSkip=34' "$fixture/success.log" >/dev/null ||
         fail "release AVD runner guard receipt is wrong"
     grep -F "release.certificateSha256=$release_fixture_certificate" \
         "$fixture/success.log" >/dev/null || fail "release certificate was not bound to the receipt"

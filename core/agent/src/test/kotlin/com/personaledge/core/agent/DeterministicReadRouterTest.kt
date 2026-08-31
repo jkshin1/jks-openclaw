@@ -99,6 +99,17 @@ class DeterministicReadRouterTest {
             "SK하이닉스 김재범 최신 소식",
             explicitWebSearchQueryOrNull("SK하이닉스 김재범 최신 소식을 다시 검색해줘"),
         )
+        assertFalse(
+            PriorWebResultFollowUpPolicy.matches("그 결과를 설명하는 자료를 웹에서 검색해줘"),
+        )
+        assertEquals(
+            "그 결과를 설명하는 자료",
+            explicitWebSearchQueryOrNull("그 결과를 설명하는 자료를 웹에서 검색해줘"),
+        )
+        assertEquals(
+            "오펜하이머 영화",
+            explicitWebSearchQueryOrNull("웹 검색을 활용해서 오펜하이머 영화 정보를 찾아줘"),
+        )
     }
 
     @Test
@@ -116,10 +127,68 @@ class DeterministicReadRouterTest {
             "검색해줘: OpenAI",
             "다음 알람 확인",
             "리마인더 목록",
+            "현재 대한민국 대통령이 누구야?",
         ).forEach { prompt ->
             assertTrue(prompt, DeterministicReadRouter.canRunWithoutModel(prompt))
         }
         assertFalse(DeterministicReadRouter.canRunWithoutModel("이 요청을 알아서 처리해 줘"))
+    }
+
+    @Test
+    fun `current officeholder request is a deterministic mandatory web read`() {
+        val request = DeterministicReadRouter.classify(
+            "현재 대한민국 대통령이 누구야?",
+            recentWeatherRead = false,
+        ) as DeterministicReadRequest.WebSearch
+
+        assertEquals("대한민국 현직 대통령 이름 공식", request.query)
+        assertEquals(WebSearchAnswerIntent.CURRENT_OFFICEHOLDER, request.intent)
+    }
+
+    @Test
+    fun `closed volatile facts are deterministic web reads`() {
+        val cases = mapOf(
+            "OpenAI 최신 뉴스" to "OpenAI 최신 뉴스",
+            "비트코인 시세" to "비트코인 시세",
+            "원달러 환율" to "원달러 환율",
+            "한국은행 기준금리" to "한국은행 기준금리",
+            "KBO 순위" to "KBO 순위",
+            "삼성전자 최근 실적" to "삼성전자 최근 실적",
+        )
+
+        cases.forEach { (prompt, expectedQuery) ->
+            val request = DeterministicReadRouter.classify(prompt, false)
+                as DeterministicReadRequest.WebSearch
+            assertEquals(prompt, expectedQuery, request.query)
+            assertEquals(prompt, WebSearchAnswerIntent.GENERAL, request.intent)
+            assertTrue(prompt, DeterministicReadRouter.canRunWithoutModel(prompt))
+        }
+    }
+
+    @Test
+    fun `volatile and correction direct routes fail closed without one safe subject`() {
+        listOf(
+            "최신 뉴스",
+            "현재 주가를 알려줘",
+            "내 비트코인 시세",
+            "내프로젝트 최신 뉴스",
+            "내 비밀번호 12345678 최신 뉴스",
+            "우리회사 최신 실적",
+            "OpenAI 최신 뉴스를 저장해",
+            "OpenAI 최신 뉴스와 비트코인 시세",
+            "OpenAI 최신 뉴스와 내일 일정 알려줘",
+            "웹 검색을 더 잘해봐",
+            "검색어를 바꿔서 다시 찾아줘",
+            "웹 검색 할 수 있잖아",
+        ).forEach { prompt ->
+            assertEquals(prompt, null, DeterministicReadRouter.classify(prompt, false))
+        }
+
+        assertEquals(
+            "OpenAI",
+            (DeterministicReadRouter.classify("OpenAI를 다시 검색해줘", false)
+                as DeterministicReadRequest.WebSearch).query,
+        )
     }
 
     @Test

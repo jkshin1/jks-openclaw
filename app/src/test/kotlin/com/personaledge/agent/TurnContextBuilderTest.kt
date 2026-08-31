@@ -36,6 +36,31 @@ class TurnContextBuilderTest {
     }
 
     @Test
+    fun `attachment only user row keeps an app owned content free label in context`() {
+        val built = TurnContextBuilder.build(
+            prompt = "방금 첨부한 것을 설명해 줘",
+            device = device(),
+            conversation = ConversationContext(
+                conversationId = "conversation-media",
+                summary = null,
+                recentMessages = listOf(
+                    message(
+                        ordinal = 1,
+                        role = MessageRole.USER,
+                        text = "",
+                        attachmentSummary = "IMAGE:CAMERA",
+                    ),
+                    message(2, MessageRole.ASSISTANT, "사진을 확인했습니다."),
+                ),
+            ),
+            maximumBytes = 2_048,
+        )
+
+        assertTrue(built.contains("사용자: \"（첨부: 사진 1장(촬영)）\""))
+        assertFalse(built.contains("IMAGE:CAMERA"))
+    }
+
+    @Test
     fun `tight budget keeps newest complete messages and never exceeds utf8 limit`() {
         val oldestMarker = "OLDEST-MARKER"
         val newestMarker = "NEWEST-MARKER"
@@ -149,12 +174,17 @@ class TurnContextBuilderTest {
             ),
         )
 
-        val focused = TurnContextBuilder.build(
+        val focusedResult = TurnContextBuilder.buildResult(
             prompt = "검색결과를 정리해서 요약해줘",
             device = device(),
             conversation = conversation,
             maximumBytes = 2_048,
+            requiredPriorAnswer = PriorWebResultReference(
+                conversationId = conversation.conversationId,
+                assistantMessageOrdinal = 3,
+            ),
         )
+        val focused = focusedResult.text
         val ordinary = TurnContextBuilder.build(
             prompt = "다른 질문이야",
             device = device(),
@@ -164,10 +194,71 @@ class TurnContextBuilderTest {
 
         assertTrue(focused.contains(sourceAtEnd))
         assertTrue(focused.contains("핵심 답변"))
+        assertTrue(focusedResult.requiredPriorAnswerIncluded)
         assertTrue(focused.contains("[신뢰 검색 후속 정책]"))
         assertFalse(ordinary.contains(sourceAtEnd))
         assertTrue(focused.endsWith("[현재 사용자 요청]\n검색결과를 정리해서 요약해줘"))
         assertTrue(focused.toByteArray(Charsets.UTF_8).size <= 2_048)
+    }
+
+    @Test
+    fun `reports when the exact guarded web answer is omitted by the byte budget`() {
+        val prompt = "검색결과를 정리해서 요약해줘"
+        val answerMarker = "REQUIRED-WEB-ANSWER"
+        val conversation = ConversationContext(
+            conversationId = "conversation-budgeted-search",
+            summary = null,
+            recentMessages = listOf(
+                message(1, MessageRole.USER, "공개 웹 조사를 해줘"),
+                message(2, MessageRole.TOOL_RECEIPT, "웹 검색을 완료했습니다."),
+                message(3, MessageRole.ASSISTANT, "$answerMarker ${"가".repeat(200)}"),
+            ),
+        )
+        val required = PriorWebResultReference(
+            conversationId = conversation.conversationId,
+            assistantMessageOrdinal = 3,
+        )
+        val mandatoryOnly = TurnContextBuilder.buildResult(
+            prompt = prompt,
+            device = device(),
+            conversation = null,
+            maximumBytes = 2_048,
+            requiredPriorAnswer = required,
+        )
+
+        val constrained = TurnContextBuilder.buildResult(
+            prompt = prompt,
+            device = device(),
+            conversation = conversation,
+            maximumBytes = mandatoryOnly.text.toByteArray(Charsets.UTF_8).size + 32,
+            requiredPriorAnswer = required,
+        )
+
+        assertTrue(constrained.deviceContextIncluded)
+        assertFalse(constrained.requiredPriorAnswerIncluded)
+        assertFalse(constrained.text.contains(answerMarker))
+    }
+
+    @Test
+    fun `does not report a guarded answer from a different conversation`() {
+        val result = TurnContextBuilder.buildResult(
+            prompt = "검색 결과를 요약해줘",
+            device = device(),
+            conversation = ConversationContext(
+                conversationId = "visible-conversation",
+                summary = null,
+                recentMessages = listOf(
+                    message(7, MessageRole.ASSISTANT, "다른 대화와 섞으면 안 되는 답변"),
+                ),
+            ),
+            maximumBytes = 2_048,
+            requiredPriorAnswer = PriorWebResultReference(
+                conversationId = "different-conversation",
+                assistantMessageOrdinal = 7,
+            ),
+        )
+
+        assertFalse(result.requiredPriorAnswerIncluded)
     }
 
     @Test
@@ -391,11 +482,17 @@ class TurnContextBuilderTest {
         calendarLabel = calendarLabel,
     )
 
-    private fun message(ordinal: Long, role: MessageRole, text: String) = StoredMessage(
+    private fun message(
+        ordinal: Long,
+        role: MessageRole,
+        text: String,
+        attachmentSummary: String? = null,
+    ) = StoredMessage(
         id = "message-$ordinal",
         ordinal = ordinal,
         role = role,
         text = text,
         createdAtEpochMillis = ordinal,
+        attachmentSummary = attachmentSummary,
     )
 }

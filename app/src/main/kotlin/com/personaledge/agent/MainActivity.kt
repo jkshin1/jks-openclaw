@@ -2,6 +2,7 @@ package com.personaledge.agent
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Bundle
 import android.os.Build
@@ -10,9 +11,12 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -106,6 +110,54 @@ class MainActivity : ComponentActivity() {
         viewModel.onReminderNotificationPermissionResult()
     }
 
+    /**
+     * The system photo picker.
+     *
+     * `PickVisualMedia` needs no storage permission at all: the picker runs out of process and
+     * hands back a grant for the one item the owner chose, so the app never gains the ability to
+     * read the gallery.
+     */
+    private val pickImage = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        viewModel.onImageSelected(uri)
+    }
+
+    /**
+     * The camera app.
+     *
+     * `TakePicture` only requires the CAMERA permission when the app declares it in the manifest.
+     * This one deliberately does not, so photographing something never triggers a permission
+     * prompt and the app never holds camera access of its own.
+     */
+    private val takePicture = registerForActivityResult(
+        ActivityResultContracts.TakePicture(),
+    ) { success ->
+        viewModel.onCameraCaptured(success)
+    }
+
+    /** Dictation asks on first use and resumes into the editable-text destination. */
+    private val requestDictationMicrophonePermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            viewModel.startVoiceRecording(dictation = true)
+        } else {
+            viewModel.onMicrophonePermissionDenied()
+        }
+    }
+
+    /** Audio attachment uses the same permission but keeps the recording as model input. */
+    private val requestAttachmentMicrophonePermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            viewModel.startVoiceRecording(dictation = false)
+        } else {
+            viewModel.onMicrophonePermissionDenied()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // The transcript scrolls under the status bar and the composer sits on the gesture bar, so
         // the window draws edge to edge and the insets are consumed by the screen itself.
@@ -189,6 +241,7 @@ class MainActivity : ComponentActivity() {
                     onSetWebSearchEnabled = viewModel::setWebSearchEnabled,
                     onStoreDefaultOrigin = viewModel::storeDefaultOrigin,
                     onDeleteDefaultOrigin = viewModel::deleteDefaultOrigin,
+                    onSetMediaInputEnabled = viewModel::setMediaInputEnabled,
                     onSetMemoryEnabled = viewModel::setMemoryEnabled,
                     onStoreMemory = viewModel::storeMemory,
                     onReplaceMemory = viewModel::replaceMemory,
@@ -248,10 +301,52 @@ class MainActivity : ComponentActivity() {
                     onRefreshSetup = ::refreshSetupState,
                     onSend = viewModel::sendPrompt,
                     onCancel = viewModel::cancelTurn,
+                    onTakePhoto = {
+                        // The staging URI is created only after the ViewModel accepts the request,
+                        // so a refused capture never leaves a file behind.
+                        viewModel.requestCameraCapture { uri -> if (uri != null) takePicture.launch(uri) }
+                    },
+                    onPickImage = {
+                        pickImage.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                        )
+                    },
+                    onStartDictation = {
+                        startVoiceRecordingOrRequestPermission(
+                            dictation = true,
+                            launcher = requestDictationMicrophonePermission,
+                        )
+                    },
+                    onStartVoiceAttachment = {
+                        startVoiceRecordingOrRequestPermission(
+                            dictation = false,
+                            launcher = requestAttachmentMicrophonePermission,
+                        )
+                    },
+                    onStopRecording = viewModel::stopVoiceRecording,
+                    onCancelRecording = viewModel::cancelVoiceRecording,
+                    onRemoveAttachment = viewModel::removeAttachment,
+                    onDismissMediaNotice = viewModel::dismissMediaNotice,
                     onTurnRecovery = viewModel::resolveTurnRecovery,
                     onConfirmation = viewModel::resolveConfirmation,
                 )
             }
+        }
+    }
+
+    private fun startVoiceRecordingOrRequestPermission(
+        dictation: Boolean,
+        launcher: ActivityResultLauncher<String>,
+    ) {
+        if (
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            viewModel.startVoiceRecording(dictation = dictation)
+        } else {
+            launcher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 

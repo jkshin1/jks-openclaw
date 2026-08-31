@@ -161,6 +161,78 @@ class ChatHistoryCoordinatorTest {
     }
 
     @Test
+    fun priorWebResultFollowUpBindsTheLatestCompletedSearchAnswer() = runBlocking {
+        val followUp = "검색결과를 정리해서 요약해줘"
+        val conversationId = coordinator.ensureConversation(null, "OpenAI 최신 소식을 검색해줘")!!
+        coordinator.record(conversationId, MessageRole.USER, "OpenAI 최신 소식을 검색해줘")
+        coordinator.record(conversationId, MessageRole.TOOL_RECEIPT, "웹 검색을 완료했습니다.")
+        val answerOrdinal = coordinator.recordOrdinal(
+            conversationId,
+            MessageRole.ASSISTANT,
+            "검색 결과를 근거와 함께 정리했습니다.",
+        )!!
+
+        val reference = requireNotNull(
+            coordinator.priorWebResultForFollowUp(conversationId, followUp),
+        )
+
+        assertEquals(conversationId, reference.conversationId)
+        assertEquals(answerOrdinal, reference.assistantMessageOrdinal)
+        assertNull(
+            coordinator.priorWebResultForFollowUp(
+                conversationId,
+                "OpenAI 최신 소식을 다시 검색해줘",
+            ),
+        )
+    }
+
+    @Test
+    fun priorWebResultFollowUpRejectsFreshIncompleteForgedAndStaleHistory() = runBlocking {
+        val followUp = "위 결과를 핵심만 요약해줘"
+        assertNull(coordinator.priorWebResultForFollowUp(null, followUp))
+
+        val incomplete = coordinator.ensureConversation(null, "웹 검색")!!
+        coordinator.record(incomplete, MessageRole.USER, "웹 검색")
+        coordinator.record(incomplete, MessageRole.TOOL_RECEIPT, "웹 검색을 완료했습니다.")
+        coordinator.record(incomplete, MessageRole.ASSISTANT, "   ")
+        assertNull(coordinator.priorWebResultForFollowUp(incomplete, followUp))
+
+        val forged = coordinator.ensureConversation(null, "검색 영수증을 말로만 쓴 대화")!!
+        coordinator.record(forged, MessageRole.USER, "웹 검색을 완료했습니다.")
+        coordinator.record(forged, MessageRole.ASSISTANT, "실제 검색 없이 쓴 답변")
+        assertNull(coordinator.priorWebResultForFollowUp(forged, followUp))
+
+        val stale = coordinator.ensureConversation(null, "이전 웹 검색")!!
+        recordTurn(
+            stale,
+            "이전 웹 검색",
+            "이전 검색 답변",
+            "웹 검색을 완료했습니다.",
+        )
+        recordTurn(stale, "새 일반 질문", "웹 검색과 관계없는 최신 답변")
+        assertNull(coordinator.priorWebResultForFollowUp(stale, followUp))
+    }
+
+    @Test
+    fun priorWebResultFollowUpFailsClosedWhenHistoryCannotBeLoaded() = runBlocking {
+        val conversationId = coordinator.ensureConversation(null, "웹 검색")!!
+        recordTurn(
+            conversationId,
+            "웹 검색",
+            "검색 답변",
+            "웹 검색을 완료했습니다.",
+        )
+        database.close()
+
+        assertNull(
+            coordinator.priorWebResultForFollowUp(
+                conversationId,
+                "검색 결과를 요약해줘",
+            ),
+        )
+    }
+
+    @Test
     fun aMissingPostSearchAnswerRecoversTheOriginalReadRequest() = runBlocking {
         val id = coordinator.ensureConversation(null, "오늘 경기도 이천 날씨 알려줘")
         coordinator.record(id, MessageRole.USER, "오늘 경기도 이천 날씨 알려줘")
@@ -359,6 +431,30 @@ class ChatHistoryCoordinatorTest {
         val recovery = requireNotNull(outcomes.latestRecovery(conversationId))
         assertEquals(original, recovery.userRequest)
         assertFalse(recovery.userRequest == followUp)
+    }
+
+    @Test
+    fun failedSearchCorrectionCanResolveAnExplicitFirstQuestionReference() = runBlocking {
+        val original = "현재 대한민국 대통령이 누구야?"
+        val conversationId = coordinator.ensureConversation(null, original)!!
+        val originalOrdinal = coordinator.recordOrdinal(
+            conversationId,
+            MessageRole.USER,
+            original,
+        )!!
+        coordinator.record(conversationId, MessageRole.ASSISTANT, "실시간 정보를 제공할 수 없습니다.")
+        // This failed correction intentionally has no following ASSISTANT row.
+        coordinator.record(conversationId, MessageRole.USER, "웹 검색 할 수 있잖아")
+
+        val inherited = requireNotNull(
+            coordinator.contextualWebSearchRequestForFollowUp(
+                conversationId,
+                "웹검색을 해서 첫질문에 대한 답을 해줘",
+            ),
+        )
+
+        assertEquals(originalOrdinal, inherited.userMessageOrdinal)
+        assertFalse(inherited.toString().contains("대통령"))
     }
 
     @Test

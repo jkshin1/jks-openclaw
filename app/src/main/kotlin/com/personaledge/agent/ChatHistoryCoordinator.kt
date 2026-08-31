@@ -1,6 +1,7 @@
 package com.personaledge.agent
 
 import com.personaledge.core.agent.AutomaticWebSearchPolicy
+import com.personaledge.core.agent.PriorWebResultFollowUpPolicy
 import com.personaledge.core.agent.TrustedWebSearchRequest
 import com.personaledge.core.agent.TurnOutputBudgetPolicy
 import com.personaledge.core.data.ConversationEntity
@@ -56,6 +57,18 @@ internal data class ContextualWebSearchRequest(
         "ContextualWebSearchRequest(userMessageOrdinal=$userMessageOrdinal, " +
             "inheritLongFormRequest=$inheritLongFormRequest, query=<redacted>)"
 }
+
+/**
+ * Content-free identity of the stored answer a prior-web-result transformation is allowed to use.
+ *
+ * The answer text stays in Room and reaches the model only through [TurnContextBuilder]. Binding
+ * the conversation and ordinal here prevents a same-looking answer from another thread, a summary,
+ * or an older non-web turn from satisfying the follow-up guard.
+ */
+internal data class PriorWebResultReference(
+    val conversationId: String,
+    val assistantMessageOrdinal: Long,
+)
 
 /**
  * The only place chat transcripts reach storage.
@@ -116,9 +129,15 @@ class ChatHistoryCoordinator(
         conversationId: String?,
         role: MessageRole,
         text: String,
+        attachmentSummary: String? = null,
     ): Long? {
-        if (conversationId == null || text.isBlank()) return null
-        return runCatching { repository.appendMessage(conversationId, role, text) }.getOrNull()
+        if (conversationId == null) return null
+        // An attachment can be the whole message: a photo sent with no typed line still has to be
+        // recorded, or the transcript would lose the turn the answer refers to.
+        if (text.isBlank() && attachmentSummary == null) return null
+        return runCatching {
+            repository.appendMessage(conversationId, role, text, attachmentSummary)
+        }.getOrNull()
     }
 
     /** One Room transaction for the transcript phase, app receipt, and closed Tool metadata. */
@@ -307,9 +326,12 @@ class ChatHistoryCoordinator(
     }
 
     /**
-     * Resolves a subjectless web instruction from only the immediately preceding completed turn's
-     * USER row. Assistant text, summaries, memories, Tool results, and other conversations are never
-     * candidate query sources.
+     * Resolves a contextual web instruction from bounded USER rows in this conversation only.
+     *
+     * Ordinarily the source is the latest completed USER/ASSISTANT pair. A failed correction can
+     * leave a trailing USER row, so that row may be skipped only when the core policy classifies it
+     * as a closed search correction. Assistant text, summaries, memories, and Tool results are
+     * never candidate query sources, and an unrelated USER row stops the walk.
      */
     internal suspend fun contextualWebSearchRequestForFollowUp(
         conversationId: String?,
@@ -321,18 +343,84 @@ class ChatHistoryCoordinator(
                 conversationId,
                 CONTEXTUAL_SEARCH_MESSAGE_WINDOW,
             )
-            if (messages.lastOrNull()?.role != MessageRole.ASSISTANT) return@runCatching null
-            val previousUser = messages.lastOrNull { message -> message.role == MessageRole.USER }
-                ?: return@runCatching null
-            val trusted = AutomaticWebSearchPolicy.contextualRequestOrNull(
-                followUp = followUp,
-                previousUserRequest = previousUser.text,
-            ) ?: return@runCatching null
-            ContextualWebSearchRequest(
+            val last = messages.lastOrNull() ?: return@runCatching null
+            if (last.role == MessageRole.USER &&
+                !AutomaticWebSearchPolicy.isContextualSearchCorrection(last.text)
+            ) {
+                return@runCatching null
+            }
+            messages.asReversed()
+                .asSequence()
+                .filter { message -> message.role == MessageRole.USER }
+                .take(MAX_CONTEXTUAL_USER_ROWS)
+                .forEach { previousUser ->
+                    val trusted = AutomaticWebSearchPolicy.contextualRequestOrNull(
+                        followUp = followUp,
+                        previousUserRequest = previousUser.text,
+                    )
+                    if (trusted != null) {
+                        val completed = messages.any { message ->
+                            message.ordinal > previousUser.ordinal &&
+                                message.role == MessageRole.ASSISTANT
+                        }
+                        if (!completed) return@runCatching null
+                        return@runCatching ContextualWebSearchRequest(
+                            conversationId = conversationId,
+                            userMessageOrdinal = previousUser.ordinal,
+                            trustedRequest = trusted,
+                            inheritLongFormRequest =
+                                TurnOutputBudgetPolicy.requestsLongForm(previousUser.text),
+                        )
+                    }
+                    if (!AutomaticWebSearchPolicy.isContextualSearchCorrection(previousUser.text)) {
+                        return@runCatching null
+                    }
+                }
+            null
+        }.getOrNull()
+    }
+
+    /**
+     * Resolves the exact answer for a request that transforms the preceding web-search result.
+     *
+     * Only the latest stored turn can qualify. It must end in a nonblank ASSISTANT row and contain
+     * this app's exact completed `web_search` receipt after that turn's latest USER row and before
+     * the answer. The bounded scan fails closed on a fresh thread, storage failure, incomplete
+     * search, or a newer non-web turn.
+     */
+    internal suspend fun priorWebResultForFollowUp(
+        conversationId: String?,
+        followUp: String,
+    ): PriorWebResultReference? {
+        if (
+            conversationId == null ||
+            !PriorWebResultFollowUpPolicy.matches(followUp)
+        ) {
+            return null
+        }
+        return runCatching {
+            val messages = repository.listMessages(
+                conversationId,
+                PRIOR_WEB_RESULT_MESSAGE_WINDOW,
+            )
+            val answer = messages.lastOrNull()?.takeIf { message ->
+                message.role == MessageRole.ASSISTANT && message.text.isNotBlank()
+            } ?: return@runCatching null
+            val latestUserIndex = messages.indexOfLast { message ->
+                message.role == MessageRole.USER
+            }
+            if (latestUserIndex < 0) return@runCatching null
+            val hasCompletedWebSearch = messages
+                .subList(latestUserIndex + 1, messages.size)
+                .any { message ->
+                    message.ordinal < answer.ordinal &&
+                        message.role == MessageRole.TOOL_RECEIPT &&
+                        message.text == WEB_SEARCH_READ_RECEIPT
+                }
+            if (!hasCompletedWebSearch) return@runCatching null
+            PriorWebResultReference(
                 conversationId = conversationId,
-                userMessageOrdinal = previousUser.ordinal,
-                trustedRequest = trusted,
-                inheritLongFormRequest = TurnOutputBudgetPolicy.requestsLongForm(previousUser.text),
+                assistantMessageOrdinal = answer.ordinal,
             )
         }.getOrNull()
     }
@@ -423,10 +511,13 @@ class ChatHistoryCoordinator(
         const val MAX_RECOVERED_REQUEST_CHARACTERS = 500
         const val RECOVERY_MESSAGE_WINDOW = 12
         const val CONTEXTUAL_SEARCH_MESSAGE_WINDOW = 8
+        const val MAX_CONTEXTUAL_USER_ROWS = 3
+        const val PRIOR_WEB_RESULT_MESSAGE_WINDOW = 12
         const val RECENT_WEATHER_CONTEXT_MESSAGES = 6
+        const val WEB_SEARCH_READ_RECEIPT = "웹 검색을 완료했습니다."
         const val WEATHER_READ_RECEIPT = "현재 및 오늘 날씨를 확인했습니다."
         val RECOVERABLE_READ_RECEIPTS = setOf(
-            "웹 검색을 완료했습니다.",
+            WEB_SEARCH_READ_RECEIPT,
             WEATHER_READ_RECEIPT,
             "캘린더에서 일정을 읽었습니다.",
             "다음 알람 시각을 확인했습니다.",
@@ -520,4 +611,9 @@ private fun MessageEntity.toChatEntry() = ChatEntry(
         MessageRole.TOOL_RECEIPT -> ChatRole.TOOL
     },
     text = text,
+    // Only this app writes the column, and only these codes render; anything else shows nothing
+    // rather than putting an unrecognized stored string in front of the owner.
+    attachmentLabel = MessageAttachmentSummary
+        .decodeOrNull(attachmentSummary)
+        ?.let(MediaAttachmentPresentation::transcriptLabel),
 )

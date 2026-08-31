@@ -774,6 +774,86 @@ class LiteRtLlmRuntimeTest {
         }
     }
 
+    @Test
+    fun `an engine loads only the modalities initialization selected`() = runBlocking {
+        val factory = FakeEngineFactory(FakeEngine { FakeConversation(ArrayDeque()) })
+        val runtime = createRuntime(factory = factory, lease = FakeLease())
+        val selectedModalities = TurnMediaKind.entries
+            .firstOrNull(PinnedModelManifest.value::supportsModality)
+            ?.let(::setOf)
+            .orEmpty()
+
+        try {
+            runtime.initialize(verifiedModel(), mediaModalities = selectedModalities)
+
+            // Loading an encoder is not free: on the owner's device it costs the GPU backend for
+            // the whole engine, so it must receive exactly the supported subset selected at
+            // initialization. The text-only Qwen lab correctly selects none.
+            assertEquals(listOf(selectedModalities), factory.requestedModalities)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `initialization never loads a modality the manifest does not declare`() = runBlocking {
+        val factory = FakeEngineFactory(FakeEngine { FakeConversation(ArrayDeque()) })
+        val runtime = createRuntime(factory = factory, lease = FakeLease())
+        val manifest = PinnedModelManifest.value
+
+        try {
+            runtime.initialize(
+                verifiedModel(),
+                mediaModalities = setOf(TurnMediaKind.IMAGE, TurnMediaKind.AUDIO),
+            )
+
+            val requested = factory.requestedModalities.single()
+            assertEquals(
+                TurnMediaKind.entries.filterTo(linkedSetOf(), manifest::supportsModality),
+                requested,
+            )
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `a turn cannot prefill a modality the engine never loaded`() = runBlocking {
+        val runtime = createRuntime(
+            factory = FakeEngineFactory(FakeEngine { FakeConversation(ArrayDeque()) }),
+            lease = FakeLease(),
+        )
+
+        try {
+            // Media enabled after the runtime started has no executor behind it. Failing here is
+            // what keeps it from failing deep in native after the payload was already decoded.
+            runtime.initialize(verifiedModel(), mediaModalities = emptySet())
+            val turnId = TurnId("media-without-encoder")
+            val image = requireNotNull(
+                TurnMediaAttachment.imageOrNull(
+                    ByteArray(1_024).also { bytes ->
+                        bytes[0] = 0xFF.toByte()
+                        bytes[1] = 0xD8.toByte()
+                        bytes[2] = 0xFF.toByte()
+                    },
+                ),
+            )
+
+            assertEquals(
+                listOf(ModelEvent.Failure(turnId, LlmFailureCode.MEDIA_UNSUPPORTED)),
+                runtime.streamUserTurn(
+                    turnId,
+                    "사진 설명 요청",
+                    256,
+                    LlmTurnToolScope.none(),
+                    listOf(image),
+                ).toList(),
+            )
+        } finally {
+            runtime.close()
+        }
+    }
+
     private fun verifiedModel(): VerifiedInstalledModel = VerifiedInstalledModel(
         file = File("opaque-test-model.litertlm"),
         inode = 1L,
@@ -806,6 +886,7 @@ class LiteRtLlmRuntimeTest {
         private val beforeCreate: (InferenceBackend) -> Unit = {},
     ) : RuntimeEngineFactory {
         val attemptedBackends = mutableListOf<InferenceBackend>()
+        val requestedModalities = mutableListOf<Set<TurnMediaKind>>()
 
         override fun create(
             modelPath: String,
@@ -813,11 +894,14 @@ class LiteRtLlmRuntimeTest {
             manifest: ModelManifest,
             backend: InferenceBackend,
             cpuThreadCount: Int?,
+            mediaModalities: Set<TurnMediaKind>,
         ): RuntimeEngine {
             attemptedBackends += backend
+            requestedModalities += mediaModalities
             beforeCreate(backend)
             if (backend in failingBackends) throw RuntimeDriverException()
             engine.selectedBackend = backend
+            engine.loadedModalities = mediaModalities
             return engine
         }
     }
@@ -828,7 +912,11 @@ class LiteRtLlmRuntimeTest {
         override val backend: InferenceBackend
             get() = selectedBackend
 
+        override val mediaModalities: Set<TurnMediaKind>
+            get() = loadedModalities
+
         var selectedBackend = InferenceBackend.CPU
+        var loadedModalities: Set<TurnMediaKind> = emptySet()
         var createConversationCount = 0
         val outputTokenLimits = mutableListOf<Int>()
         val toolNameSnapshots = mutableListOf<Set<String>>()

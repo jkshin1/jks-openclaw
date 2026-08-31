@@ -14,6 +14,7 @@ import java.time.Instant
 
 @RunWith(AndroidJUnit4::class)
 class UserDataTransferRepositoryTest {
+    private val passphrase = "fixture transfer passphrase"
     private lateinit var source: PersonalEdgeDatabase
     private lateinit var destination: PersonalEdgeDatabase
 
@@ -70,6 +71,45 @@ class UserDataTransferRepositoryTest {
         assertEquals(1, second.skippedRows)
         assertEquals("사용자는 민트색을 좋아한다.", destination.memoryDao().listRecent(10).single().content)
         assertEquals(0L, destination.capturedNotificationDao().count())
+    }
+
+    @Test
+    fun contentFreeAttachmentSummarySurvivesSnapshotArchiveAndImport() = runBlocking {
+        val conversation = ConversationEntity("media-conversation", "미디어 대화", 1, 2)
+        source.conversationDao().insert(conversation)
+        source.messageDao().insert(
+            MessageEntity(
+                id = "media-message",
+                conversationId = conversation.id,
+                ordinal = 1,
+                role = MessageRole.USER,
+                text = "",
+                createdAtEpochMillis = 2,
+                attachmentSummary = "IMAGE:CAMERA",
+            ),
+        )
+        val selection = UserDataSelection(
+            conversations = true,
+            memories = false,
+            reminders = false,
+            proposals = false,
+        )
+        val snapshot = UserDataTransferRepository(source).snapshot(
+            selection = selection,
+            calendarRemapRequired = false,
+            defaultCalendarLabelHint = null,
+        )
+        val archive = EncryptedUserDataArchive.encrypt(snapshot, passphrase)
+        val decoded = EncryptedUserDataArchive.decrypt(archive, passphrase)
+            as UserDataArchiveReadResult.Ready
+
+        val result = UserDataTransferRepository(destination).import(decoded.snapshot)
+
+        assertEquals(1, result.importedMessages)
+        assertEquals(
+            "IMAGE:CAMERA",
+            destination.messageDao().listAllForTransfer().single().attachmentSummary,
+        )
     }
 
     @Test

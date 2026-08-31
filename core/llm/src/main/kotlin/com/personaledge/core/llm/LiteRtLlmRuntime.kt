@@ -71,6 +71,7 @@ class LiteRtLlmRuntime internal constructor(
         model: VerifiedInstalledModel,
         backend: InferenceBackend,
         tools: List<LlmToolDefinition>,
+        mediaModalities: Set<TurnMediaKind>,
     ) {
         if (closeRequested.get()) fail(LlmFailureCode.CLOSED)
         withContext(dispatcher) {
@@ -91,6 +92,11 @@ class LiteRtLlmRuntime internal constructor(
                 ?: failInitialization(LlmFailureCode.INVALID_TOOL_DEFINITION)
             if (model.manifest != PinnedModelManifest.value) {
                 failInitialization(LlmFailureCode.MODEL_REJECTED)
+            }
+            // A modality the verified manifest does not declare can never be loaded, whatever the
+            // caller asks for.
+            val enabledModalities = mediaModalities.filterTo(linkedSetOf()) { kind ->
+                model.manifest.supportsModality(kind)
             }
 
             _state.value = LlmState.Loading
@@ -130,6 +136,7 @@ class LiteRtLlmRuntime internal constructor(
                             manifest = model.manifest,
                             backend = candidate,
                             cpuThreadCount = cpuThreadCount,
+                            mediaModalities = enabledModalities,
                         )
                     } catch (_: RuntimeDriverException) {
                         null
@@ -218,13 +225,14 @@ class LiteRtLlmRuntime internal constructor(
     override fun streamUserTurn(
         turnId: TurnId,
         prompt: String,
-    ): Flow<ModelEvent> = streamUserTurnInternal(turnId, prompt, null, null)
+    ): Flow<ModelEvent> = streamUserTurnInternal(turnId, prompt, null, null, emptyList())
 
     override fun streamUserTurn(
         turnId: TurnId,
         prompt: String,
         maxOutputTokens: Int,
-    ): Flow<ModelEvent> = streamUserTurnInternal(turnId, prompt, maxOutputTokens, null)
+    ): Flow<ModelEvent> =
+        streamUserTurnInternal(turnId, prompt, maxOutputTokens, null, emptyList())
 
     override fun streamUserTurn(
         turnId: TurnId,
@@ -236,6 +244,21 @@ class LiteRtLlmRuntime internal constructor(
         prompt = prompt,
         requestedMaxOutputTokens = maxOutputTokens,
         requestedToolNames = toolScope.toolNames,
+        media = emptyList(),
+    )
+
+    override fun streamUserTurn(
+        turnId: TurnId,
+        prompt: String,
+        maxOutputTokens: Int,
+        toolScope: LlmTurnToolScope,
+        media: List<TurnMediaAttachment>,
+    ): Flow<ModelEvent> = streamUserTurnInternal(
+        turnId = turnId,
+        prompt = prompt,
+        requestedMaxOutputTokens = maxOutputTokens,
+        requestedToolNames = toolScope.toolNames,
+        media = media,
     )
 
     private fun streamUserTurnInternal(
@@ -243,6 +266,7 @@ class LiteRtLlmRuntime internal constructor(
         prompt: String,
         requestedMaxOutputTokens: Int?,
         requestedToolNames: Set<String>?,
+        media: List<TurnMediaAttachment>,
     ): Flow<ModelEvent> = channelFlow {
         launch(dispatcher) {
             val emit: suspend (ModelEvent) -> Unit = { event -> send(event) }
@@ -255,6 +279,16 @@ class LiteRtLlmRuntime internal constructor(
                 emit(ModelEvent.Failure(turnId, LlmFailureCode.INVALID_PROMPT))
                 return@launch
             }
+            val mediaSnapshot = try {
+                media.toList()
+            } catch (_: Exception) {
+                emit(ModelEvent.Failure(turnId, LlmFailureCode.INVALID_MEDIA))
+                return@launch
+            }
+            if (!TurnMediaBudget.allows(mediaSnapshot)) {
+                emit(ModelEvent.Failure(turnId, LlmFailureCode.INVALID_MEDIA))
+                return@launch
+            }
             if (pendingTurn != null) {
                 emit(ModelEvent.Failure(turnId, LlmFailureCode.RUNTIME_BUSY))
                 return@launch
@@ -265,6 +299,17 @@ class LiteRtLlmRuntime internal constructor(
             }
             val current = resources ?: run {
                 emit(ModelEvent.Failure(turnId, LlmFailureCode.NOT_INITIALIZED))
+                return@launch
+            }
+            if (!current.manifest.supportsMedia(mediaSnapshot)) {
+                emit(ModelEvent.Failure(turnId, LlmFailureCode.MEDIA_UNSUPPORTED))
+                return@launch
+            }
+            // The engine loads only the encoders initialization asked for, so a modality enabled
+            // after the runtime started has no executor and must fail closed here rather than
+            // deep in native after the payload has already been decoded.
+            if (mediaSnapshot.any { attachment -> attachment.kind !in current.engine.mediaModalities }) {
+                emit(ModelEvent.Failure(turnId, LlmFailureCode.MEDIA_UNSUPPORTED))
                 return@launch
             }
             val outputTokenLimit = requestedMaxOutputTokens ?: current.manifest.maxOutputTokens
@@ -308,10 +353,27 @@ class LiteRtLlmRuntime internal constructor(
             current.hasUserTurnHistory = true
             runNativeTurn(
                 turnId = turnId,
-                input = RuntimeTurnInput.User(prompt),
+                input = if (mediaSnapshot.isEmpty()) {
+                    RuntimeTurnInput.User(prompt)
+                } else {
+                    RuntimeTurnInput.UserWithMedia(prompt, mediaSnapshot)
+                },
                 emit = emit,
             )
         }.join()
+    }
+
+    override suspend fun contextTokenCount(): Int? {
+        if (closeRequested.get()) return null
+        return withContext(dispatcher) {
+            val current = resources ?: return@withContext null
+            try {
+                current.conversation.getTokenCount().takeIf { count -> count >= 0 }
+            } catch (_: Exception) {
+                // An unreadable count is missing evidence, never a turn failure.
+                null
+            }
+        }
     }
 
     override fun streamToolResponses(
@@ -840,11 +902,15 @@ internal fun interface RuntimeEngineFactory {
         manifest: ModelManifest,
         backend: InferenceBackend,
         cpuThreadCount: Int?,
+        mediaModalities: Set<TurnMediaKind>,
     ): RuntimeEngine
 }
 
 internal interface RuntimeEngine : AutoCloseable {
     val backend: InferenceBackend
+
+    /** Modalities whose encoders this engine actually loaded. */
+    val mediaModalities: Set<TurnMediaKind>
 
     fun createConversation(
         tools: List<LlmToolDefinition>,
@@ -863,6 +929,15 @@ internal interface RuntimeConversation : AutoCloseable {
 internal sealed interface RuntimeTurnInput {
     data class User(val prompt: String) : RuntimeTurnInput {
         override fun toString(): String = "RuntimeTurnInput.User(prompt=<redacted>)"
+    }
+
+    /** A user turn whose prefill also carries validated media. Payloads never render. */
+    data class UserWithMedia(
+        val prompt: String,
+        val media: List<TurnMediaAttachment>,
+    ) : RuntimeTurnInput {
+        override fun toString(): String =
+            "RuntimeTurnInput.UserWithMedia(prompt=<redacted>, mediaCount=${media.size})"
     }
 
     data class ToolResponses(val responses: List<RuntimeToolResponse>) : RuntimeTurnInput {

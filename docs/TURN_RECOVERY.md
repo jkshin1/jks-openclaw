@@ -4,7 +4,7 @@ Personal Edge keeps content-free recovery metadata for each persisted user turn.
 existing user message by conversation ID and ordinal; it never duplicates the prompt, Tool
 arguments/result, assistant text, provider data, or exception text.
 
-The current app database is Room schema 10. Recovery uses `turn_outcomes`, the ordered
+The current app database is Room schema 11. Recovery uses `turn_outcomes`, the ordered
 `turn_read_executions` relation, and the transcript-independent `unresolved_side_effects` table.
 
 Schema 10 adds nullable `recovery_source_user_message_ordinal`. Most turns leave it null. A bounded

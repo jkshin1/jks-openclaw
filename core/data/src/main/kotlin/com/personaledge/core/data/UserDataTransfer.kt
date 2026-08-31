@@ -347,6 +347,9 @@ internal object UserDataSnapshotValidator {
         for (value in messages) {
             if (!value.id.isSafeId() || value.conversationId !in conversationsById ||
                 value.ordinal !in 1 until Long.MAX_VALUE || !value.text.isSafeText(64_000) ||
+                (value.attachmentSummary != null &&
+                    (value.role != MessageRole.USER ||
+                        !value.attachmentSummary.isSafeAttachmentSummary())) ||
                 value.createdAtEpochMillis < 0 || !messageIds.add(value.id)
             ) {
                 return false
@@ -456,12 +459,31 @@ internal object UserDataSnapshotValidator {
         character in '0'..'9' || character in 'a'..'f'
     }
 
+    private fun String.isSafeAttachmentSummary(): Boolean {
+        if (!isSafeText(MAX_ATTACHMENT_SUMMARY_CODE_POINTS)) return false
+        val parts = split(':')
+        if (parts.size == 2) {
+            return parts[0] == "IMAGE" && parts[1] in IMAGE_ATTACHMENT_SOURCES
+        }
+        if (parts.size != 3 || parts[0] != "AUDIO" || parts[1] != AUDIO_ATTACHMENT_SOURCE) {
+            return false
+        }
+        val seconds = parts[2].toIntOrNull() ?: return false
+        return seconds in MIN_AUDIO_SECONDS..MAX_AUDIO_SECONDS && parts[2] == seconds.toString()
+    }
+
     private val SAFE_ID = Regex("[A-Za-z0-9._:-]{1,160}")
     private val ALLOWED_TEXT_CONTROLS = setOf('\t'.code, '\n'.code, '\r'.code)
+    private val IMAGE_ATTACHMENT_SOURCES = setOf("CAMERA", "GALLERY")
+    private const val AUDIO_ATTACHMENT_SOURCE = "VOICE"
+    private const val MAX_ATTACHMENT_SUMMARY_CODE_POINTS = 32
+    private const val MIN_AUDIO_SECONDS = 0
+    private const val MAX_AUDIO_SECONDS = 3_600
 }
 
 object EncryptedUserDataArchive {
-    const val DATABASE_SCHEMA_VERSION = 5
+    /** Current selected-data transfer schema, independent of the live Room schema version. */
+    const val DATABASE_SCHEMA_VERSION = 6
     const val ARCHIVE_VERSION = 1
     const val MIN_PASSPHRASE_CODE_POINTS = 12
     const val MAX_PASSPHRASE_CODE_POINTS = 128
@@ -544,7 +566,7 @@ object EncryptedUserDataArchive {
         if (parsed.archiveVersion != ARCHIVE_VERSION.toLong()) {
             return UserDataArchiveReadResult.Failed(UserDataArchiveFailure.UNSUPPORTED_VERSION)
         }
-        if (parsed.databaseSchemaVersion != DATABASE_SCHEMA_VERSION.toLong()) {
+        if (parsed.databaseSchemaVersion !in SUPPORTED_DATABASE_SCHEMA_VERSIONS) {
             return UserDataArchiveReadResult.Failed(UserDataArchiveFailure.SCHEMA_MISMATCH)
         }
         val selection = UserDataSelection.fromFlags(parsed.selectionFlags)
@@ -577,7 +599,13 @@ object EncryptedUserDataArchive {
             if (!MessageDigest.isEqual(sha256(plaintext), parsed.hash)) {
                 return UserDataArchiveReadResult.Failed(UserDataArchiveFailure.HASH_MISMATCH)
             }
-            val snapshot = runCatching { UserDataPayloadCodec.decode(plaintext, selection) }
+            val snapshot = runCatching {
+                UserDataPayloadCodec.decode(
+                    payload = plaintext,
+                    selection = selection,
+                    transferSchemaVersion = parsed.databaseSchemaVersion,
+                )
+            }
                 .getOrNull()
                 ?: return UserDataArchiveReadResult.Failed(UserDataArchiveFailure.INVALID_PAYLOAD)
             return UserDataArchiveReadResult.Ready(snapshot)
@@ -693,11 +721,18 @@ object EncryptedUserDataArchive {
         val cipherText: ByteArray,
     )
 
+    private const val LEGACY_DATABASE_SCHEMA_VERSION = 5
+    private val SUPPORTED_DATABASE_SCHEMA_VERSIONS = setOf(
+        LEGACY_DATABASE_SCHEMA_VERSION.toLong(),
+        DATABASE_SCHEMA_VERSION.toLong(),
+    )
     private const val MIN_ARCHIVE_BYTES = ARCHIVE_FIXED_OVERHEAD_BYTES + 1
 }
 
 internal object UserDataPayloadCodec {
-    private const val PAYLOAD_VERSION = 1
+    private const val LEGACY_PAYLOAD_VERSION = 1
+    private const val PAYLOAD_VERSION = 2
+    private const val LEGACY_TRANSFER_SCHEMA_VERSION = 5L
 
     fun encode(snapshot: UserDataSnapshot): ByteArray {
         require(UserDataSnapshotValidator.isSafeForImport(snapshot)) {
@@ -723,14 +758,30 @@ internal object UserDataPayloadCodec {
         }
     }
 
-    fun decode(payload: ByteArray, selection: UserDataSelection): UserDataSnapshot =
+    fun decode(
+        payload: ByteArray,
+        selection: UserDataSelection,
+        transferSchemaVersion: Long = EncryptedUserDataArchive.DATABASE_SCHEMA_VERSION.toLong(),
+    ): UserDataSnapshot =
         DataInputStream(ByteArrayInputStream(payload)).use { input ->
             require(payload.size in 1..EncryptedUserDataArchive.MAX_PAYLOAD_BYTES)
-            require(Integer.toUnsignedLong(input.readInt()) == PAYLOAD_VERSION.toLong())
+            val payloadVersion = Integer.toUnsignedLong(input.readInt())
+            require(
+                when (transferSchemaVersion) {
+                    LEGACY_TRANSFER_SCHEMA_VERSION -> payloadVersion == LEGACY_PAYLOAD_VERSION.toLong()
+                    EncryptedUserDataArchive.DATABASE_SCHEMA_VERSION.toLong() ->
+                        payloadVersion == PAYLOAD_VERSION.toLong()
+                    else -> false
+                },
+            )
             val remap = input.readStrictBoolean()
             val label = input.readNullableString()
             val conversations = input.readList(UserDataTransferLimits.MAX_CONVERSATIONS, ::readConversation)
-            val messages = input.readList(UserDataTransferLimits.MAX_MESSAGES, ::readMessage)
+            val messages = if (payloadVersion == LEGACY_PAYLOAD_VERSION.toLong()) {
+                input.readList(UserDataTransferLimits.MAX_MESSAGES, ::readLegacyMessage)
+            } else {
+                input.readList(UserDataTransferLimits.MAX_MESSAGES, ::readMessage)
+            }
             val memories = input.readList(UserDataTransferLimits.MAX_MEMORIES, ::readMemory)
             val reminders = input.readList(UserDataTransferLimits.MAX_REMINDERS, ::readReminder)
             val deliveries = input.readList(UserDataTransferLimits.MAX_DELIVERIES, ::readDelivery)
@@ -766,10 +817,21 @@ internal object UserDataPayloadCodec {
     private fun writeMessage(out: DataOutputStream, value: MessageEntity) = with(out) {
         writeString(value.id); writeString(value.conversationId); writeLong(value.ordinal)
         writeString(value.role.name); writeString(value.text); writeLong(value.createdAtEpochMillis)
+        writeNullableString(value.attachmentSummary)
     }
 
     private fun readMessage(input: DataInputStream) = with(input) {
-        MessageEntity(readString(), readString(), readLong(), MessageRole.valueOf(readString()), readString(), readLong())
+        MessageEntity(
+            readString(), readString(), readLong(), MessageRole.valueOf(readString()),
+            readString(), readLong(), readNullableString(),
+        )
+    }
+
+    private fun readLegacyMessage(input: DataInputStream) = with(input) {
+        MessageEntity(
+            readString(), readString(), readLong(), MessageRole.valueOf(readString()),
+            readString(), readLong(), attachmentSummary = null,
+        )
     }
 
     private fun writeMemory(out: DataOutputStream, value: MemoryEntity) = with(out) {

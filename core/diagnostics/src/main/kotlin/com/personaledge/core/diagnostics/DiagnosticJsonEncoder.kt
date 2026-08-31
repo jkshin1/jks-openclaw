@@ -119,6 +119,19 @@ internal object DiagnosticJsonEncoder {
                     .enum("thermal_status", event.status)
                     .enum("action", event.action)
             }
+            is DiagnosticEvent.MediaAttachment -> {
+                if (event.byteCount < 0) return null
+                // A duration belongs to audio and only to audio; anything else is a shape error.
+                val seconds = event.durationSeconds
+                if ((event.kind == DiagnosticMediaKind.AUDIO) != (seconds != null)) return null
+                if (seconds != null && seconds !in 0..3_600) return null
+                json.string("event", "media_attachment")
+                    .enum("kind", event.kind)
+                    .enum("stage", event.stage)
+                    .number("byte_count", event.byteCount)
+                if (seconds != null) json.number("duration_seconds", seconds)
+                json
+            }
         }
         return json.finish()
     }

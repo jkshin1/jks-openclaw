@@ -11,13 +11,24 @@ import com.personaledge.core.llm.LlmTurnToolScope
 import com.personaledge.core.llm.ModelEvent
 import com.personaledge.core.llm.TrustedToolResponse
 import com.personaledge.core.llm.TurnId
+import com.personaledge.core.llm.TurnMediaAttachment
+import com.personaledge.core.llm.TurnMediaBudget
+import com.personaledge.core.llm.TurnMediaKind
 import com.personaledge.core.llm.VerifiedInstalledModel
 import com.personaledge.core.tools.AgentTool
 import com.personaledge.core.tools.AlarmNextTool
+import com.personaledge.core.tools.AlarmSetTool
+import com.personaledge.core.tools.CalendarCreateEventTool
+import com.personaledge.core.tools.CalendarUpdateEventTool
+import com.personaledge.core.tools.CommitmentProposalTool
+import com.personaledge.core.tools.KakaoNotificationReplyTool
+import com.personaledge.core.tools.KakaoShareMessageTool
+import com.personaledge.core.tools.MemoryRememberTool
 import com.personaledge.core.tools.NotificationSearchTool
 import com.personaledge.core.tools.PreparationResult
 import com.personaledge.core.tools.ReminderCreateParams
 import com.personaledge.core.tools.ReminderCreateTool
+import com.personaledge.core.tools.ReminderCancelTool
 import com.personaledge.core.tools.ReminderQueryTool
 import com.personaledge.core.tools.ReminderUpdateParams
 import com.personaledge.core.tools.ReminderUpdateTool
@@ -210,11 +221,13 @@ class ManualToolAgentController(
     suspend fun initialize(
         model: VerifiedInstalledModel,
         backend: InferenceBackend = InferenceBackend.CPU,
+        mediaModalities: Set<TurnMediaKind> = emptySet(),
     ) {
         runtime.initialize(
             model = model,
             backend = backend,
             tools = registry.definitions,
+            mediaModalities = mediaModalities,
         )
     }
 
@@ -302,17 +315,34 @@ class ManualToolAgentController(
         requireReadTool: Boolean = false,
         executionContract: TurnExecutionContract? = null,
         toolScope: LlmTurnToolScope? = null,
+        media: List<TurnMediaAttachment> = emptyList(),
     ): Flow<AgentEvent> = flow {
         if (!isValidTurnId(turnId)) {
             emit(AgentEvent.Failure(turnId, AgentFailureCode.INVALID_TURN))
             return@flow
+        }
+        val mediaAttachments = media.toList()
+        if (mediaAttachments.isNotEmpty()) {
+            // A media turn is app-authored end to end. Automatic scoping, the follow-up
+            // carry-over, deterministic read routing, and recovery contracts all classify typed
+            // Korean prose, and none of them describes a photo or a recording. Combining them
+            // with an attachment could only widen exposure, so a media turn refuses the
+            // combination outright instead of resolving it.
+            if (executionContract != null || contextualWebSearchRequest != null ||
+                toolScope?.toolNames?.isNotEmpty() == true ||
+                !TurnMediaBudget.allows(mediaAttachments)
+            ) {
+                emit(AgentEvent.Failure(turnId, AgentFailureCode.INVALID_TURN))
+                return@flow
+            }
         }
 
         val job = currentCoroutineContext()[Job]
             ?: error("A coroutine Job is required to run an agent turn.")
         val requestedText = currentUserRequest ?: prompt
         val availableToolNames = registry.definitions.mapTo(linkedSetOf()) { it.name }
-        val automaticScopeRequested = executionContract == null && toolScope == null
+        val automaticScopeRequested = executionContract == null && toolScope == null &&
+            mediaAttachments.isEmpty()
         // Consumed unconditionally: a classified new request must not leave an older question
         // armed, and only this turn may answer it.
         val carriedFollowUp = if (automaticScopeRequested) {
@@ -368,6 +398,7 @@ class ManualToolAgentController(
         val effectiveContextualWebSearchRequest =
             contextualWebSearchRequest ?: recoveryWebSearchRequest
         val effectiveToolScope: LlmTurnToolScope? = when {
+            mediaAttachments.isNotEmpty() -> LlmTurnToolScope.none()
             executionContract != null -> LlmTurnToolScope.exact(
                 executionContract.expectedReadTools.toSet(),
             )
@@ -381,13 +412,17 @@ class ManualToolAgentController(
             job = job,
             reminderDateTimeHint = effectiveReminderHint,
             readOnlyToolsOnly = readOnlyToolsOnly || executionContract != null ||
-                effectiveContextualWebSearchRequest != null,
-            requireReadTool = requireReadTool || executionContract != null ||
-                automaticallyScoped?.requiresGroundedRead == true ||
-                effectiveContextualWebSearchRequest != null,
+                effectiveContextualWebSearchRequest != null || mediaAttachments.isNotEmpty(),
+            requireReadTool = mediaAttachments.isEmpty() &&
+                (
+                    requireReadTool || executionContract != null ||
+                        automaticallyScoped?.requiresGroundedRead == true ||
+                        effectiveContextualWebSearchRequest != null
+                    ),
             executionContract = executionContract?.newState(),
             toolScope = effectiveToolScope,
-            enforceToolScope = toolScope != null ||
+            media = mediaAttachments,
+            enforceToolScope = mediaAttachments.isNotEmpty() || toolScope != null ||
                 effectiveContextualWebSearchRequest != null ||
                 automaticallyScoped?.scope?.toolNames?.isNotEmpty() == true ||
                 PriorWebResultFollowUpPolicy.matches(requestedText),
@@ -464,9 +499,9 @@ class ManualToolAgentController(
         var toolCallCount = 0
         val weatherLocationHint = currentUserRequest?.let(::weatherLocationHintOrNull)
         val requestedText = currentUserRequest.orEmpty()
-        val webSearchQueryHint = currentUserRequest
+        val webSearchRequestHint = currentUserRequest
             ?.let(AutomaticWebSearchPolicy::knowledgeRequestOrNull)
-            ?.query
+        val webSearchQueryHint = webSearchRequestHint?.query
         val groundedEvidence = GroundedEvidenceSet()
         var groundedAnswerEligible = true
 
@@ -511,14 +546,19 @@ class ManualToolAgentController(
                             query = params.query,
                             result = result,
                             intent = request.intent,
+                            responseContract = request.responseContract,
                         ),
                     )
                 },
             )
         }
 
-        val deterministicRead = contextualWebSearchRequest ?: currentUserRequest?.let { request ->
-            DeterministicReadRouter.classify(request, recentWeatherRead)
+        val deterministicRead = if (active.media.isNotEmpty()) {
+            null
+        } else {
+            contextualWebSearchRequest ?: currentUserRequest?.let { request ->
+                DeterministicReadRouter.classify(request, recentWeatherRead)
+            }
         }
         when (val directRead = deterministicRead) {
             is TrustedWebSearchRequest -> executeDirectWebSearch(directRead)
@@ -557,6 +597,7 @@ class ManualToolAgentController(
                     TrustedWebSearchRequest(
                         query = directRead.query,
                         intent = directRead.intent,
+                        responseContract = directRead.responseContract,
                     ),
                 )
             }
@@ -620,10 +661,19 @@ class ManualToolAgentController(
             } else {
                 null
             }
-            if (scope == null) {
-                runtime.streamUserTurn(active.turnId, prompt, turnLimits.maxOutputTokens)
-            } else {
-                runtime.streamUserTurn(
+            when {
+                active.media.isNotEmpty() -> runtime.streamUserTurn(
+                    active.turnId,
+                    prompt,
+                    turnLimits.maxOutputTokens,
+                    scope ?: LlmTurnToolScope.none(),
+                    active.media,
+                )
+
+                scope == null ->
+                    runtime.streamUserTurn(active.turnId, prompt, turnLimits.maxOutputTokens)
+
+                else -> runtime.streamUserTurn(
                     active.turnId,
                     prompt,
                     turnLimits.maxOutputTokens,
@@ -704,7 +754,12 @@ class ManualToolAgentController(
                 } else {
                     if (toolCallCount == 0 &&
                         groundedEvidence.isEmpty &&
-                        !NoToolFinalAnswerPolicy.accepts(currentUserPrompt, step.answerText)
+                        !NoToolFinalAnswerPolicy.accepts(
+                            currentUserPrompt = currentUserPrompt,
+                            modelAnswer = step.answerText,
+                            unexecutedWriteScope = active.toolScope?.toolNames
+                                ?.any(UNEXECUTED_WRITE_TOOL_NAMES::contains) == true,
+                        )
                     ) {
                         abort(AgentFailureCode.INVALID_MODEL_SEQUENCE)
                     }
@@ -934,7 +989,10 @@ class ManualToolAgentController(
                                 ordinal = toolCallCount,
                                 query = params.query,
                                 result = result,
-                                intent = WebSearchAnswerPolicy.intentForRequest(requestedText),
+                                intent = webSearchRequestHint?.intent
+                                    ?: WebSearchAnswerPolicy.intentForRequest(requestedText),
+                                responseContract = webSearchRequestHint?.responseContract
+                                    ?: WebSearchResponseContract.fromOwnerRequest(requestedText),
                             ),
                         )
                     },
@@ -1564,6 +1622,7 @@ class ManualToolAgentController(
         val requireReadTool: Boolean,
         val executionContract: TurnExecutionContractState?,
         val toolScope: LlmTurnToolScope?,
+        val media: List<TurnMediaAttachment>,
         val enforceToolScope: Boolean,
         val state: AtomicInteger = AtomicInteger(STATE_RUNNING),
         val runtimeCancelIssued: AtomicBoolean = AtomicBoolean(false),
@@ -1598,6 +1657,18 @@ class ManualToolAgentController(
         const val STATE_RUNNING = 0
         const val STATE_CANCELLING = 1
         const val STATE_FINISHED = 2
+        val UNEXECUTED_WRITE_TOOL_NAMES = setOf(
+            CalendarCreateEventTool.NAME,
+            CalendarUpdateEventTool.NAME,
+            AlarmSetTool.NAME,
+            KakaoShareMessageTool.NAME,
+            KakaoNotificationReplyTool.NAME,
+            MemoryRememberTool.NAME,
+            CommitmentProposalTool.NAME,
+            ReminderCreateTool.NAME,
+            ReminderUpdateTool.NAME,
+            ReminderCancelTool.NAME,
+        )
     }
 }
 
@@ -1691,14 +1762,22 @@ object DeterministicReadRouter {
                 containsForeignReadDomain(normalized, DirectReadDomain.WEATHER)
             }
             ?.let(DeterministicReadRequest::Weather)
-        val webQuery = explicitWebSearchQueryOrNull(normalized)
-            ?.takeUnless {
-                containsForeignReadDomain(normalized, DirectReadDomain.WEB)
-            }
+        val immediateWebRequest = AutomaticWebSearchPolicy.knowledgeRequestOrNull(normalized)
+            ?.takeIf(TrustedWebSearchRequest::requiresImmediateSearch)
+            ?.takeUnless { containsForeignReadDomain(normalized, DirectReadDomain.WEB) }
+        val webQuery = immediateWebRequest?.let { request ->
+            DeterministicReadRequest.WebSearch(
+                query = request.query,
+                intent = request.intent,
+                responseContract = request.responseContract,
+            )
+        } ?: explicitWebSearchQueryOrNull(normalized)
+            ?.takeUnless { containsForeignReadDomain(normalized, DirectReadDomain.WEB) }
             ?.let { query ->
                 DeterministicReadRequest.WebSearch(
                     query = query,
                     intent = WebSearchAnswerPolicy.intentForRequest(normalized),
+                    responseContract = WebSearchResponseContract.fromOwnerRequest(normalized),
                 )
             }
         return listOfNotNull(alarm, reminder, weatherLocation, webQuery).singleOrNull()
@@ -1791,8 +1870,7 @@ internal object TurnToolScopePolicy {
         val kakaoNotificationContext = KAKAO_DOMAIN_MARKERS.any(normalized::contains) &&
             KAKAO_NOTIFICATION_CONTEXT_MARKERS.any(normalized::contains)
         val explicitWebIntent = !kakaoNotificationContext &&
-            (WEB_SEARCH_MARKERS.any(normalized::contains) ||
-                FRESH_WEB_MARKERS.any(normalized::contains) && TurnToolDomain.WEATHER !in domains)
+            explicitWebSearchQueryOrNull(normalized) != null
         if (explicitWebIntent) {
             domains += TurnToolDomain.WEB
         }
@@ -1839,6 +1917,7 @@ internal object TurnToolScopePolicy {
             )
         }
         val optionalKnowledgeWebOnly = optionalKnowledgeSearch != null &&
+            !optionalKnowledgeSearch.requiresImmediateSearch &&
             !explicitWebIntent &&
             distinctDomains == listOf(TurnToolDomain.WEB)
         val readOnlyGroundingRequired = writableDomains.isEmpty() &&
@@ -1979,7 +2058,6 @@ internal object TurnToolScopePolicy {
         TurnToolDomain.WEB,
         TurnToolDomain.KAKAO,
     )
-    private val FRESH_WEB_MARKERS = listOf("최신", "실시간", "오늘 뉴스", "현재 가격", "주가", "뉴스")
     private val KAKAO_DOMAIN_MARKERS = listOf("카카오", "카톡", "kakao")
     private val KAKAO_NOTIFICATION_CONTEXT_MARKERS = listOf("알림", "notification")
     private val MEMORY_WRITE_MARKERS = listOf("기억해", "기억해 줘", "기억해줘", "remember this")
@@ -2010,7 +2088,7 @@ internal object TurnToolScopePolicy {
  * The text is app-authored so an ambiguous write never reaches the model as an open instruction,
  * and [requestText] preserves the original request so the answer re-runs it rather than the reply.
  */
-data class TurnDomainClarification internal constructor(
+class TurnDomainClarification internal constructor(
     val requestText: String,
     val choices: List<String>,
 ) {
@@ -2028,7 +2106,7 @@ data class TurnDomainClarification internal constructor(
 }
 
 /** In-process carry-over from the previous automatically scoped turn of the same conversation. */
-data class PendingTurnFollowUp internal constructor(
+class PendingTurnFollowUp internal constructor(
     internal val requestText: String,
     internal val scope: LlmTurnToolScope?,
     internal val requiresGroundedRead: Boolean,
@@ -2079,6 +2157,7 @@ internal sealed interface DeterministicReadRequest {
     class WebSearch(
         val query: String,
         val intent: WebSearchAnswerIntent,
+        val responseContract: WebSearchResponseContract = WebSearchResponseContract(),
     ) : DeterministicReadRequest {
         override fun toString(): String = "DeterministicReadRequest.WebSearch(query=<redacted>)"
     }
@@ -2197,38 +2276,58 @@ internal fun webSearchArgumentsWithQueryHint(
 
 /** High-confidence explicit public-web searches execute as a Kotlin-owned READ_ONLY request. */
 internal fun explicitWebSearchQueryOrNull(request: String): String? {
+    if (AutomaticWebSearchPolicy.isLiteralSearchCorrection(request)) return null
+    return explicitWebSearchQueryCandidateOrNull(request)
+}
+
+/** Raw standalone-query parser used by the meta-correction policy without recursive classification. */
+internal fun explicitWebSearchQueryCandidateOrNull(request: String): String? {
     val normalized = request.trim()
-    if (normalized.isEmpty() || PriorWebResultFollowUpPolicy.matches(normalized) ||
+    if (normalized.isEmpty() || !AutomaticWebSearchPolicy.isSafePublicWebTransfer(normalized) ||
+        PriorWebResultFollowUpPolicy.matches(normalized) ||
         WEB_WRITE_MARKERS.any(normalized::contains)
     ) {
         return null
     }
-    val commandPrefix = WEB_COMMAND_PREFIXES.firstOrNull(normalized::startsWith)
+    val searchText = WEB_ASSISTED_SEARCH_PREFIX.matchEntire(normalized)
+        ?.groupValues
+        ?.get(1)
+        ?.trim()
+        ?: normalized
+    val locatedQuery = WEB_LOCATED_SEARCH.matchEntire(searchText)
+        ?.groupValues
+        ?.get(1)
+        ?.trim(*WEB_QUERY_TRIM_CHARACTERS)
+        ?.let(::removeTrailingObjectParticle)
+    val commandPrefix = WEB_COMMAND_PREFIXES.firstOrNull(searchText::startsWith)
     val markerIndex = WEB_SEARCH_MARKERS
-        .map(normalized::indexOf)
+        .map(searchText::indexOf)
         .filter { index -> index > 0 }
         .minOrNull()
     var query = when {
-        commandPrefix != null -> normalized.removePrefix(commandPrefix)
+        locatedQuery != null -> locatedQuery
+        commandPrefix != null -> searchText.removePrefix(commandPrefix)
             .trim(*WEB_QUERY_TRIM_CHARACTERS)
-        markerIndex != null -> normalized.substring(0, markerIndex)
+        markerIndex != null -> searchText.substring(0, markerIndex)
             .trim(*WEB_QUERY_TRIM_CHARACTERS)
         else -> return null
     }
     WEB_QUERY_LEADING_WORDS.forEach { prefix ->
         if (query.startsWith(prefix)) query = query.removePrefix(prefix).trimStart()
     }
-    var changed: Boolean
-    do {
-        changed = false
-        for (suffix in WEB_QUERY_TRAILING_WORDS) {
-            if (query.endsWith(suffix)) {
-                query = query.dropLast(suffix.length).trimEnd()
-                changed = true
-                break
+    if (locatedQuery == null) {
+        var changed: Boolean
+        do {
+            changed = false
+            for (suffix in WEB_QUERY_TRAILING_WORDS) {
+                if (query.endsWith(suffix)) {
+                    query = query.dropLast(suffix.length).trimEnd()
+                    changed = true
+                    break
+                }
             }
-        }
-    } while (changed)
+        } while (changed)
+    }
     query = query.trim(*WEB_QUERY_TRIM_CHARACTERS)
     if (AutomaticWebSearchPolicy.isSubjectlessQueryCandidate(query)) return null
     if (query.length !in 2..WebSearchTool.MAX_QUERY_CHARACTERS) return null
@@ -2236,11 +2335,20 @@ internal fun explicitWebSearchQueryOrNull(request: String): String? {
     return query
 }
 
+private fun removeTrailingObjectParticle(value: String): String = when {
+    value.endsWith("을") || value.endsWith("를") -> value.dropLast(1).trimEnd()
+    else -> value
+}
+
 /** Closed grammar for requests that transform the preceding web answer without new network I/O. */
 object PriorWebResultFollowUpPolicy {
     fun matches(request: String): Boolean {
         val normalized = request.trim()
-        if (normalized.isEmpty() || EXPLICIT_RESEARCH_MARKERS.any(normalized::contains)) return false
+        if (normalized.isEmpty() || EXPLICIT_RESEARCH_MARKERS.any(normalized::contains) ||
+            EXPLICIT_WEB_RESEARCH.containsMatchIn(normalized)
+        ) {
+            return false
+        }
         return PRIOR_RESULT_MARKERS.any(normalized::contains) &&
             RESULT_TRANSFORM_MARKERS.any(normalized::contains)
     }
@@ -2254,6 +2362,9 @@ object PriorWebResultFollowUpPolicy {
     )
     private val EXPLICIT_RESEARCH_MARKERS = listOf(
         "다시 검색", "재검색", "새로 검색", "다시 찾아", "새로 찾아", "다시 조사", "새로 조사",
+    )
+    private val EXPLICIT_WEB_RESEARCH = Regex(
+        "(?:웹|인터넷|온라인)(?:에서|\\s+)\\s*(?:직접\\s+)?(?:검색|찾아|알아봐|조사)",
     )
 }
 
@@ -2370,6 +2481,12 @@ private val WEATHER_LOCATION_TRIM_CHARACTERS = charArrayOf(
     ' ', '\t', '\n', '\r', '.', ',', '!', '?', '。', '，', '！', '？', '"', '\'', '(', ')', '[', ']',
 )
 private val WEB_SEARCH_MARKERS = listOf("검색", "찾아", "알아봐", "조사해")
+private val WEB_ASSISTED_SEARCH_PREFIX = Regex(
+    "^(?:웹|인터넷|온라인)\\s*검색(?:을|를)?\\s*(?:활용|이용)(?:해서|하여|해)?\\s+(.+)$",
+)
+private val WEB_LOCATED_SEARCH = Regex(
+    "^(.+?)\\s+(?:웹|인터넷|온라인)에서\\s*(?:검색|찾아|알아봐|조사해).*$",
+)
 private val WEB_COMMAND_PREFIXES = listOf(
     "검색해 주세요", "검색해주세요", "검색해 줘", "검색해줘", "검색:", "검색 ",
     "찾아 주세요", "찾아주세요", "찾아 줘", "찾아줘", "찾아봐 주세요", "찾아봐줘",

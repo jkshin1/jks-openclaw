@@ -51,6 +51,15 @@ Read this before running anything against the phone. Each item cost real damage 
   test instead — see `KoreanToolSelectionTest`.
 - Diagnostics under `no_backup/diagnostics/diagnostics.jsonl` are the authority on what a turn
   actually did. Read them before claiming a gate failed.
+- **Owner photo and voice acceptance has not run on the phone.** A 2026-09-01 historical Fold8
+  session did run a synthetic-card image through LiteRT-LM and observed the audio front end, but
+  its shared-conversation token comparison was invalid. The corrected gate uses a fresh runtime and
+  one turn per control/media observation, plus a 32-token decode cap below the required deltas; its
+  source compiles but has not run on the Fold8. The fp32 encoders add substantial prefill and force
+  CPU fallback there, so watch thermal and PSS. Camera capture necessarily uses one temporary
+  app-cache file and makes best-effort deletion after read, with stale-start and next-prepare sweeps;
+  audio stays in memory. Raw payload never enters Room, transfer, or diagnostics. Room/transfer keep
+  only an app-authored kind/source/whole-second summary, and diagnostics keep content-free counts.
 
 ## Project Status & Planning
 

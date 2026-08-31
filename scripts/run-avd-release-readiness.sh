@@ -16,7 +16,7 @@ on an already-booted disposable API 37 ARM64 AVD, and runs the frozen release-re
 
   * one provider-free ABI linkage smoke (must pass),
   * five historical ABI/model-boundary canaries (must stop at reviewed guards), and
-  * 28 physical/live methods (must stop at their owner opt-in guards).
+  * 29 physical/live methods (must stop at their owner opt-in guards).
 
 The selected transport must be an emulator with the expected AVD name. This script never accepts
 a physical serial and never starts or stops an AVD. It uninstalls com.personaledge.agent and its
@@ -142,8 +142,8 @@ assert_disposable_avd
 # Any new app instrumentation file must be reviewed for release-target compatibility and either
 # added to one of the exact allowlists below or deliberately kept in the debug-only lane.
 test_source_count="$(find "$project_root/app/src/androidTest" -type f -name '*Test.kt' -print | awk 'END { print NR + 0 }')"
-[[ "$test_source_count" == "34" ]] ||
-    fail "reviewed app instrumentation inventory changed: expected=34 actual=$test_source_count"
+[[ "$test_source_count" == "39" ]] ||
+    fail "reviewed app instrumentation inventory changed: expected=39 actual=$test_source_count"
 
 "$gradlew_bin" --offline -PpersonalEdgePhysicalReleaseTest=true \
     :app:assembleRelease :app:assembleReleaseAndroidTest
@@ -312,13 +312,15 @@ run_suite() {
 
 abi_method="com.personaledge.agent.ReleasePhysicalAbiLinkageTest#boundedPostGuardEntrypointsResolveFromTheMinifiedTarget"
 canary_classes="com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KoreanToolSelectionTest,com.personaledge.agent.PastedMailScheduleAcceptanceTest"
-physical_classes="com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest"
+# GroundedWebSearchJourneyTest stays in the debug AVD lane until its production-controller and
+# Room-backed path has a direct minified-release AVD receipt.
+physical_classes="com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8MediaTurnAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest"
 
 run_suite abi 1 1 0 -e releasePhysicalAbiLinkage true -e class "$abi_method"
 run_suite canary 5 0 5 -e class "$canary_classes"
-run_suite physical-guards 28 0 28 -e class "$physical_classes"
+run_suite physical-guards 29 0 29 -e class "$physical_classes"
 
-[[ "$total_selected" == "34" && "$total_passed" == "1" && "$total_skipped" == "33" ]] ||
+[[ "$total_selected" == "35" && "$total_passed" == "1" && "$total_skipped" == "34" ]] ||
     fail "aggregate release-readiness result changed"
 
 cat <<EOF

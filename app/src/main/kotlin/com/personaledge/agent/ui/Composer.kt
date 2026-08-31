@@ -45,7 +45,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import com.personaledge.agent.PendingMediaAttachment
 import com.personaledge.agent.R
+import com.personaledge.agent.VoiceRecordingUiState
 import com.personaledge.agent.ui.theme.CapsuleShape
 import com.personaledge.agent.ui.theme.PersonalEdgeMotion
 
@@ -64,6 +66,7 @@ internal fun Composer(
     canSend: Boolean,
     turnActive: Boolean,
     block: ComposerBlock?,
+    media: ComposerMediaState,
     onSend: () -> Unit,
     onCancel: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -106,6 +109,48 @@ internal fun Composer(
             ) {
                 ComposerNotice(block = block, onOpenSettings = onOpenSettings)
             }
+            AnimatedVisibility(
+                visible = media.recording != null,
+                enter = fadeIn(PersonalEdgeMotion.effects()) +
+                    expandVertically(PersonalEdgeMotion.spatial()),
+                exit = fadeOut(PersonalEdgeMotion.effects()) +
+                    shrinkVertically(PersonalEdgeMotion.spatial()),
+            ) {
+                // Kept non-null for the exit animation, which renders one frame after it clears.
+                media.recording?.let { recording ->
+                    ComposerRecordingBar(
+                        recording = recording,
+                        onStop = media.onStopRecording,
+                        onCancel = media.onCancelRecording,
+                    )
+                }
+            }
+            AnimatedVisibility(
+                visible = media.attachment != null && media.recording == null,
+                enter = fadeIn(PersonalEdgeMotion.effects()) +
+                    expandVertically(PersonalEdgeMotion.spatial()),
+                exit = fadeOut(PersonalEdgeMotion.effects()) +
+                    shrinkVertically(PersonalEdgeMotion.spatial()),
+            ) {
+                media.attachment?.let { attachment ->
+                    ComposerAttachmentChip(
+                        attachment = attachment,
+                        onRemove = media.onRemoveAttachment,
+                    )
+                }
+            }
+            if (media.visible) {
+                ComposerMediaActions(
+                    enabled = media.enabled,
+                    onTakePhoto = media.onTakePhoto,
+                    onPickImage = media.onPickImage,
+                    onStartDictation = media.onStartDictation,
+                    onStartVoiceAttachment = media.onStartVoiceAttachment,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 12.dp, top = 8.dp),
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -130,7 +175,11 @@ internal fun Composer(
                     enabled = !turnActive,
                     placeholder = {
                         Text(
-                            text = "무엇이든 요청하세요",
+                            text = if (media.attachment != null) {
+                                "첨부에 대해 물어보세요"
+                            } else {
+                                "무엇이든 요청하세요"
+                            },
                             style = MaterialTheme.typography.bodyLarge,
                         )
                     },
@@ -171,6 +220,28 @@ internal fun Composer(
         }
     }
 }
+
+/**
+ * Everything the composer needs to offer photo and voice input.
+ *
+ * Bundled into one parameter so the composer keeps a single media seam: adding a source later
+ * changes this type rather than growing the composer's signature again.
+ */
+internal data class ComposerMediaState(
+    /** The owner enabled media input, so the controls are shown at all. */
+    val visible: Boolean,
+    /** The controls are shown but currently refuse — a turn is running, or one is attached. */
+    val enabled: Boolean,
+    val attachment: PendingMediaAttachment?,
+    val recording: VoiceRecordingUiState?,
+    val onTakePhoto: () -> Unit,
+    val onPickImage: () -> Unit,
+    val onStartDictation: () -> Unit,
+    val onStartVoiceAttachment: () -> Unit,
+    val onStopRecording: () -> Unit,
+    val onCancelRecording: () -> Unit,
+    val onRemoveAttachment: () -> Unit,
+)
 
 private fun DragAndDropEvent.toComposerDropPayload(): ComposerDropPayload {
     val clipData = toAndroidDragEvent().clipData

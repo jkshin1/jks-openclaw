@@ -38,6 +38,15 @@ data class ModelManifest(
     val litertLmVersion: String,
     val contextTokens: Int,
     val maxOutputTokens: Int,
+    /**
+     * Declared multimodal prefill support for this exact pinned artifact.
+     *
+     * These are trust-root facts, not runtime probes: the runtime refuses an image or audio turn
+     * unless the manifest the store verified declares that modality. A text-only artifact
+     * therefore cannot be handed media even if the caller asks.
+     */
+    val supportsImageInput: Boolean,
+    val supportsAudioInput: Boolean,
 )
 
 object PinnedModelManifest {
@@ -51,6 +60,8 @@ object PinnedModelManifest {
         litertLmVersion = BuildConfig.MODEL_LITERT_LM_VERSION,
         contextTokens = BuildConfig.MODEL_CONTEXT_TOKENS,
         maxOutputTokens = BuildConfig.MODEL_MAX_OUTPUT_TOKENS,
+        supportsImageInput = BuildConfig.MODEL_SUPPORTS_IMAGE_INPUT,
+        supportsAudioInput = BuildConfig.MODEL_SUPPORTS_AUDIO_INPUT,
     )
 }
 

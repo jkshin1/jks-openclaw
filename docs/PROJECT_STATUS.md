@@ -1,7 +1,131 @@
 # Project status
 
-Last reviewed: 2026-08-31 against the current `versionCode=11`,
+Last reviewed: 2026-09-01 against the current `versionCode=11`,
 `versionName=1.0.0-rc11` working tree.
+
+## 2026-09-01 photo and voice input delta
+
+The pinned artifact is multimodal, and this delta uses it. One photo or one short voice clip may
+be attached to a turn, and a dictation path turns speech into an editable composer draft. The
+design, the benchmarked task set, the bounds, and the open acceptance work are in
+[`MULTIMODAL_INPUT.md`](MULTIMODAL_INPUT.md).
+
+The governing rule is that **a turn carrying media is given no Tool schema at all**, enforced
+independently in `TurnMediaPlan`, in `ManualToolAgentController.runTurn`, and by the ViewModel's
+`maxSteps = 1` media budget. Voice commands therefore reach a Tool only through dictation: the
+transcript lands in the composer, the owner reads and edits it, and the send that follows is an
+ordinary text turn that earns its scope the ordinary way.
+
+Media payloads never enter Room or the transfer archive. Audio stays in memory; an external camera
+necessarily writes one temporary file in the app's private cache, where deletion is attempted after
+read, for stale leftovers at process start, and for every leftover before a new capture. Room schema
+11 adds `messages.attachment_summary`, a short app-written kind/source/whole-second code. Transfer
+schema `6`/payload `2` preserves that content-free USER-row shape (legacy `5`/`1` imports it as
+null), and attachment-only rows reach later context and summarization through an app-authored label.
+`DiagnosticEvent.MediaAttachment` records kind, stage, byte count, and audio seconds only.
+
+`models/model-manifest.json` now declares `supportsImageInput` and `supportsAudioInput`, and the
+runtime refuses a modality the verified manifest does not declare. That declaration is evidence
+from the artifact itself: the pinned `gemma-4-E4B-it.litertlm` header contains
+`tf_lite_vision_encoder`, `tf_lite_vision_adapter`, `tf_lite_end_of_vision`,
+`tf_lite_audio_encoder_hw`, `tf_lite_audio_adapter`, and `tf_lite_end_of_audio`, and its embedded
+jinja template renders an `image` item as `<|image|>` and an `audio` item as `<|audio|>`. The
+`qwen8bLab` manifest declares both false.
+
+Historical verification for the initial delta. `doctor.sh` passed; `test-host-scripts.sh` passed 32/32; a forced
+`./gradlew --offline test --rerun-tasks` produced 967 same-run JVM cases with zero failures
+(app 263, core:agent 185 debug + 185 qwen8bLab, core:tools 201, core:llm 35 debug + 35 qwen8bLab,
+core:diagnostics 40, core:data 23); `./gradlew --offline test lint assembleDebug assembleRelease`
+and `./gradlew --offline releaseGate` both passed, the latter regenerating and verifying
+SBOM/provenance with `database.schemaVersion=11`, `source.dirty=true`, and the unchanged model
+hash `0b2a8980...52e0`. On the account-free API 37 ARM64 foldable AVD started `-read-only
+-no-snapshot-save`, `scripts/run-avd-regression.sh` selected 267 reviewed methods: 237 passed, 30
+stopped at reviewed assumption guards, none failed. That includes the two new account-free classes
+`ImageAttachmentLoaderTest` and `MediaCaptureStagingTest` (14 methods, all passing) and five new
+`core:data` cases covering the 10→11 migration and the attachment column.
+
+`scripts/run-avd-release-readiness.sh` then passed on the same disposable AVD against a matched
+owner-signed minified release pair: the provider-free ABI linkage smoke passed 1/1 and the five
+canaries plus 28 physical/live methods all stopped at their reviewed opt-in guards, for 34
+selected, 1 passed, 33 guarded, 0 failed, under certificate
+`e0f66d4b4c8064db6a9d46097d77903cf13fbccacbdfc6e49e9f7c380b8e457a`. That matters for this delta
+specifically: the new instrumentation classes compile into the release test APK, and this lane is
+what shows the minified release class surface still links. It is packaging and linkage evidence,
+not physical execution.
+
+Those AVD lanes bound the then-final initial media source, not the later cache-sweep, transfer,
+attachment-only context, or fresh-runtime acceptance corrections. Their tested app APK was
+`9a77f9d050d02171e08db5869b211802644843c2ee3ff5787c8ad54d852b06ce`, its release androidTest APK
+`74530d53e44ac7cfab79c7b4409a3c4a8802f8da13d5057cb71f585d88b2e88a`, and the same hash came out of
+the final root `releaseGate`. As always on a dirty tree, provenance packages a whole-tree
+`source.stateSha256`, so the documentation edits that record this receipt change the packaged
+provenance field and therefore the APK hash; compare APK code and resource entries rather than
+reusing this whole-file hash to establish code equivalence.
+
+Current-source revalidation after those later corrections completed on 2026-09-01. A fresh
+read-only, no-snapshot API 37 ARM64 foldable AVD ran the reviewed debug lane with 279 selected
+methods: 248 passed, 31 stopped at intentional assumption guards, and none failed. This includes
+the provider-free `GroundedWebSearchJourneyTest`, the expanded mirrored-EXIF bitmap checks, camera
+cache cleanup, schema-11 attachment transfer/context coverage, and the existing owner/live guard
+matrix. The matched owner-signed minified release lane then selected 35 methods: the ABI linkage
+smoke passed, five canaries and 29 physical/live cases reached their reviewed opt-in guards, and
+none failed. `./gradlew --offline releaseGate` and the 32-case host-script suite also passed. No
+Fold8 was connected or changed, so corrected per-turn media-token, physical UI, thermal, and live
+provider acceptance remain open.
+
+Three stale guards in the inherited working tree were corrected rather than worked around, and
+each is a counting change only. `app/gradle.lockfile` was missing `debugAndroidTestRuntimeClasspath`
+for 14 already-pinned coordinates, which made `lint` and every androidTest assembly fail before
+this delta; the regenerated lock adds that one configuration and changes no module or version. The
+AVD runner's reviewed inventory said 34 app androidTest files when 35 existed, and its app suite
+expected 119 methods when the allowlisted classes already held 126 and the `core:llm` suite already
+held 12 rather than 10; `scripts/run-avd-release-readiness.sh` carried the same stale 34-file
+inventory. Those baselines are now measured against a real emulator run, not assumed.
+
+### Historical 2026-09-01 Fold8 receipt for this delta
+
+The owner connected SM-F971N (`R5KL801YXWE`) and approved a same-certificate release update. The
+read-only `preflight-fold8-release-update.sh` passed first without device mutation. `adb install -r`
+of the gated release app/test pair succeeded under certificate
+`e0f66d4b4c8064db6a9d46097d77903cf13fbccacbdfc6e49e9f7c380b8e457a`; the pulled-back `base.apk`
+hash equalled the local build exactly and `firstInstallTime` stayed `2026-08-23 18:10:37`.
+Content-free preservation snapshots taken before and after installation were identical:
+20 conversations, 95 messages, 45 notifications, 0 memories, three credentials present, the
+3,659,530,240-byte model, Kakao reply disabled, settings digest
+`af13c42b582270e1e2fea4bdcdfc0224f68d6fddc4d6b6a5ef087f1adab3a5fc`. No conversation, reminder,
+calendar, or alarm row was created.
+
+Three findings came out of it, and all three changed the code.
+
+1. **The engine was never loading its encoders.** `EngineConfig` carries `visionBackend`,
+   `audioBackend`, and `maxNumImages`, and this app set none of them, so a media turn failed
+   `NATIVE_FAILURE` with `INVALID_ARGUMENT: Vision executor should not be null` — *after*
+   `stb_image_preprocessor` had already decoded and patched the image (768x512 to 960x624,
+   2,340 patches against a 2,520 limit). Every signal short of the native log pointed at a bad
+   attachment rather than an unconfigured engine.
+2. **A synthetic photo was observed to work.** With the executors configured, the `IMAGE_TEXT_EXTRACT` turn on a
+   synthetic high-contrast card returned exactly the six rendered digits and nothing else, with no
+   Tool call. A model can invent a description of a photo it never received; it cannot read back a
+   number it was never shown.
+3. **Loading the encoders costs the GPU backend for the whole engine.** Same session, same prompt:
+   without them GPU stayed active and a text turn took 20,640 ms; with them the engine fell back to
+   CPU, the same text turn took 31,534 ms, initialization went from 8,183 ms to 10,755 ms, and PSS
+   reached 6,208,525,312 bytes against roughly 4.79 GB previously recorded for text-only CPU runs.
+   Enabling encoders because the manifest declares them would therefore have made every text turn
+   about 53% slower for a default-off feature. Initialization now takes the modalities the owner
+   actually enabled, the runtime fails a turn closed when it carries a modality the engine did not
+   load, and the setting applies from the next app start exactly as the backend choice does.
+
+**Still not validly measured on current source.** The audio front end was historically wired — the `static_audio_encoder` and
+`audio_adapter` caches load and the native mel filterbank runs at 16 kHz with 128 channels — but
+its context cost is unmeasured. The first receipt compared accumulated totals in one shared
+conversation and materially different image/audio prompts; that comparison was invalid, its audio
+number is discarded, and the roughly 220-token image number is not an exact cost. The corrected
+gate gives every control/media observation a fresh runtime and exactly one turn, compares paired
+before/after increments for an identical prompt, and caps both answers at 32 tokens below either
+required delta. It compiles but has not run on the Fold8. Korean transcription accuracy, the camera and picker flows through the
+production ViewModel path, sustained-media thermal behaviour, and the fold/DeX layouts for the new
+composer controls all remain untouched. There is no GPU media path on this device to measure.
 
 This is an evidence ledger, not a feature checklist:
 
@@ -267,24 +391,25 @@ established by comparing APK code/resource entries rather than reusing this whol
 person-reference and topic phrases such as `…이란 사람에 대한 정보를` are trimmed, since a leftover
 sentence fragment is sent to the provider literally and can return nothing for a widely covered
 subject. Trimming never removes a bare particle that also ends ordinary nouns. Public search
-uses one shared NFKC/spacing-tolerant relevance rule at both provider quality and final selection, selects at most two sources, excludes unsolicited obituary/personnel-list noise, synthesizes answer-first prose under a tool-free and grounded validator, and appends only Kotlin-owned HTTPS sources. Relevance-poor You.com hits may reach Tavily once only when the optional key is usable. Invalid synthesis falls back without a second search. A freshness/recovery turn cannot finish from model prose without satisfying its trusted read contract. |
-| Automatic/contextual public search | Implemented and host/scoped-AVD verified; exact contextual movie path accepted on Fold8 | A closed public-knowledge grammar may expose `web_search` without the literal word “검색”. A complete local answer remains local; one recognized explicit knowledge-gap answer may trigger one search. A subjectless follow-up such as `잘 모르겠으면 웹에서 찾아서 알려줘` can inherit only the immediately preceding USER public-knowledge request in the same conversation. The exact movie scenario passed on the owner-signed Fold8 with a complete body and app-owned HTTPS sources. It never searches assistant text, summary, memory, Tool/provider output, private/sensitive content, writes, communication, weather, or route text. Confidently wrong prose without a recognized gap marker and the wider provider/fallback matrix remain unqualified. |
-| Search follow-up context | Implemented and host verified; physical model pending | Closed previous-result summary/organization/source requests expose no Tool, reject a hallucinated repeat search before the gateway, and preserve the prior answer lead plus source tail. Explicit re-search wording remains a fresh read. Generic subjectless search wording without a safe owner source fails closed. |
+uses one shared NFKC/spacing-tolerant relevance rule at both provider quality and final selection, selects at most two sources, excludes unsolicited obituary/personnel-list noise, synthesizes answer-first prose under a tool-free and grounded validator, and appends only Kotlin-owned HTTPS sources. Current-officeholder queries additionally require a direct current role-to-name assertion; generic constitution, election, and term pages fail answerability and may trigger the existing one-shot Tavily fallback. Conflicting names fail closed unless one consistent government-source name resolves them. Invalid synthesis falls back without a second search. A freshness/recovery turn cannot finish from model prose without satisfying its trusted read contract. |
+| Automatic/contextual public search | Implemented; officeholder path host verified, correction-chain storage scoped-AVD verified, live device/provider pending | A closed public-knowledge grammar may expose `web_search` without the literal word “검색”. A complete local answer remains local; one recognized explicit knowledge-gap answer may trigger one search. Separately, `current entity + office + who/name` is mandatory grounding and runs a canonical owner-derived search before local decode; `현재 대한민국 대통령이 누구야?` therefore cannot terminate with the model's no-live-information prose. The exact movie scenario passed on the owner-signed Fold8 with a complete body and app-owned HTTPS sources. The failed-correction/`첫 질문` Room resolver passed in the 2026-09-01 disposable API 37 AVD suite; current-officeholder routing and answerability use fictional host fixtures only. It never searches assistant text, summary, memory, Tool/provider output, private/sensitive content, writes, communication, weather, or route text. General confidently wrong prose without a recognized gap marker and the wider live-provider matrix remain unqualified. |
+| Search follow-up context | Implemented and host verified; physical model pending | Closed previous-result summary/organization/source requests expose no Tool, reject a hallucinated repeat search before the gateway, and preserve the prior answer lead plus source tail. A normal subjectless search inherits the immediately preceding completed safe USER question. If a failed correction leaves a trailing USER row, only a bounded run of closed correction text such as `웹 검색 할 수 있잖아` may be skipped; explicit `첫 질문` wording then resolves the older completed USER ordinal. Any unrelated/private/write row stops the walk. Explicit standalone re-search wording remains a fresh read, and generic subjectless wording without a safe owner source fails closed. |
 | Dialogue intent and context quality | Implemented; bounded Fold8 acceptance passed | A separate fixed eight-case lexical regression lane covers long-prompt salience, compound constraints, relevant recent context, newest correction, stale-summary override, irrelevant history, clarification, and conversation isolation. Its reviewed-set pass additionally requires a six-dimension human rubric for intent, context, constraints, unsupported claims, format, and direct usefulness on all eight answers; even that is bounded synthetic judgment, not general semantic proof. Production-path Fold8 acceptance adds four exact synthetic no-Tool cases through ViewModel/Room/context/LiteRT. The clock-prioritized full-budget candidate first passed those cases three consecutive times (12/12) across NONE, MODERATE, and SEVERE. The final thought-streaming code candidate passed 4/4 again in 85.001 seconds with a reported 1,024-token request ceiling in every case. |
 | Rolling conversation compaction | Implemented; policy device tests passed, semantic breadth pending | After a completed turn, compaction triggers at ten pending messages or 1,536 UTF-8 source bytes. The model receives a head-and-tail bounded transcript plus the prior capsule and must return one complete 480-byte latest-state capsule covering goals, decisions/constraints, and unresolved references. Kotlin rejects over-limit, incomplete, Tool-producing, invented-literal, and unjustified prior-anchor-loss results; explicit corrections may replace only a repeated old anchor with a retained same-kind new anchor. The newest twelve messages and live recovery rows remain verbatim. User work preempts compaction; the owner's latest thermal policy allows it through SEVERE, cancels at CRITICAL or higher, fails closed at UNKNOWN, and rechecks that boundary before storage. The scoped device policy suite passed 23/23 on the same compaction code; broad semantic recall over arbitrary long conversations remains unqualified. |
 | E4B thinking, answer completion, and rich response text | Implemented; bounded Fold8 UI/sustained acceptance passed | Thinking is enabled by default with `min(384, maxOutputTokens / 2)` reasoning tokens. Multi-constraint short-output requests retain the normal full turn budget so reasoning does not collapse the visible answer allowance. While the active latest Assistant entry is blank, the transcript shows a tappable `생각 중` disclosure; expansion renders the matching LiteRT thought-channel deltas verbatim as bounded, tail-following plain text. The Fold8 showed actual thought text streaming, then collapsed it without leaving the dark MainActivity; the sustained turn recorded 147 updates and cleared the field at completion. The instrumentation-only empty Activity now has a black test theme after it was identified as the white-screen source. Completed answers use a bounded local Markdown/math renderer; an actual Fold8 answer displayed bold headings and centred equations without raw `**`, dollar delimiters, or `\\text`. Thought and active answer streams stay plain, and unsupported or malformed markup falls back to literal text. The raw thought stream remains redacted and ephemeral: it is never copied into final answers, runtime history, Room, recovery capsules, summaries, diagnostics, or restored conversations. |
 | Write terminal answers | Implemented; device/provider pending | Typed completed/refused write receipts produce app-authored terminal answers. Unknown side effects are never presented as success and remain owner-verification obligations. |
 | Turn recovery | Implemented and host/scoped-AVD verified; process/device gates pending | The exact ordered list of up to four completed read Tool names is durable. Recovery copies and reserves that list exactly, re-runs fresh checks/Tools, and accepts order-independent parallel completion only after exact reservation. Schema 10 can point a contextual follow-up at the earlier USER request through a content-free source ordinal while keeping the current follow-up's unique outcome row. |
 | Atomic transcript/outcome storage | Host and scoped-AVD verified | Assistant phase, Tool receipt, and typed Tool outcome commit in one Room transaction. An exact turn/ordinal/risk/outcome/Tool/receipt redelivery is a no-op; conflicting ordinal reuse fails closed. Final assistant phase and terminal outcome commit atomically and idempotently. |
-| Unresolved side effects | Implemented; owner UX/device pending | Room schema 10 retains unresolved writes in a no-expiry table without transcript/turn foreign keys. Chat deletion and turn expiry cannot hide an uncertain write; only matching refusal or explicit owner verification clears it. |
+| Unresolved side effects | Implemented; owner UX/device pending | Room schema 11 retains unresolved writes in a no-expiry table without transcript/turn foreign keys. Chat deletion and turn expiry cannot hide an uncertain write; only matching refusal or explicit owner verification clears it. |
 | Conversation mutation concurrency | Implemented; lifecycle/device pending | `ConversationMutationGate` serializes restore, new/switch/delete/delete-all, recovery resolution, and turn start across UI/Room ownership. |
 | Notification capture | Implemented; physical permission/lifecycle pending | Capture remains default-off and allowlisted. Disable closes a synchronous process gate before asynchronous persistence; capture, setting changes, and erasure share a mutex. A failed disable remains closed. The current turn scope now uses the registered `kakao_notification_search` name, does not add `web_search` merely because a Kakao-notification query says `찾아`, and requires an actual notification read before the turn can complete. |
 | General owner consent | Implemented and host/AVD verified; live acceptance pending | Route, web/weather, memory, proposal, proactive-route, and daily-brief features combine durable state with a latest-request process gate. Every pending mutation closes the gate; only the latest successful durable enable opens it. Network gateways recheck before each provider hop. |
-| Encrypted transfer | Implemented; end-to-end migration pending | Version/length/count/UTF-8/collection/ID/relationship/ordinal/summary checks run before transactional import. Credentials, ledger, notification rows, recovery/checkpoint state, unresolved writes, provider IDs, model, diagnostics, permission, and consent are absent. |
+| Encrypted transfer | Implemented; end-to-end migration pending | Envelope v1 transfer schema 6/payload 2 preserves only canonical content-free USER attachment summaries; legacy schema 5/payload 1 imports them as null. Version/length/count/UTF-8/collection/ID/relationship/ordinal/summary checks run before transactional import. Credentials, ledger, notification rows, recovery/checkpoint state, unresolved writes, provider IDs, media payload, model, diagnostics, permission, and consent are absent. |
 | Fold/DeX/accessibility/input | Implemented policy; physical matrix pending | Usable size and hinge validation prevent invalid Book/Tabletop/two-pane classification. Confirmation actions remain reachable, semantics are explicit, streaming work is bounded, and text drop merges with a newline without mutation on refusal. |
 | Output budget and model evaluation | Sustained 1,024-ceiling Fold8 measurement accepted; model comparison pending | Explicit concise intent stays bounded even when generic explanation wording is present, subjectless Korean `찾아` requests normally use the structured budget, and an inherited detailed public-search request receives the full 1,024-token ceiling while Tool/step/deadline/argument caps remain. Predicted or observed heat through SEVERE does not shorten the request-derived ceiling; CRITICAL still cancels. A current-code sustained GPU turn completed in 97.449 seconds at SEVERE with the 1,024-token ceiling unchanged; this does not prove all available tokens were consumed. The fixed 26-case/23-category screen uses a fourteen-Tool subset of the shipped seventeen. It is an all-Tool stress screen, not a production accuracy estimate. Schema v3 strictly rejects duplicate JSON keys, non-finite values, hidden later/malformed calls, invalid Tool arguments, contradictory terminal states, mixed run/model/artifact audit rows, cleared review obligations, missing visible-language evidence, and incomplete Android binding. The focused Qwen3.5-9B host score and current E4B AVD write-selection failure qualify neither replacement nor same-condition comparison. No replacement model is qualified. |
 | Thermal policy | Implemented; SEVERE full-ceiling Fold8 measurement passed | At the owner's request, predictive headroom remains measured but does not shorten or cancel app model work before CRITICAL. Each deterministic request class keeps its normal 128/256/384/1,024 ceiling and background summarization remains eligible through an observed SEVERE state. `ThermalTurnPolicy` retains the hard boundary: NONE through SEVERE may start, CRITICAL cooperatively cancels, and EMERGENCY or above aborts; UNKNOWN remains fail closed. The sustained Fold8 turn completed at SEVERE with no app-level reduction or cancellation: battery temperature changed from 34.2 to 35.5 C while plugged in, capacity remained 94%, PSS changed from 18,761,728 to 145,807,360 bytes, and app heap changed from 8,325,328 to 22,021,840 bytes. Android and firmware protections remain independent. |
 | Memory and proactive proposals | Implemented bounded source; activation acceptance pending | Memory provenance is owner-visible. Opportunity detection is default-off and review-only; it cannot autonomously promote or execute. |
+| Photo and voice input | Implemented; focused host/source checks passed; corrected physical gate pending | Default-off and gated by a declared manifest modality. One attachment per turn: an image bounded to a 768 px long edge and 1.5 MB, or 0.4–20 s of 16 kHz mono WAV. A media turn is given no Tool schema, runs with `maxSteps = 1`, and cannot combine with a recovery contract, a contextual search request, or a caller-supplied scope; deterministic read routing and follow-up carry-over are skipped. Photos are re-encoded to strip EXIF; camera capture uses one temporary private-cache file with best-effort cleanup, while audio stays in memory. Payloads never enter UI state, Room, transfer, or diagnostics; a canonical content-free USER summary does enter Room, transfer, later context, and summaries. The historical Fold8 session read a synthetic-card number and reached the audio front end, but its token comparison was invalid. The corrected fresh-runtime gate has not run, and owner-media quality, Korean transcription, production camera/picker flow, sustained latency/PSS/thermal, and fold/DeX remain open. |
 
 ## AgentPlan and recovery invariants
 
@@ -300,7 +425,7 @@ uses one shared NFKC/spacing-tolerant relevance rule at both provider quality an
 - A side effect is armed after current authorization/interlock and before ledger claim/Tool call.
   It is never automatically replayed after uncertainty.
 
-## Room schema 10
+## Room schema 11
 
 The no-backup application database contains conversations/messages, memories, notification cache,
 reminders/deliveries, proposals, turn outcomes, ordered read executions, AgentPlan checkpoints, and
@@ -308,7 +433,12 @@ unresolved side-effect obligations. Migration 8→9 adds the independent unresol
 preserves closed side-effect identities from earlier rows without inventing content. Migration
 9→10 adds nullable `recovery_source_user_message_ordinal`; it stores no prompt or result text. A
 contextual follow-up owns its own unique outcome row, while recovery resolves the preceding owner
-question through that ordinal.
+question through that ordinal. Migration 10→11 adds nullable `messages.attachment_summary`, a
+bounded app-written kind/source/whole-second code recording that a message carried a photo or a
+voice clip; existing rows stay NULL and render as ordinary messages. Transfer schema 6/payload 2
+preserves only canonical codes on USER rows; legacy schema 5/payload 1 imports the field as NULL.
+Attachment-only USER rows contribute an app-authored content-free label to subsequent context and
+long-term summarization. No media payload enters Room or transfer.
 
 The Action Ledger remains a separate database. Therefore:
 
@@ -328,6 +458,11 @@ The Action Ledger remains a separate database. Therefore:
   only, so incidental object logging cannot expose prompt, delta, argument, or provider payload
   content.
 - Notification text is hostile, sanitized, allowlisted, bounded, and excluded from transfer.
+- Attached photos and voice clips are untrusted observation, never instruction. A media turn is
+  given no Tool schema, so an instruction inside an attachment has nowhere to execute. Payloads are
+  signature-checked and bounded before the JNI bridge and re-encoded to strip EXIF including GPS.
+  Camera capture is temporarily staged in private cache with best-effort deletion; payload never
+  enters UI state, Room, transfer, or diagnostics, while only its canonical content-free shape does.
 - Credentials remain Keystore-encrypted; UI exposes health state but never the credential value.
 - Credential health distinguishes a truly missing path (`ABSENT`) from a present empty, oversized,
   malformed, permission-untrusted, or undecryptable path (`UNREADABLE`). `UNREADABLE` requires owner
@@ -371,8 +506,8 @@ The exact owner-approved 2026-08-30 contextual-search receipt and 2026-09-01 ans
 thought-UI, renderer, sustained-turn, and preservation receipts are recorded above and belong only
 to their named pulled-back artifacts. Other
 physical receipts remain historical and artifact-specific. The latest ordinary account-free,
-read-only API 37 AVD runner selected 239 reviewed methods with 209 passes, 30 intended guards, and
-zero failures. It excluded every owner-action and dedicated model/ABI class rather than weakening
+read-only API 37 AVD runner selected 269 reviewed methods with 238 passes, 31 intended guards, and
+zero failures on 2026-09-01. It excluded every owner-action and dedicated model/ABI class rather than weakening
 their gates. Before any later phone work, read `AGENTS.md`. Always use an explicit serial. Do not
 run unscoped `connectedAndroidTest`:
 it can uninstall the app and destroy the imported 3.66 GB model. Keep clock-clearing and vault-

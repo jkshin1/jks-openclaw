@@ -62,4 +62,24 @@ class WebSearchQueryRelevanceTest {
         assertFalse(WebSearchQueryRelevance.hasRelevantHit("인터스텔라", listOf(unrelated)))
         assertTrue(WebSearchQueryRelevance.hasRelevantHit("인터스텔라", listOf(related)))
     }
+
+    @Test
+    fun `current officeholder query requires a direct current role to name assertion`() {
+        val query = "대한민국 현직 대통령 이름 공식"
+        val backgroundOnly = listOf(
+            WebSearchHit(
+                "대한민국 대통령",
+                "https://constitution.example/president",
+                "대한민국 대통령은 국가원수이며 임기는 5년입니다.",
+            ),
+        )
+        val answerBearing = WebSearchHit(
+            "대한민국 대통령실 - 대통령 소개",
+            "https://www.president.go.kr/fixture",
+            "대한민국의 현직 대통령은 홍길동입니다.",
+        )
+
+        assertFalse(WebSearchQueryRelevance.hasRelevantHit(query, backgroundOnly))
+        assertTrue(WebSearchQueryRelevance.hasRelevantHit(query, listOf(answerBearing)))
+    }
 }

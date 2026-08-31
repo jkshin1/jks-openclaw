@@ -46,7 +46,7 @@ processing must use KSP (or AGP's legacy kapt only as a temporary fallback).
 `run-avd-regression.sh` refuses physical serials and verifies qemu identity, the exact expected AVD
 name, API 37, `arm64-v8a`, and completed boot both before the build and before installation. It
 builds and installs six debug APKs with explicit `adb -s`, then runs a reviewed positive allowlist
-of 239 app/core methods sequentially. New test files or changed method counts fail closed for
+of 269 app/core methods sequentially. New test files or changed method counts fail closed for
 review. Owner-approved Samsung Calendar actions and the dedicated E4B/Qwen/ABI model lanes are not
 part of this fast regression. The remaining emulator tests can clear the emulator Clock app and
 the debug app's fixture vault, so use only an account-free disposable AVD started with the exact

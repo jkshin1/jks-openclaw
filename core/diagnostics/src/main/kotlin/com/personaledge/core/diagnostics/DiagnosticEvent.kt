@@ -93,6 +93,40 @@ sealed interface DiagnosticEvent {
         val status: DiagnosticThermalStatus,
         val action: DiagnosticThermalAction,
     ) : DiagnosticEvent
+
+    /**
+     * Content-free evidence that one media attachment was staged, refused, or prefilled.
+     *
+     * Shape only: a kind, an outcome, a payload size, and for audio a whole-second length. No
+     * pixels, samples, dimensions, file names, URIs, transcripts, or model text. The size is what
+     * makes an on-device prefill cost interpretable later without retaining anything of what the
+     * owner photographed or said.
+     */
+    data class MediaAttachment(
+        val kind: DiagnosticMediaKind,
+        val stage: DiagnosticMediaStage,
+        val byteCount: Int,
+        val durationSeconds: Int? = null,
+    ) : DiagnosticEvent
+}
+
+enum class DiagnosticMediaKind {
+    IMAGE,
+    AUDIO,
+}
+
+enum class DiagnosticMediaStage {
+    /** Validated and held in the composer, not yet part of a turn. */
+    STAGED,
+
+    /** Rejected before it could become an attachment: unusable, oversized, silent, or refused. */
+    REJECTED,
+
+    /** Handed to the runtime as part of a tool-free turn. */
+    PREFILLED,
+
+    /** Dropped without being sent: the owner removed it, or the turn never started. */
+    DISCARDED,
 }
 
 enum class DiagnosticPhase {
@@ -226,6 +260,8 @@ enum class DiagnosticErrorCode {
     TURN_REPLAYED,
     TURN_MISMATCH,
     INVALID_PROMPT,
+    INVALID_MEDIA,
+    MEDIA_UNSUPPORTED,
     INVALID_TOOL_DEFINITION,
     INVALID_TOOL_CALL,
     INVALID_TOOL_RESPONSE,

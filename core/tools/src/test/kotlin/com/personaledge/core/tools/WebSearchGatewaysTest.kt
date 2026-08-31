@@ -505,6 +505,44 @@ class WebSearchGatewaysTest {
     }
 
     @Test
+    fun `router falls back when officeholder results discuss only the office`() = runBlocking {
+        val query = "대한민국 현직 대통령 이름 공식"
+        val you = FakeSearchGateway(
+            label = "you",
+            responseProvider = WebSearchProvider.YOU_COM,
+            hits = listOf(
+                hit(
+                    "대한민국 대통령",
+                    "https://constitution.example/office",
+                    "대통령은 국가원수이며 임기는 5년입니다.",
+                ),
+                hit(
+                    "대통령 선거 제도",
+                    "https://election.example/office",
+                    "대한민국 헌법은 대통령 선거 방법을 규정합니다.",
+                ),
+            ),
+        )
+        val tavily = FakeSearchGateway(
+            label = "tavily",
+            responseProvider = WebSearchProvider.TAVILY,
+            hits = listOf(
+                hit(
+                    "대한민국 대통령실 - 대통령 소개",
+                    "https://www.president.go.kr/fixture",
+                    "대한민국의 현직 대통령은 홍길동입니다.",
+                ),
+            ),
+        )
+
+        val response = YouTavilyWebSearchGateway(you, tavily).search(query, 5)
+
+        assertEquals(WebSearchProvider.TAVILY, response.provider)
+        assertEquals(1, you.searchCalls)
+        assertEquals(1, tavily.searchCalls)
+    }
+
+    @Test
     fun `router accepts one substantive You result only for explicitly narrow requests`() = runBlocking {
         listOf(
             "\"정확한 문구\"" to hit(

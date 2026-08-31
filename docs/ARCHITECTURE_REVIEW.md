@@ -72,9 +72,9 @@ second decode from contradicting whether a calendar/reminder/memory/proposal cha
 whether KakaoTalk/Clock merely accepted a request. Exceptions that cannot prove the write outcome
 remain unknown and require owner verification.
 
-## Room schema 10 recovery and persistence
+## Room schema 11 recovery and persistence
 
-The current app database is Room schema 10:
+The current app database is Room schema 11:
 
 - `turn_outcomes` stores the content-free turn state;
 - `turn_read_executions` stores up to four exact ordered Tool names;
@@ -170,7 +170,7 @@ cancellation, higher-state aborts, and the fail-closed unknown state remain auth
 performance improvement is claimed without the exact Fold8 run.
 
 Release source generates a deterministic CycloneDX SBOM and privacy-safe provenance containing
-version, Git/source-state digest, Room schema 10, model/runtime pins, lock digest, SBOM digest, and
+version, Git/source-state digest, Room schema 11, model/runtime pins, lock digest, SBOM digest, and
 public signing certificate identity. Each exported Room schema filename must be a positive integer
 equal to that file's JSON-internal database version, and the latest validated export must equal the
 `PERSONAL_EDGE_DATABASE_VERSION` compile constant. Missing, malformed, or disagreeing inputs fail

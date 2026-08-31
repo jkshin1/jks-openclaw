@@ -12,6 +12,8 @@ val expectedManifestKeys = setOf(
     "litertLmVersion",
     "contextTokens",
     "maxOutputTokens",
+    "supportsImageInput",
+    "supportsAudioInput",
 )
 
 fun quotedBuildConfig(value: String): String =
@@ -27,6 +29,8 @@ data class ModelManifestValues(
     val litertLmVersion: String,
     val contextTokens: Long,
     val maxOutputTokens: Long,
+    val supportsImageInput: Boolean,
+    val supportsAudioInput: Boolean,
 )
 
 fun loadPinnedManifest(
@@ -41,6 +45,10 @@ fun loadPinnedManifest(
     fun manifestString(name: String): String =
         (manifest[name] as? String)?.takeIf { it.isNotBlank() }
             ?: error("Model manifest field $name must be a non-blank string.")
+
+    fun manifestBoolean(name: String): Boolean =
+        manifest[name] as? Boolean
+            ?: error("Model manifest field $name must be a literal true or false.")
 
     fun manifestLong(name: String): Long {
         val encoded = (manifest[name] as? Number)?.toString()
@@ -62,6 +70,8 @@ fun loadPinnedManifest(
         litertLmVersion = manifestString("litertLmVersion"),
         contextTokens = manifestLong("contextTokens"),
         maxOutputTokens = manifestLong("maxOutputTokens"),
+        supportsImageInput = manifestBoolean("supportsImageInput"),
+        supportsAudioInput = manifestBoolean("supportsAudioInput"),
     )
     val downloadUrl = manifestString("downloadUrl")
 
@@ -93,9 +103,17 @@ val qwen8bLabModel = loadPinnedManifest(
 check(productionModel.file == "gemma-4-E4B-it.litertlm")
 check(productionModel.contextTokens == 4_096L)
 check(productionModel.maxOutputTokens == 1_024L)
+// The pinned artifact embeds tf_lite_vision_encoder/adapter and tf_lite_audio_encoder_hw/adapter
+// sections, and its own jinja template renders `image` and `audio` content items. Declaring the
+// modalities here is what lets the runtime refuse media for any model that does not carry them.
+check(productionModel.supportsImageInput)
+check(productionModel.supportsAudioInput)
 check(qwen8bLabModel.file == "qwen3_8b_mixed_int4.litertlm")
 check(qwen8bLabModel.contextTokens == 2_048L)
 check(qwen8bLabModel.maxOutputTokens == 384L)
+// The lab artifact is text-only. The declaration keeps media from ever reaching that build.
+check(!qwen8bLabModel.supportsImageInput)
+check(!qwen8bLabModel.supportsAudioInput)
 
 plugins {
     alias(libs.plugins.android.library)
@@ -125,6 +143,16 @@ android {
             "int",
             "MODEL_MAX_OUTPUT_TOKENS",
             productionModel.maxOutputTokens.toString(),
+        )
+        buildConfigField(
+            "boolean",
+            "MODEL_SUPPORTS_IMAGE_INPUT",
+            productionModel.supportsImageInput.toString(),
+        )
+        buildConfigField(
+            "boolean",
+            "MODEL_SUPPORTS_AUDIO_INPUT",
+            productionModel.supportsAudioInput.toString(),
         )
         buildConfigField(
             "String",
@@ -162,6 +190,16 @@ android {
                 "int",
                 "MODEL_MAX_OUTPUT_TOKENS",
                 qwen8bLabModel.maxOutputTokens.toString(),
+            )
+            buildConfigField(
+                "boolean",
+                "MODEL_SUPPORTS_IMAGE_INPUT",
+                qwen8bLabModel.supportsImageInput.toString(),
+            )
+            buildConfigField(
+                "boolean",
+                "MODEL_SUPPORTS_AUDIO_INPUT",
+                qwen8bLabModel.supportsAudioInput.toString(),
             )
             buildConfigField(
                 "String",

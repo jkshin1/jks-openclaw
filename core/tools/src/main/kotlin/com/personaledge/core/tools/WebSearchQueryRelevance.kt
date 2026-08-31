@@ -44,6 +44,9 @@ object WebSearchQueryRelevance {
 
     /** False means a configured fallback provider should get its one existing bounded attempt. */
     fun hasRelevantHit(query: String, hits: List<WebSearchHit>): Boolean {
+        if (WebSearchAnswerability.currentOfficeholderQueryOrNull(query) != null) {
+            return WebSearchAnswerability.hasCurrentOfficeholderAnswer(query, hits)
+        }
         val matches = hits.asSequence()
             .filter { hit -> hit.snippet.isNotBlank() }
             .map { hit -> analyze(query, hit) }

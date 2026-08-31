@@ -15,10 +15,13 @@ import com.personaledge.core.agent.AgentPlanExecutionBridge
 import com.personaledge.core.agent.DeterministicReadRouter
 import com.personaledge.core.agent.ManualToolAgentController
 import com.personaledge.core.agent.ManualToolRegistry
+import com.personaledge.core.agent.PriorWebResultFollowUpPolicy
 import com.personaledge.core.agent.ReminderDateTimeHint
 import com.personaledge.core.agent.SideEffectTurnGate
 import com.personaledge.core.agent.ToolFailureDetail
 import com.personaledge.core.agent.TurnExecutionContract
+import com.personaledge.core.agent.TurnMediaIntent
+import com.personaledge.core.agent.TurnMediaPolicy
 import com.personaledge.core.data.AgentSettings
 import com.personaledge.core.data.MemoryCategory
 import com.personaledge.core.data.MemoryEntity
@@ -38,6 +41,8 @@ import com.personaledge.core.diagnostics.DiagnosticConfirmationOutcome
 import com.personaledge.core.diagnostics.DiagnosticContextComponent
 import com.personaledge.core.diagnostics.DiagnosticErrorCode
 import com.personaledge.core.diagnostics.DiagnosticEvent
+import com.personaledge.core.diagnostics.DiagnosticMediaKind
+import com.personaledge.core.diagnostics.DiagnosticMediaStage
 import com.personaledge.core.diagnostics.DiagnosticExportResult
 import com.personaledge.core.diagnostics.DiagnosticPhase
 import com.personaledge.core.diagnostics.DiagnosticResult
@@ -57,7 +62,10 @@ import com.personaledge.core.llm.ModelArtifactStore
 import com.personaledge.core.llm.ModelStoreException
 import com.personaledge.core.llm.PinnedModelManifest
 import com.personaledge.core.llm.TurnId
+import com.personaledge.core.llm.TurnMediaAttachment
+import com.personaledge.core.llm.TurnMediaKind
 import com.personaledge.core.llm.VerifiedInstalledModel
+import com.personaledge.core.llm.supportsModality
 import com.personaledge.core.tools.AlarmNextTool
 import com.personaledge.core.tools.AlarmSetTool
 import com.personaledge.core.tools.CalendarAccount
@@ -83,6 +91,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -118,6 +127,13 @@ data class ChatEntry(
     val role: ChatRole,
     val text: String,
     val recoveryAction: ChatRecoveryAction? = null,
+    /**
+     * App-authored label for a photo or voice clip this message carried.
+     *
+     * A caption, never the media. The bytes exist only while the turn runs, so the transcript
+     * shows what kind of attachment was sent and nothing that could reconstruct it.
+     */
+    val attachmentLabel: String? = null,
 )
 
 /**
@@ -272,22 +288,51 @@ data class PersonalEdgeUiState(
     val activeTurnId: TurnId? = null,
     val activeReasoning: ActiveReasoningUiState? = null,
     val thermalStatus: DiagnosticThermalStatus = DiagnosticThermalStatus.UNKNOWN,
+    /** The owner has turned photo and voice input on. Off until they do. */
+    val mediaInputEnabled: Boolean = false,
+    /** Metadata for the one staged attachment; the payload never enters UI state. */
+    val pendingAttachment: PendingMediaAttachment? = null,
+    val voiceRecording: VoiceRecordingUiState? = null,
+    /** Live dictation: the answer becomes an editable draft rather than a transcript entry. */
+    val transcribing: Boolean = false,
+    /** App-authored one-shot notice about an attachment or a recording. */
+    val mediaNotice: String? = null,
 ) {
     val isBusy: Boolean
         get() = modelStatus == ModelUiStatus.IMPORTING ||
-            modelStatus == ModelUiStatus.INITIALIZING || activeTurnId != null
+            modelStatus == ModelUiStatus.INITIALIZING || activeTurnId != null ||
+            voiceRecording != null || transcribing
 
     val canSend: Boolean
         get() {
+            if (activeTurnId != null || voiceRecording != null || transcribing) return false
+            if (pendingAttachment != null) {
+                return MediaComposerPolicy.canSendWithAttachment(
+                    attachment = pendingAttachment,
+                    prompt = prompt,
+                    modelStatus = modelStatus,
+                    turnActive = false,
+                    recording = false,
+                    thermalStatus = thermalStatus,
+                )
+            }
             val modelAvailable = modelStatus == ModelUiStatus.READY
             val deterministicReadAvailable = modelStatus != ModelUiStatus.CHECKING &&
                 modelStatus != ModelUiStatus.IMPORTING &&
                 modelStatus != ModelUiStatus.INITIALIZING &&
                 DeterministicReadRouter.canRunWithoutModel(prompt)
-            return (modelAvailable || deterministicReadAvailable) && activeTurnId == null &&
+            return (modelAvailable || deterministicReadAvailable) &&
                 prompt.isNotBlank() && PromptInputPolicy.isAccepted(prompt) &&
                 ThermalTurnPolicy.canStart(thermalStatus)
         }
+}
+
+/** Live recording indicator. Holds elapsed time only; samples never reach UI state. */
+data class VoiceRecordingUiState(
+    val elapsedMillis: Int,
+    val dictation: Boolean,
+) {
+    val remainingMillis: Int get() = (VoiceCapturePolicy.MAX_MILLIS - elapsedMillis).coerceAtLeast(0)
 }
 
 class PersonalEdgeViewModel(
@@ -417,6 +462,24 @@ class PersonalEdgeViewModel(
     private var modelJob: Job? = null
     private var turnJob: Job? = null
     private var summaryJob: Job? = null
+    private val mediaStaging = MediaCaptureStaging(application)
+    private val imageLoader = ImageAttachmentLoader(application)
+    private val voiceRecorder = VoiceRecorder()
+
+    /**
+     * The staged payload, deliberately outside [PersonalEdgeUiState].
+     *
+     * UI state is snapshotted, diffed, and held by Compose across recompositions; a multi-hundred
+     * kilobyte photo has no business living there. The composer sees only
+     * [PendingMediaAttachment] metadata, and this reference is cleared the moment the turn that
+     * consumes it ends.
+     */
+    /** Modalities the live runtime actually loaded; empty until it is initialized. */
+    private var initializedMediaModalities: Set<TurnMediaKind> = emptySet()
+    private var stagedMedia: TurnMediaAttachment? = null
+    private var stagedMediaIntent: TurnMediaIntent? = null
+    private var voiceJob: Job? = null
+    private val voiceRecordingActive = AtomicBoolean(false)
     private val conversationMutationGate = ConversationMutationGate()
     private val unresolvedActionWarningGate = UnresolvedActionWarningGate()
     private val activeThermalInitialization = AtomicReference<ActiveThermalInitialization?>(null)
@@ -447,15 +510,36 @@ class PersonalEdgeViewModel(
             applyObservation(thermalMonitor.observation.value)
             thermalMonitor.statusEvents.collect(::applyObservation)
         }
+        viewModelScope.launch {
+            // The composer's attachment controls follow the durable setting, so turning media off
+            // in settings closes them immediately rather than at the next launch.
+            container.settings.settings.collect { settings ->
+                val enabled = settings.mediaInputEnabled
+                if (!enabled && _uiState.value.pendingAttachment != null) {
+                    clearStagedMedia(DiagnosticMediaStage.DISCARDED)
+                }
+                _uiState.update { state -> state.copy(mediaInputEnabled = enabled) }
+            }
+        }
         inspectInstalledModel()
     }
 
     fun updatePrompt(value: String) {
         _uiState.update { state ->
             val update = PromptInputPolicy.apply(state.prompt, value)
+            // With an attachment staged the app-authored media template also has to fit the same
+            // 2 KiB turn envelope, so the typed line gets a smaller budget and says so.
+            val mediaWarning = if (
+                state.pendingAttachment != null &&
+                !TurnMediaPolicy.isAcceptedOwnerText(update.prompt.trim())
+            ) {
+                "첨부와 함께 보낼 수 있는 글자 수를 넘었습니다. 내용은 유지됩니다."
+            } else {
+                null
+            }
             state.copy(
                 prompt = update.prompt,
-                promptInputWarning = update.warning,
+                promptInputWarning = mediaWarning ?: update.warning,
             )
         }
     }
@@ -646,6 +730,20 @@ class PersonalEdgeViewModel(
         }
     }
 
+    /**
+     * Modalities the engine should load encoders for, from the owner's durable setting.
+     *
+     * Read once per initialization on purpose. Loading these executors costs the GPU backend for
+     * the whole engine on the owner's device, so the runtime must not carry them for someone who
+     * has media input switched off.
+     */
+    private suspend fun enabledMediaModalities(): Set<TurnMediaKind> {
+        val enabled = runCatching { container.settings.current().mediaInputEnabled }
+            .getOrDefault(false)
+        if (!enabled) return emptySet()
+        return TurnMediaKind.entries.filterTo(linkedSetOf(), modelManifest::supportsModality)
+    }
+
     fun initializeRuntime(backend: InferenceBackend) {
         if (modelJob?.isActive == true || turnJob?.isActive == true) return
         val model = verifiedModel ?: run {
@@ -697,11 +795,14 @@ class PersonalEdgeViewModel(
                         "Thermal policy stopped runtime initialization before native entry.",
                     )
                 }
+                val mediaModalities = enabledMediaModalities()
                 runtime.initialize(
                     model = model,
                     backend = backend,
                     tools = controller.toolDefinitions,
+                    mediaModalities = mediaModalities,
                 )
+                initializedMediaModalities = mediaModalities
                 val active = (runtime.state.value as? LlmState.Ready)?.backend ?: backend
                 diagnostics.recordSafely(
                     DiagnosticEvent.RuntimeInitialized(
@@ -1376,7 +1477,10 @@ class PersonalEdgeViewModel(
         calendarCoordinator.setReadEnabled(calendarId, enabled)
 
     /** Adds bounded device state plus explicitly quoted summary/recent-message context. */
-    private suspend fun withTrustedTurnContext(prompt: String): TrustedTurnContextResult {
+    private suspend fun withTrustedTurnContext(
+        prompt: String,
+        requiredPriorAnswer: PriorWebResultReference? = null,
+    ): TrustedTurnContextResult {
         val temporal = runCatching {
             val zone = ZoneId.systemDefault()
             zone to Instant.now().atZone(zone)
@@ -1392,15 +1496,33 @@ class PersonalEdgeViewModel(
         val settings = runCatching { container.settings.current() }
             .onFailure { unavailable += DiagnosticContextComponent.SETTINGS }
             .getOrNull()
-        val conversation = _chatHistory.value.activeConversationId?.let { conversationId ->
+        val conversationId = requiredPriorAnswer?.conversationId
+            ?: _chatHistory.value.activeConversationId
+        val conversation = conversationId?.let { activeConversationId ->
             runCatching {
                 container.conversations.loadContext(
-                    conversationId = conversationId,
+                    conversationId = activeConversationId,
                     recentMessageLimit = settings?.recentMessageWindow
                         ?: com.personaledge.core.data.ConversationRepository.DEFAULT_RECENT_MESSAGES,
                 )
             }.onFailure { unavailable += DiagnosticContextComponent.CONVERSATION }
                 .getOrNull()
+        }
+        if (requiredPriorAnswer != null) {
+            val requiredAnswerAvailable = conversation?.let { loaded ->
+                loaded.conversationId == requiredPriorAnswer.conversationId &&
+                    loaded.recentMessages.any { message ->
+                        message.ordinal == requiredPriorAnswer.assistantMessageOrdinal &&
+                            message.role == MessageRole.ASSISTANT &&
+                            message.text.isNotBlank()
+                    }
+            } == true
+            if (!requiredAnswerAvailable) {
+                return TrustedTurnContextResult.Unavailable(
+                    component = DiagnosticContextComponent.CONVERSATION,
+                    userMessage = PRIOR_WEB_RESULT_UNAVAILABLE_MESSAGE,
+                )
+            }
         }
         val recalledMemories = if (
             settings?.let { current ->
@@ -1441,11 +1563,18 @@ class PersonalEdgeViewModel(
             conversation = conversation,
             memories = recalledMemories.map(MemoryEntity::content),
             maximumBytes = MAX_USER_PROMPT_BYTES,
+            requiredPriorAnswer = requiredPriorAnswer,
         )
         if (!built.deviceContextIncluded) {
             return TrustedTurnContextResult.Unavailable(
                 component = DiagnosticContextComponent.PROMPT_BUDGET,
                 userMessage = "현재 날짜·시간 정보를 함께 전달할 공간이 부족합니다. 요청을 짧게 줄여 주세요.",
+            )
+        }
+        if (requiredPriorAnswer != null && !built.requiredPriorAnswerIncluded) {
+            return TrustedTurnContextResult.Unavailable(
+                component = DiagnosticContextComponent.PROMPT_BUDGET,
+                userMessage = PRIOR_WEB_RESULT_BUDGET_MESSAGE,
             )
         }
         return TrustedTurnContextResult.Ready(
@@ -1514,7 +1643,655 @@ class PersonalEdgeViewModel(
         }
     }
 
+
+    // ------------------------------------------------------------------------------------------
+    // Photo and voice input
+    //
+    // Everything below shares one rule with no exception: a turn that carries media is given no
+    // Tool schema. A photographed note or a spoken sentence can read like an instruction, and this
+    // app cannot tell an observed instruction from the owner's own. So media turns report, and
+    // only report. The one path from speech to action is dictation, which puts a transcript in the
+    // composer for the owner to read and send themselves — at which point it is an ordinary text
+    // turn that has earned its scope the ordinary way.
+    // ------------------------------------------------------------------------------------------
+
+    fun setMediaInputEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            runCatching { container.settings.setMediaInputEnabled(enabled) }
+            if (!enabled) {
+                cancelVoiceRecording()
+                clearStagedMedia(DiagnosticMediaStage.DISCARDED)
+            }
+        }
+    }
+
+    fun dismissMediaNotice() {
+        _uiState.update { state -> state.copy(mediaNotice = null) }
+    }
+
+    /**
+     * Creates the one staged capture target and hands its URI back to the caller's launcher.
+     *
+     * The URI is produced only after the availability check passes, so a refused capture never
+     * creates a file at all.
+     */
+    fun requestCameraCapture(onReady: (Uri?) -> Unit) {
+        val reason = mediaUnavailableReason(TurnMediaKind.IMAGE)
+        if (reason != null) {
+            showMediaNotice(MediaComposerPolicy.message(reason))
+            onReady(null)
+            return
+        }
+        viewModelScope.launch {
+            val uri = mediaStaging.prepareCaptureUri()
+            if (uri == null) showMediaNotice(MediaComposerPolicy.rejectionMessage(TurnMediaKind.IMAGE))
+            onReady(uri)
+        }
+    }
+
+    fun onCameraCaptured(success: Boolean) {
+        viewModelScope.launch {
+            if (!success) {
+                // A cancelled capture is not an error worth a notice; just remove the staged file.
+                mediaStaging.clear()
+                return@launch
+            }
+            val bytes = mediaStaging.consumeCapture()
+            if (bytes == null) {
+                recordMediaDiagnostic(TurnMediaKind.IMAGE, DiagnosticMediaStage.REJECTED, 0)
+                showMediaNotice(MediaComposerPolicy.rejectionMessage(TurnMediaKind.IMAGE))
+                return@launch
+            }
+            stageImage(imageLoader.loadOrNull(bytes), MediaAttachmentSource.CAMERA)
+        }
+    }
+
+    fun onImageSelected(uri: Uri?) {
+        if (uri == null) return
+        val reason = mediaUnavailableReason(TurnMediaKind.IMAGE)
+        if (reason != null) {
+            showMediaNotice(MediaComposerPolicy.message(reason))
+            return
+        }
+        viewModelScope.launch {
+            stageImage(imageLoader.loadOrNull(uri), MediaAttachmentSource.GALLERY)
+        }
+    }
+
+    fun onMicrophonePermissionDenied() {
+        showMediaNotice(MediaComposerPolicy.MICROPHONE_PERMISSION_MESSAGE)
+    }
+
+    /**
+     * Starts recording. [dictation] selects where the result goes, not what is recorded.
+     *
+     * With dictation the clip becomes an editable draft in the composer; without it the clip
+     * becomes an attachment the owner can caption and send like a photo.
+     */
+    fun startVoiceRecording(dictation: Boolean) {
+        val reason = mediaUnavailableReason(TurnMediaKind.AUDIO)
+        if (reason != null) {
+            showMediaNotice(MediaComposerPolicy.message(reason))
+            return
+        }
+        if (!voiceRecordingActive.compareAndSet(false, true)) return
+        _uiState.update { state ->
+            state.copy(
+                voiceRecording = VoiceRecordingUiState(elapsedMillis = 0, dictation = dictation),
+                mediaNotice = null,
+            )
+        }
+        voiceJob = viewModelScope.launch {
+            val result = try {
+                voiceRecorder.record(
+                    shouldContinue = voiceRecordingActive::get,
+                    onElapsed = { elapsed ->
+                        _uiState.update { state ->
+                            val recording = state.voiceRecording ?: return@update state
+                            state.copy(voiceRecording = recording.copy(elapsedMillis = elapsed))
+                        }
+                    },
+                )
+            } finally {
+                voiceRecordingActive.set(false)
+                _uiState.update { state -> state.copy(voiceRecording = null) }
+            }
+            when (result) {
+                is VoiceRecordingResult.Captured -> {
+                    recordMediaDiagnostic(
+                        kind = TurnMediaKind.AUDIO,
+                        stage = DiagnosticMediaStage.STAGED,
+                        byteCount = result.attachment.byteCount,
+                        durationMillis = result.durationMillis,
+                    )
+                    if (dictation) {
+                        transcribe(result.attachment, result.durationMillis)
+                    } else {
+                        stageVoiceAttachment(result.attachment, result.durationMillis)
+                    }
+                }
+
+                VoiceRecordingResult.TooShort -> {
+                    recordMediaDiagnostic(TurnMediaKind.AUDIO, DiagnosticMediaStage.REJECTED, 0, 0)
+                    showMediaNotice(MediaComposerPolicy.RECORDING_TOO_SHORT_MESSAGE)
+                }
+
+                VoiceRecordingResult.Silent -> {
+                    recordMediaDiagnostic(TurnMediaKind.AUDIO, DiagnosticMediaStage.REJECTED, 0, 0)
+                    showMediaNotice(MediaComposerPolicy.RECORDING_SILENT_MESSAGE)
+                }
+
+                VoiceRecordingResult.Unavailable -> {
+                    recordMediaDiagnostic(TurnMediaKind.AUDIO, DiagnosticMediaStage.REJECTED, 0, 0)
+                    showMediaNotice(MediaComposerPolicy.RECORDING_UNAVAILABLE_MESSAGE)
+                }
+            }
+        }
+    }
+
+    /** Ends the recording and keeps what was captured. */
+    fun stopVoiceRecording() {
+        voiceRecordingActive.set(false)
+    }
+
+    /** Ends the recording and throws away what was captured. */
+    fun cancelVoiceRecording() {
+        voiceRecordingActive.set(false)
+        voiceJob?.cancel(CancellationException("Owner cancelled the recording."))
+        voiceJob = null
+        _uiState.update { state -> state.copy(voiceRecording = null) }
+    }
+
+    fun removeAttachment() {
+        clearStagedMedia(DiagnosticMediaStage.DISCARDED)
+    }
+
+    private fun mediaUnavailableReason(kind: TurnMediaKind): MediaUnavailableReason? {
+        val state = _uiState.value
+        return MediaComposerPolicy.unavailableReason(
+            kind = kind,
+            enabled = state.mediaInputEnabled,
+            modelSupportsKind = when (kind) {
+                TurnMediaKind.IMAGE -> modelManifest.supportsImageInput
+                TurnMediaKind.AUDIO -> modelManifest.supportsAudioInput
+            },
+            modelStatus = state.modelStatus,
+            runtimeLoadedKind = kind in initializedMediaModalities,
+            turnActive = state.activeTurnId != null || state.transcribing,
+            recording = state.voiceRecording != null,
+            hasAttachment = state.pendingAttachment != null,
+            thermalStatus = state.thermalStatus,
+        )
+    }
+
+    private fun stageImage(loaded: LoadedImageAttachment?, source: MediaAttachmentSource) {
+        if (loaded == null) {
+            recordMediaDiagnostic(TurnMediaKind.IMAGE, DiagnosticMediaStage.REJECTED, 0)
+            showMediaNotice(MediaComposerPolicy.rejectionMessage(TurnMediaKind.IMAGE))
+            return
+        }
+        // A second capture that lands while one is already staged replaces it rather than
+        // silently winning or silently losing.
+        stagedMedia = loaded.attachment
+        stagedMediaIntent = null
+        recordMediaDiagnostic(
+            kind = TurnMediaKind.IMAGE,
+            stage = DiagnosticMediaStage.STAGED,
+            byteCount = loaded.attachment.byteCount,
+        )
+        _uiState.update { state ->
+            state.copy(
+                mediaNotice = null,
+                pendingAttachment = PendingMediaAttachment(
+                    id = UUID.randomUUID().toString(),
+                    kind = TurnMediaKind.IMAGE,
+                    source = source,
+                    byteCount = loaded.attachment.byteCount,
+                    pixelWidth = loaded.pixelWidth,
+                    pixelHeight = loaded.pixelHeight,
+                ),
+            )
+        }
+    }
+
+    private fun stageVoiceAttachment(attachment: TurnMediaAttachment, durationMillis: Int) {
+        stagedMedia = attachment
+        stagedMediaIntent = null
+        _uiState.update { state ->
+            state.copy(
+                mediaNotice = null,
+                pendingAttachment = PendingMediaAttachment(
+                    id = UUID.randomUUID().toString(),
+                    kind = TurnMediaKind.AUDIO,
+                    source = MediaAttachmentSource.VOICE,
+                    byteCount = attachment.byteCount,
+                    durationMillis = durationMillis,
+                ),
+            )
+        }
+    }
+
+    private fun clearStagedMedia(stage: DiagnosticMediaStage) {
+        val current = _uiState.value.pendingAttachment
+        if (current != null && stage == DiagnosticMediaStage.DISCARDED) {
+            recordMediaDiagnostic(
+                kind = current.kind,
+                stage = stage,
+                byteCount = current.byteCount,
+                durationMillis = current.durationMillis,
+            )
+        }
+        stagedMedia = null
+        stagedMediaIntent = null
+        _uiState.update { state -> state.copy(pendingAttachment = null) }
+    }
+
+    private fun showMediaNotice(message: String) {
+        _uiState.update { state -> state.copy(mediaNotice = message) }
+    }
+
+    private fun recordMediaDiagnostic(
+        kind: TurnMediaKind,
+        stage: DiagnosticMediaStage,
+        byteCount: Int,
+        durationMillis: Int? = null,
+    ) {
+        diagnostics.recordSafely(
+            DiagnosticEvent.MediaAttachment(
+                kind = when (kind) {
+                    TurnMediaKind.IMAGE -> DiagnosticMediaKind.IMAGE
+                    TurnMediaKind.AUDIO -> DiagnosticMediaKind.AUDIO
+                },
+                stage = stage,
+                byteCount = byteCount,
+                durationSeconds = when (kind) {
+                    // The event shape requires a duration for audio and forbids one for an image.
+                    TurnMediaKind.AUDIO -> ((durationMillis ?: 0) + 999) / 1_000
+                    TurnMediaKind.IMAGE -> null
+                },
+            ),
+        )
+    }
+
+
+    /**
+     * Runs one tool-free turn whose prefill carries the staged attachment.
+     *
+     * Deliberately a separate path from [startPrompt] rather than a flag on it. A text turn
+     * carries automatic Tool scoping, deterministic read routing, follow-up carry-over, recovery
+     * capsules and Tool receipts; a media turn has none of those by design, and threading an
+     * attachment through all of them would mean five more places where "but not for media" has to
+     * stay true. There is also nothing to recover: the attachment exists only while this runs, so
+     * a media turn deliberately writes no recovery capsule.
+     */
+    private fun startMediaTurn() {
+        val mutationLease = conversationMutationGate.tryAcquire() ?: return
+        try {
+            if (!conversationMutationGate.owns(mutationLease)) return
+            val attachment = stagedMedia ?: return
+            val snapshot = _uiState.value
+            val pending = snapshot.pendingAttachment ?: return
+            val ownerText = snapshot.prompt.trim()
+            if (!snapshot.canSend) return
+            if (snapshot.activeTurnId != null || turnJob?.isActive == true) return
+
+            val startThermalObservation = thermalMonitor.refresh()
+            if (!ThermalTurnPolicy.canStart(startThermalObservation.status)) {
+                diagnostics.recordSafely(
+                    DiagnosticEvent.ThermalGuard(
+                        status = startThermalObservation.status,
+                        action = DiagnosticThermalAction.TURN_REJECTED,
+                    ),
+                )
+                addMessage(ChatRole.STATUS, "기기 열 보호 정책이 새 요청을 허용하지 않습니다.")
+                return
+            }
+
+            val plan = TurnMediaPolicy.planOrNull(
+                kind = attachment.kind,
+                ownerText = ownerText,
+                requestedIntent = stagedMediaIntent,
+            )
+            if (plan == null) {
+                showMediaNotice(
+                    "첨부와 함께 보낼 수 있는 글자 수를 넘었습니다. 내용을 줄여 주세요.",
+                )
+                return
+            }
+
+            val pendingSummary = BackgroundSummaryPriority.cancelForUserTurn(summaryJob)
+            val turnId = TurnId("turn-${UUID.randomUUID()}")
+            val thermalTurn = ActiveThermalTurn(
+                turnId = turnId,
+                baselineStopSequence = startThermalObservation.stopSequence,
+            )
+            if (!activeThermalTurn.compareAndSet(null, thermalTurn)) return
+
+            val assistantEntryId = "assistant-${turnId.value}-0"
+            val attachmentSummary = MessageAttachmentSummary.encode(pending)
+            val attachmentLabel = MediaAttachmentPresentation.transcriptLabel(
+                DecodedAttachmentSummary(pending.kind, pending.source, pending.durationMillis?.let {
+                    (it + 999) / 1_000
+                }),
+            )
+            stagedMedia = null
+            stagedMediaIntent = null
+            _uiState.update { state ->
+                state.copy(
+                    prompt = "",
+                    promptInputWarning = null,
+                    mediaNotice = null,
+                    pendingAttachment = null,
+                    activeTurnId = turnId,
+                    activeReasoning = ActiveReasoningUiPolicy.start(turnId, assistantEntryId),
+                    messages = state.messages + listOf(
+                        ChatEntry(
+                            id = "user-${turnId.value}",
+                            role = ChatRole.USER,
+                            text = ownerText,
+                            attachmentLabel = attachmentLabel,
+                        ),
+                        ChatEntry(assistantEntryId, ChatRole.ASSISTANT, ""),
+                    ),
+                )
+            }
+
+            // The gate covers starting the turn, not its whole lifetime — the same contract the
+            // text path uses, so switching or deleting a conversation stays possible while a photo
+            // is being described.
+            turnJob = viewModelScope.launch {
+                BackgroundSummaryPriority.awaitRelease(pendingSummary)
+                val startedAt = SystemClock.elapsedRealtime()
+                var deltaCount = 0
+                var deltaByteCount = 0L
+                var completed = false
+                try {
+                    val conversationId = history.ensureConversation(
+                        activeConversationId = _chatHistory.value.activeConversationId,
+                        firstPrompt = ownerText.ifEmpty { attachmentLabel },
+                    )
+                    _chatHistory.update { state -> state.copy(activeConversationId = conversationId) }
+                    // The typed line and a content-free attachment shape; never the media itself.
+                    history.recordOrdinal(
+                        conversationId = conversationId,
+                        role = MessageRole.USER,
+                        text = ownerText,
+                        attachmentSummary = attachmentSummary,
+                    )
+
+                    diagnostics.markPhase(DiagnosticPhase.TURN_PROCESSING)
+                    diagnostics.recordSafely(
+                        DiagnosticEvent.TurnStarted(plan.prompt.toByteArray(Charsets.UTF_8).size),
+                    )
+                    recordMediaDiagnostic(
+                        kind = attachment.kind,
+                        stage = DiagnosticMediaStage.PREFILLED,
+                        byteCount = attachment.byteCount,
+                        durationMillis = attachment.durationMillis,
+                    )
+
+                    controller.runTurn(
+                        turnId = turnId,
+                        prompt = plan.prompt,
+                        turnLimits = mediaTurnLimits(plan.maxOutputTokens),
+                        media = listOf(attachment),
+                    ).collect { event ->
+                        when (event) {
+                            is AgentEvent.ThoughtDelta -> appendActiveReasoning(
+                                turnId = turnId,
+                                assistantEntryId = assistantEntryId,
+                                delta = event.text,
+                            )
+
+                            is AgentEvent.TextDelta -> {
+                                clearActiveReasoning(turnId, assistantEntryId)
+                                if (event.text.isNotEmpty()) {
+                                    if (deltaCount < Int.MAX_VALUE) deltaCount++
+                                    deltaByteCount = saturatedAdd(
+                                        deltaByteCount,
+                                        event.text.toByteArray(Charsets.UTF_8).size.toLong(),
+                                    )
+                                }
+                                appendToMessage(assistantEntryId, event.text)
+                            }
+
+                            is AgentEvent.TrustedAnswer -> {
+                                clearActiveReasoning(turnId, assistantEntryId)
+                                appendToMessage(assistantEntryId, event.text)
+                            }
+
+                            is AgentEvent.Completed -> {
+                                completed = true
+                                diagnostics.recordSafely(
+                                    DiagnosticEvent.TurnCompleted(
+                                        durationMillis = diagnosticDuration(startedAt),
+                                        deltaCount = deltaCount,
+                                        deltaByteCount = deltaByteCount,
+                                    ),
+                                )
+                            }
+
+                            is AgentEvent.Failure -> {
+                                diagnostics.recordSafely(
+                                    DiagnosticEvent.TurnFailed(
+                                        durationMillis = diagnosticDuration(startedAt),
+                                        deltaCount = deltaCount,
+                                        deltaByteCount = deltaByteCount,
+                                        errorCode = event.runtimeCode?.toDiagnosticErrorCode()
+                                            ?: event.code.toDiagnosticErrorCode(),
+                                    ),
+                                )
+                                removeMessageIfBlank(assistantEntryId)
+                                addMessage(ChatRole.STATUS, mediaFailureText(event))
+                            }
+
+                            // A media turn is given no Tool, so a receipt here would mean the
+                            // scope boundary failed. Surface it rather than rendering it.
+                            is AgentEvent.ToolExecuted -> addMessage(
+                                ChatRole.STATUS,
+                                "첨부 요청에서 예상하지 않은 도구 실행이 보고돼 중단했습니다.",
+                            )
+                        }
+                    }
+                } catch (cancelled: CancellationException) {
+                    diagnostics.recordSafely(
+                        DiagnosticEvent.TurnCancelled(
+                            durationMillis = diagnosticDuration(startedAt),
+                            deltaCount = deltaCount,
+                            deltaByteCount = deltaByteCount,
+                            cause = thermalTurn.cancellationCause.current()
+                                ?: DiagnosticTurnCancellationCause.LIFECYCLE,
+                            thermalStatus = thermalTurn.latch.currentDecision()?.status,
+                        ),
+                    )
+                    removeMessageIfBlank(assistantEntryId)
+                    addMessage(ChatRole.STATUS, cancellationStatusText(thermalTurn))
+                    throw cancelled
+                } catch (failure: Exception) {
+                    diagnostics.recordSafely(
+                        DiagnosticEvent.TurnFailed(
+                            durationMillis = diagnosticDuration(startedAt),
+                            deltaCount = deltaCount,
+                            deltaByteCount = deltaByteCount,
+                            errorCode = DiagnosticErrorCode.UNKNOWN,
+                            failure = failure.toDiagnosticFailureOrNull(),
+                        ),
+                    )
+                    removeMessageIfBlank(assistantEntryId)
+                    addMessage(ChatRole.STATUS, "예기치 않은 오류로 첨부 요청을 중단했습니다.")
+                } finally {
+                    // NonCancellable so a stopped turn still keeps whatever the model produced.
+                    withContext(NonCancellable) {
+                        val answer = currentMessageText(assistantEntryId)
+                        if (answer.isNotBlank()) {
+                            history.record(
+                                conversationId = _chatHistory.value.activeConversationId,
+                                role = MessageRole.ASSISTANT,
+                                text = answer,
+                            )
+                        } else {
+                            removeMessageIfBlank(assistantEntryId)
+                        }
+                    }
+                    if (!completed) diagnostics.markPhase(DiagnosticPhase.IDLE)
+                    activeThermalTurn.compareAndSet(thermalTurn, null)
+                    _uiState.update { state ->
+                        if (state.activeTurnId == turnId) {
+                            state.copy(activeTurnId = null, activeReasoning = null)
+                        } else {
+                            state
+                        }
+                    }
+                    finishDiagnosticPhase()
+                }
+            }.also(thermalTurn.job::set)
+        } finally {
+            mutationLease.close()
+        }
+    }
+
+    /**
+     * Turns one recorded clip into an editable composer draft.
+     *
+     * Not a conversation turn: nothing is written to Room and nothing appears in the transcript.
+     * That is the whole point of the dictation path — the owner reads what was heard, corrects it,
+     * and only then sends a normal text request that may reach a Tool.
+     */
+    private fun transcribe(attachment: TurnMediaAttachment, durationMillis: Int) {
+        if (turnJob?.isActive == true || _uiState.value.activeTurnId != null) return
+        val plan = TurnMediaPolicy.planOrNull(
+            kind = TurnMediaKind.AUDIO,
+            ownerText = "",
+            requestedIntent = TurnMediaIntent.AUDIO_TRANSCRIBE,
+        ) ?: return
+
+        val startThermalObservation = thermalMonitor.refresh()
+        if (!ThermalTurnPolicy.canStart(startThermalObservation.status)) {
+            showMediaNotice("기기 열 보호 정책이 새 요청을 허용하지 않습니다.")
+            return
+        }
+        val turnId = TurnId("turn-${UUID.randomUUID()}")
+        val thermalTurn = ActiveThermalTurn(
+            turnId = turnId,
+            baselineStopSequence = startThermalObservation.stopSequence,
+        )
+        if (!activeThermalTurn.compareAndSet(null, thermalTurn)) return
+        _uiState.update { state -> state.copy(transcribing = true, mediaNotice = null) }
+
+        turnJob = viewModelScope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            val transcript = StringBuilder()
+            try {
+                recordMediaDiagnostic(
+                    kind = TurnMediaKind.AUDIO,
+                    stage = DiagnosticMediaStage.PREFILLED,
+                    byteCount = attachment.byteCount,
+                    durationMillis = durationMillis,
+                )
+                controller.runTurn(
+                    turnId = turnId,
+                    prompt = plan.prompt,
+                    turnLimits = mediaTurnLimits(plan.maxOutputTokens),
+                    media = listOf(attachment),
+                ).collect { event ->
+                    when (event) {
+                        is AgentEvent.TextDelta -> {
+                            if (transcript.length < MAX_TRANSCRIPT_CHARACTERS) {
+                                transcript.append(event.text)
+                            }
+                        }
+
+                        is AgentEvent.Completed -> diagnostics.recordSafely(
+                            DiagnosticEvent.TurnCompleted(
+                                durationMillis = diagnosticDuration(startedAt),
+                                deltaCount = 1,
+                                deltaByteCount = transcript.length.toLong(),
+                            ),
+                        )
+
+                        is AgentEvent.Failure -> showMediaNotice(mediaFailureText(event))
+
+                        // Thoughts stay ephemeral, and a trusted answer or a Tool receipt has no
+                        // meaning for a transcription; none of them belongs in the draft.
+                        else -> Unit
+                    }
+                }
+                applyTranscription(transcript.toString())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                showMediaNotice(MediaComposerPolicy.RECORDING_UNAVAILABLE_MESSAGE)
+            } finally {
+                activeThermalTurn.compareAndSet(thermalTurn, null)
+                _uiState.update { state -> state.copy(transcribing = false) }
+                finishDiagnosticPhase()
+            }
+            // Registered synchronously rather than from inside the body, so a thermal directive
+            // arriving before the coroutine starts still has an owning job to cancel.
+        }.also(thermalTurn.job::set)
+    }
+
+    /**
+     * Puts the transcript in the composer, appending to whatever the owner already typed.
+     *
+     * The result is a draft, never a sent request, and it goes through the same input policy as
+     * typing: a transcript that would not fit as text does not get to bypass the limit.
+     */
+    private fun applyTranscription(rawTranscript: String) {
+        val transcript = rawTranscript.trim()
+        if (transcript.isEmpty()) {
+            showMediaNotice(MediaComposerPolicy.TRANSCRIPTION_EMPTY_MESSAGE)
+            return
+        }
+        val current = _uiState.value.prompt
+        val candidate = if (current.isBlank()) transcript else "$current $transcript"
+        val update = PromptInputPolicy.apply(current, candidate)
+        _uiState.update { state ->
+            state.copy(prompt = update.prompt, promptInputWarning = update.warning)
+        }
+        if (update.prompt == current) {
+            showMediaNotice(MediaComposerPolicy.TRANSCRIPTION_TOO_LONG_MESSAGE)
+        }
+    }
+
+    /**
+     * A media turn's budget.
+     *
+     * `maxSteps = 1` is the enforcement, not a hint: the loop aborts on any Tool call in the first
+     * completed step, before preparation, so no confirmation sheet can appear behind a photo. The
+     * deadline is longer than a text turn's because the vision and audio encoders run a
+     * substantial extra prefill before the first token.
+     */
+    private fun mediaTurnLimits(maxOutputTokens: Int): AgentLoopLimits = AgentLoopLimits(
+        maxSteps = 1,
+        deadlineMillis = MEDIA_TURN_DEADLINE_MILLIS,
+        maxOutputTokens = maxOutputTokens,
+        maxToolCalls = 1,
+    )
+
+    private fun mediaFailureText(event: AgentEvent.Failure): String = when (event.runtimeCode) {
+        LlmFailureCode.MEDIA_UNSUPPORTED ->
+            "설치된 모델이 이 입력 형식을 지원하지 않습니다."
+
+        LlmFailureCode.INVALID_MEDIA ->
+            "첨부를 사용할 수 없습니다. 다시 선택하거나 다시 녹음해 주세요."
+
+        LlmFailureCode.CONTEXT_BUDGET_EXCEEDED ->
+            "첨부와 요청이 한 번에 처리할 수 있는 크기를 넘었습니다. 요청을 줄여 주세요."
+
+        else -> when (event.code) {
+            AgentFailureCode.DEADLINE_EXCEEDED ->
+                "첨부 처리 시간이 초과돼 요청을 중단했습니다."
+
+            else -> "첨부 요청을 완료하지 못했습니다."
+        }
+    }
+
     fun sendPrompt() {
+        if (stagedMedia != null) {
+            startMediaTurn()
+            return
+        }
         startPrompt(readOnlyRecovery = false, predecessorRecovery = null)
     }
 
@@ -1593,11 +2370,39 @@ class PersonalEdgeViewModel(
         turnJob = viewModelScope.launch {
             BackgroundSummaryPriority.awaitRelease(pendingSummary)
             val startedAt = SystemClock.elapsedRealtime()
+            val priorWebResultFollowUp = PriorWebResultFollowUpPolicy.matches(prompt)
+            val requiredPriorAnswer = if (priorWebResultFollowUp) {
+                history.priorWebResultForFollowUp(
+                    conversationId = _chatHistory.value.activeConversationId,
+                    followUp = prompt,
+                )
+            } else {
+                null
+            }
+            if (priorWebResultFollowUp && requiredPriorAnswer == null) {
+                diagnostics.recordSafely(
+                    DiagnosticEvent.ContextUnavailable(DiagnosticContextComponent.CONVERSATION),
+                )
+                removeMessageIfBlank(initialAssistantEntryId)
+                addMessage(ChatRole.STATUS, PRIOR_WEB_RESULT_UNAVAILABLE_MESSAGE)
+                activeThermalTurn.compareAndSet(thermalTurn, null)
+                _uiState.update { state ->
+                    if (state.activeTurnId == turnId) {
+                        state.copy(activeTurnId = null, activeReasoning = null)
+                    } else {
+                        state
+                    }
+                }
+                finishDiagnosticPhase()
+                return@launch
+            }
             val unfinishedReadRequest = history.unfinishedReadRequestForFollowUp(
                 conversationId = _chatHistory.value.activeConversationId,
                 followUp = prompt,
             )
-            val contextualWebSearchRequest = if (unfinishedReadRequest == null) {
+            val contextualWebSearchRequest = if (
+                unfinishedReadRequest == null && requiredPriorAnswer == null
+            ) {
                 history.contextualWebSearchRequestForFollowUp(
                     conversationId = _chatHistory.value.activeConversationId,
                     followUp = prompt,
@@ -1612,7 +2417,9 @@ class PersonalEdgeViewModel(
             // original text keeps the local model from re-deriving the request from one word, and
             // the trusted line keeps it from asking the same question again.
             val approvedRequest = if (
-                unfinishedReadRequest == null && contextualWebSearchRequest == null
+                unfinishedReadRequest == null &&
+                contextualWebSearchRequest == null &&
+                requiredPriorAnswer == null
             ) {
                 controller.resumedRequestOrNull(prompt)
             } else {
@@ -1637,7 +2444,10 @@ class PersonalEdgeViewModel(
             if (unfinishedReadRequest != null) {
                 addMessage(ChatRole.STATUS, "이전의 미완료 읽기 요청을 다시 수행합니다.")
             }
-            val trustedContext = withTrustedTurnContext(effectivePrompt)
+            val trustedContext = withTrustedTurnContext(
+                prompt = effectivePrompt,
+                requiredPriorAnswer = requiredPriorAnswer,
+            )
             if (trustedContext is TrustedTurnContextResult.Unavailable) {
                 diagnostics.recordSafely(DiagnosticEvent.ContextUnavailable(trustedContext.component))
                 removeMessageIfBlank(initialAssistantEntryId)
@@ -1669,10 +2479,11 @@ class PersonalEdgeViewModel(
             val requestText = trustedContext.text
             // The typed prompt is stored, never the derived preamble: the date and calendar in it
             // describe the moment of the turn and would be wrong on restore.
-            val conversationId = history.ensureConversation(
-                activeConversationId = _chatHistory.value.activeConversationId,
-                firstPrompt = prompt,
-            )
+            val conversationId = requiredPriorAnswer?.conversationId
+                ?: history.ensureConversation(
+                    activeConversationId = _chatHistory.value.activeConversationId,
+                    firstPrompt = prompt,
+                )
             _chatHistory.update { state -> state.copy(activeConversationId = conversationId) }
             val userMessageOrdinal = history.recordOrdinal(conversationId, MessageRole.USER, prompt)
             if (userMessageOrdinal == null) {
@@ -1959,6 +2770,8 @@ class PersonalEdgeViewModel(
                                     knownToolExecution = processedToolExecutions.isNotEmpty(),
                                     toolFailure = event.toolFailure,
                                     runtimeCode = event.runtimeCode,
+                                    webSearchExpected = contextualWebSearchRequest != null ||
+                                        WEB_SEARCH_REQUEST_MARKERS.any(prompt::contains),
                                 ),
                             )
                         }
@@ -2238,6 +3051,7 @@ class PersonalEdgeViewModel(
         knownToolExecution: Boolean = false,
         toolFailure: ToolFailureDetail? = null,
         runtimeCode: LlmFailureCode? = null,
+        webSearchExpected: Boolean = false,
     ): String = if (knownToolExecution) {
         when {
             runtimeCode == LlmFailureCode.CONTEXT_BUDGET_EXCEEDED ->
@@ -2257,9 +3071,13 @@ class PersonalEdgeViewModel(
             "요청 제한 시간 ${AgentLoopLimits().deadlineMillis / 1_000}초를 초과했습니다."
         AgentFailureCode.UNKNOWN_TOOL -> "등록되지 않은 Tool 호출을 차단했습니다."
         AgentFailureCode.INVALID_TOOL_CALL -> "유효하지 않은 Tool 인자를 차단했습니다."
-        AgentFailureCode.TOOL_NOT_EXECUTED ->
+        AgentFailureCode.TOOL_NOT_EXECUTED -> if (webSearchExpected) {
+            "웹 검색 대상을 확정하지 못했거나 검색을 실행하지 못했습니다. " +
+                "검색할 대상과 알고 싶은 항목을 구체적으로 적어 다시 요청해 주세요."
+        } else {
             "Tool이 실행되지 않았거나 결과를 확정할 수 없습니다. 자동으로 재시도하지 " +
-                "않았습니다. 대상 앱의 상태를 확인한 뒤 다시 결정하세요."
+                "않았습니다. 대상 앱의 상타를 확인한 뒤 다시 결정하세요."
+        }
         AgentFailureCode.TOOL_FAILED ->
             "Tool 조회가 완료되지 않았습니다. 입력과 외부 서비스 상태를 확인하세요."
         AgentFailureCode.STEP_LIMIT_EXCEEDED,
@@ -2394,6 +3212,26 @@ class PersonalEdgeViewModel(
     companion object {
         val modelManifest = PinnedModelManifest.value
         private const val UNRESOLVED_ACTION_WARNING_ID = "unresolved-action-warning"
+
+        /**
+         * A media turn's deadline.
+         *
+         * Longer than a text turn's because the vision and audio encoders run a substantial extra
+         * prefill before the first token, and a CPU backend pays that in full.
+         */
+        private const val MEDIA_TURN_DEADLINE_MILLIS = 180_000L
+
+        /** A 20-second clip cannot legitimately transcribe to more than this. */
+        private const val MAX_TRANSCRIPT_CHARACTERS = 4_000
+        private val WEB_SEARCH_REQUEST_MARKERS = listOf(
+            "웹 검색", "웹검색", "웹에서", "인터넷에서", "검색", "찾아", "알아봐", "조사",
+        )
+        private const val PRIOR_WEB_RESULT_UNAVAILABLE_MESSAGE =
+            "이 대화의 바로 앞 답변에서 완료된 웹 검색 결과를 확인할 수 없습니다. " +
+                "검색할 대상을 구체적으로 적어 새로 검색해 주세요."
+        private const val PRIOR_WEB_RESULT_BUDGET_MESSAGE =
+            "이전 웹 검색 답변을 안전하게 전달할 공간이 부족해 후속 요청을 시작하지 않았습니다. " +
+                "요청을 줄이거나 검색할 대상을 적어 새로 요청해 주세요."
         private val TURN_CONTEXT_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd(E) HH:mm", Locale.KOREAN)
     }

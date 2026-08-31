@@ -7,7 +7,23 @@ before any device work.
 ## Current truth
 
 - Source identity remains `versionCode=11`, `versionName=1.0.0-rc11`.
-- The app Room database is schema 10.
+- The app Room database is schema 11.
+- **Newest delta: photo and voice input.** See [`MULTIMODAL_INPUT.md`](MULTIMODAL_INPUT.md) for the
+  design and the open acceptance list. The one thing to internalise before touching it: a turn
+  carrying media is given no Tool schema at all, enforced in three independent places. Voice
+  commands reach a Tool only through dictation, which puts the transcript in the composer for the
+  owner to read and send. Audio stays in memory; an external camera briefly writes one app-private
+  cache file whose deletion is attempted after read, at stale process start, and before a new
+  capture. Payload never enters Room, transfer, or diagnostics. Room and transfer keep only a
+  canonical content-free kind/source/seconds code on the USER row.
+- **Three stale guards in this tree were corrected, not worked around.** `app/gradle.lockfile` was
+  missing `debugAndroidTestRuntimeClasspath` for 14 already-pinned coordinates, which made `lint`
+  and every androidTest assembly fail on the untouched tree; the regenerated lock adds that one
+  configuration and changes no module or version. `scripts/run-avd-regression.sh` claimed 34 app
+  androidTest files when 35 existed, 119 app methods when 126 were selected, and 10 `core:llm`
+  methods when 12 were; `scripts/run-avd-release-readiness.sh` carried the same stale 34-file
+  inventory. Those are now measured against a real emulator run. If you see a similar
+  count mismatch, measure it before editing the number.
 - The 2026-08-30 automatic/contextual web-search delta passed the standard host gate
   (`test lint assembleDebug assembleRelease`) plus scoped API 37 AVD regression. The later
   model-evaluation, Kakao notification-scope, and Qwen core-test delta passed the final root
@@ -66,6 +82,47 @@ before any device work.
   This document was updated after the frozen APK receipt and therefore changes only whole-tree
   provenance if rebuilt. Wider provider/fallback, fold/DeX, and model A/B acceptance remain open.
 
+- The 2026-09-01 photo/voice delta passed `doctor.sh`, `test-host-scripts.sh` 32/32, a forced
+  `./gradlew --offline test --rerun-tasks` (967 same-run JVM cases, zero failures),
+  `./gradlew --offline test lint assembleDebug assembleRelease`, and
+  `./gradlew --offline releaseGate` with regenerated SBOM/provenance recording
+  `database.schemaVersion=11` and `source.dirty=true`. On the account-free API 37 ARM64 foldable
+  AVD started `-read-only -no-snapshot-save`, `scripts/run-avd-regression.sh` selected 267 reviewed
+  methods: 237 passed, 30 reached reviewed assumption guards, none failed.
+  `scripts/run-avd-release-readiness.sh` also passed on the same disposable AVD against a matched
+  owner-signed minified release pair (34 selected, 1 passed, 33 guarded, 0 failed, certificate
+  `e0f66d4b...457a`), which is what shows the new instrumentation classes still link against the
+  R8-shrunk release app. Both lanes were rerun against the final source, binding the receipt to
+  app APK `9a77f9d0...b06ce` and test APK `74530d53...e88a`; the documentation edits that record
+  this change the packaged whole-tree provenance and therefore the APK hash. No Fold8 was connected,
+  inspected, installed, or changed for those AVD lanes, and those lanes contain no media-inference
+  receipt. They also predate the current cache-sweep, transfer/context, and fresh-runtime test
+  corrections. After those corrections and the grounded-web journey were added, the current code
+  was revalidated on a fresh read-only, no-snapshot API 37 ARM64 foldable AVD. The debug lane
+  selected 279 reviewed methods: 248 passed, 31 reached intentional guards, and none failed. The
+  matched minified release lane selected 35 methods: its ABI smoke passed and 34 canary/live
+  methods reached their reviewed guards, with zero failures under the unchanged owner
+  certificate. This latest run covers the cache sweep, attachment transfer/context, mirrored EXIF
+  handling, and provider-free grounded-web journey. It is emulator evidence only; no Fold8 was
+  connected, inspected, installed, or changed.
+- **The 2026-09-01 Fold8 session changed the design.** A same-certificate release update installed
+  cleanly (pulled-back hash matched, `firstInstallTime` preserved, before/after preservation
+  snapshots identical), and three things came out of it. `EngineConfig` needs `visionBackend`,
+  `audioBackend`, and `maxNumImages` or a media turn dies with `Vision executor should not be null`
+  *after* the image has already been decoded. With those set, a photo genuinely works: the model
+  read back the six digits rendered on a synthetic card, with no Tool call. And loading the
+  encoders costs the GPU backend for the entire engine — the same text turn went 20,640 ms on GPU
+  to 31,534 ms on CPU, with PSS at 6.21 GB — so encoders now load only for the modalities the owner
+  enabled, and that setting applies from the next app start, exactly like the backend choice. See
+  [`MULTIMODAL_INPUT.md`](MULTIMODAL_INPUT.md) for the native logs and the full table.
+- **A corrected current-source media measurement is still owed.** The first receipt compared
+  accumulated totals in one shared conversation and materially different prompts. Its audio number
+  is discarded and its ~220-token image number is not an exact cost. The corrected gate gives every
+  control/media observation a new runtime and exactly one turn, compares before/after per-turn
+  increments for identical prompts, and caps decode at 32 tokens below either required delta. It
+  compiles but has not run — reconnect the phone and run
+  `Fold8MediaTurnAcceptanceTest` with `-e liveMediaTurn true`.
+
 Do not promote rc11 or reuse an older APK hash for this changed source. Host implementation work is
 complete, but clean-source, device, provider, and owner-controlled acceptance gates remain below.
 
@@ -113,12 +170,22 @@ answer is buffered: only an explicit recognized knowledge-gap answer triggers on
 and an ordinary complete answer remains local. This is not a general browser or fact checker;
 confidently wrong prose without a recognized knowledge-gap marker is not automatically verified.
 
+A second, stricter grammar handles volatile `current entity + office + who/name` questions. For
+example, `현재 대한민국 대통령이 누구야?` is converted from owner text to the bounded query
+`대한민국 현직 대통령 이름 공식` and executes `web_search` before any local answer is decoded.
+This path is mandatory grounding, not the optional knowledge-gap path. Historical qualifiers,
+entityless references, private/sensitive text, writes, and generic `우리나라`/`그 회사` references
+do not enter it.
+
 A subjectless follow-up such as `잘 모르겠으면 웹에서 찾아서 알려줘` never becomes the literal
-query `잘 모르겠으면`. It may inherit only the immediately preceding authenticated USER request in
-the same conversation, and only when that request passes the same public-knowledge policy. Assistant
-text, summaries, memory, Tool/provider output, private/sensitive text, writes, communication,
-weather, route, and other provider-specific domains cannot supply that query. The new turn keeps its
-own durable identity while Room stores only a content-free source-message ordinal for recovery.
+query `잘 모르겠으면`. It ordinarily inherits only the immediately preceding completed USER
+request in the same conversation. If a failed search correction leaves a trailing USER row,
+`웹 검색 할 수 있잖아` or an explicit `첫 질문` reference may skip at most that bounded run of
+closed correction rows and recover the earlier completed owner question. Any unrelated or unsafe
+USER row stops the walk. Assistant text, summaries, memory, Tool/provider output, private/sensitive
+text, writes, communication, weather, route, and other provider-specific domains cannot supply that
+query. The new turn keeps its own durable identity while Room stores only a content-free source-
+message ordinal for recovery.
 
 Person and topic reference phrases are trimmed from the tail of an explicit query, including the
 `에 대한`/`에 관한` forms alongside `에 대해`; whatever survives is sent to the provider literally.
@@ -137,6 +204,15 @@ unsupported stable or normalized Korean claim terms, and person prose that loses
 name. The identity caveat and source links are always app-owned. Invalid, failed, timed-out, or
 Tool-producing synthesis falls back to bounded selected evidence without another web request.
 
+Current-officeholder searches add an answerability gate above lexical relevance. A result must
+directly connect a plausible name to the requested role and must either mark that relation as
+current or come from a government domain. Constitution, election-method, and term-only pages make
+the primary provider insufficient and therefore permit the existing single Tavily attempt; they are
+never rendered as a substitute answer. Conflicting names fail closed unless one consistent
+government-source name resolves them. Synthesis must put that name and role in the first sentence;
+the deterministic fallback can state the same evidence-backed name, but otherwise reports that no
+direct current-role evidence was found.
+
 Closed requests that summarize, organize, compare, or extract sources from the previous search
 answer receive no Tool schema and cannot execute a hallucinated repeat search. The context builder
 preserves both the lead and source tail of a long immediately preceding assistant answer and adds a
@@ -144,7 +220,7 @@ trusted no-new-search instruction. Explicit re-search wording still starts a fre
 
 ### Recovery and write truth
 
-Room schema 10 owns content-free turn outcomes, up to four ordered read executions, plan checkpoints,
+Room schema 11 owns content-free turn outcomes, up to four ordered read executions, plan checkpoints,
 and independent unresolved side effects. Recovery must reserve the predecessor's exact ordered Tool
 list; missing, extra, substituted, or reordered calls fail before execution. It performs fresh
 consent, parse, whole-batch preflight, interlock, thermal, and provider reads. Old payloads are never
@@ -203,8 +279,9 @@ request whose bytes were already sent.
 
 Encrypted transfer validates versions, declarations, lengths, counts, UTF-8, collection caps,
 duplicate IDs, parents, per-conversation ordinal continuity, summary boundaries, and overflow before
-transactional import. The current Room schema is 10; archive format v1 retains its stable transfer
-schema marker 5 for compatible selected-data archives.
+transactional import. The current Room schema is 11. Archive envelope v1 uses transfer schema
+`6`/payload `2`, which preserves only producer-canonical content-free attachment codes on USER
+rows; legacy schema `5`/payload `1` remains importable with the attachment field set to null.
 
 Credentials remain Android-Keystore encrypted and values never enter UI, logs, diagnostics, model
 context, transfer, or provenance. Credential health is three-state: a missing path is `ABSENT`; a
@@ -214,7 +291,7 @@ owner repair/re-entry.
 
 ### Release provenance
 
-Release provenance records Room schema 10 only after every exported schema filename is a positive
+Release provenance records Room schema 11 only after every exported schema filename is a positive
 integer equal to that file's JSON-internal database version and the latest validated export equals
 the `PERSONAL_EDGE_DATABASE_VERSION` compile constant. It no longer trusts an unvalidated maximum
 JSON filename/value. A missing schema set, malformed file/value, filename-to-JSON mismatch, or
@@ -225,6 +302,14 @@ provenance correctly records this uncommitted working tree as dirty.
 ## Non-negotiable safety boundaries
 
 - Keep `automaticToolCalling=false`; LiteRT output is untrusted.
+- A turn carrying a photo or a voice clip gets no Tool schema. Do not add "just one read Tool" to a
+  media turn: an attachment can contain text that reads like an instruction, and the empty scope is
+  what makes that harmless. Voice reaches a Tool only through dictation, after the owner has read
+  and sent the transcript themselves.
+- Media payload never enters UI state, Room, the transfer archive, or diagnostics. Audio stays in
+  memory. External camera capture necessarily uses one private-cache file; deletion is best effort
+  after read, for stale files at process start, and before every new capture. Room and transfer keep
+  only a canonical content-free USER kind/source/seconds code.
 - Never weaken confirmation, Action Ledger, execution interlock, thermal, permission, consent,
   credential, or provider gates to make a test pass.
 - Read-only network Tools require explicit persistent consent rechecked at execution. Writes and
@@ -299,12 +384,14 @@ weakening their assertions. The Room/data AVD suite passed 82/82. These are emul
 The latest ordinary lane supersedes those counts without rewriting that historical receipt.
 `scripts/run-avd-regression.sh` now refuses physical serials, rechecks the exact qemu/name/API/ABI
 and boot identity before installation, installs only the six required debug APKs, and runs frozen
-positive class allowlists. On a read-only/no-snapshot `personal_edge_api37_foldable` AVD it selected
-239 methods: 209 passed, 30 reached reviewed assumption guards, and zero failed. The accompanying
-phone/qemu/name/API/ABI/boot, allowlist, transport-failure, and zero-exit JUnit fixtures brought
-`scripts/test-host-scripts.sh` to 28/28. This runner excludes the dedicated E4B/Qwen/ABI lanes and
-all owner-action classes; it does not replace their separate evidence. No Fold8 was connected for
-this receipt.
+positive class allowlists. On 2026-09-01 a read-only/no-snapshot
+`personal_edge_api37_foldable` AVD selected 269 methods: 238 passed, 31 reached reviewed assumption
+guards, and zero failed. The app suite accounted for 142 selected, 112 passed, and 30 guarded;
+data was 89/89, diagnostics 2/2, LLM 12 selected with 11 passed and one guarded, and tools 24/24.
+The accompanying phone/qemu/name/API/ABI/boot, allowlist, transport-failure, and zero-exit JUnit
+fixtures passed 32/32 in `scripts/test-host-scripts.sh`. This runner excludes the dedicated
+E4B/Qwen/ABI lanes and all owner-action classes; it does not replace their separate evidence. No
+Fold8 was connected for this receipt.
 
 Physical work requires new owner approval and an exact final artifact. If approved:
 
@@ -365,15 +452,22 @@ Physical work requires new owner approval and an exact final artifact. If approv
 
 | Module | Current responsibility |
 |---|---|
-| `core:llm` | Verified model boundary, LiteRT lifecycle, per-turn exact Tool scope |
+| `core:llm` | Verified model boundary, LiteRT lifecycle, per-turn exact Tool scope, declared-modality media contract |
 | `core:agent` | Manual controller, Tool scope, exact recovery contract, multi-read plan, grounded/write terminal answers |
 | `core:tools` | Typed contracts, confirmation, execution interlocks, Action Ledger, provider gateways |
-| `core:data` | Room schema 10, atomic transcript/outcome commits, contextual recovery source, unresolved side effects, transfer, settings, vault abstractions |
+| `core:data` | Room schema 11, atomic transcript/outcome commits, contextual recovery source, unresolved side effects, content-free attachment summary, transfer, settings, vault abstractions |
 | `core:diagnostics` | Bounded content-free typed diagnostics |
 | `app` | Compose UI, coordinators, conversation/notification mutation gates, device adapters, permissions/lifecycle |
 
 ## Open acceptance work
 
+- **Physical media acceptance.** A historical synthetic-card turn was read correctly and a clip
+  reached the audio front end, but the accumulated token comparison was invalid. Run the corrected
+  fresh-runtime, one-turn paired controls on Fold8 before accepting image/audio context deltas;
+  then measure TTFT, turn time, PSS, and thermal, Korean dictation including silence/too-short
+  refusals, the four image intents on owner-approved fixtures, camera/picker flows, and attachment
+  UI under fold/DeX. Encoder-enabled GPU requested historically fell back to CPU; there is no
+  accepted GPU media result.
 - Clean-source review/commit followed by a fresh `releaseGate` and final artifact hash receipt.
 - Owner-approved Samsung Calendar live acceptance omitted from the scoped emulator run.
 - Wider Fold8 folded/unfolded/DeX/IME/TalkBack/confirmation/DnD matrix beyond the accepted
@@ -381,9 +475,12 @@ Physical work requires new owner approval and an exact final artifact. If approv
 - Exact multi-read, ordered recovery, write terminal answer, interrupted write verification, and
   transcript deletion behavior on the final artifact.
 - Current calendar/route/search/weather provider-live checks without manufacturing outages.
-- Wider public-knowledge/provider matrix on the Fold8, including first-turn automatic recovery and
-  a relevance-poor primary/fallback boundary when naturally observable. The exact screenshot
-  two-turn movie wording is accepted.
+- Wider public-knowledge/provider matrix on the Fold8, including the new current-officeholder
+  first-turn route, failed-correction/`첫 질문` recovery, and an answerability-poor primary/fallback
+  boundary when naturally observable. The exact screenshot two-turn movie wording is accepted;
+  current-officeholder routing and answerability are host verified, while the bounded failed-
+  correction/`첫 질문` Room resolver also passed on a disposable API 37 AVD. Live-provider and
+  physical behavior remain pending.
 - Encrypted SAF transfer on a non-production fixture.
 - Same-condition E4B/MTP/E2B model/device evaluation with telemetry and repeatable unplugged battery
   procedure.

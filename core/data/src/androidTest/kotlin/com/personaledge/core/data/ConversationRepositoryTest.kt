@@ -83,6 +83,72 @@ class ConversationRepositoryTest {
     }
 
     @Test
+    fun anAttachmentSummaryIsStoredAndReadBackWithItsMessage() = runBlocking {
+        val conversationId = repository.createConversation("사진 질문")
+
+        repository.appendMessage(
+            conversationId = conversationId,
+            role = MessageRole.USER,
+            text = "이 영수증 정리해 줘",
+            attachmentSummary = "IMAGE:CAMERA",
+        )
+        repository.appendMessage(conversationId, MessageRole.ASSISTANT, "합계는 24,000원입니다")
+
+        val context = repository.loadContext(conversationId)
+        assertNotNull(context)
+        assertEquals(
+            listOf("IMAGE:CAMERA", null),
+            context!!.recentMessages.map(StoredMessage::attachmentSummary),
+        )
+    }
+
+    @Test
+    fun anAttachmentAloneIsStillARecordableMessage() = runBlocking {
+        // A photo sent with no typed line is a complete request; losing it would leave the
+        // assistant answer referring to a turn the transcript never recorded.
+        val conversationId = repository.createConversation("사진만")
+
+        val ordinal = repository.appendMessage(
+            conversationId = conversationId,
+            role = MessageRole.USER,
+            text = "",
+            attachmentSummary = "AUDIO:VOICE:12",
+        )
+
+        assertEquals(1L, ordinal)
+        val stored = repository.loadContext(conversationId)!!.recentMessages.single()
+        assertEquals("", stored.text)
+        assertEquals("AUDIO:VOICE:12", stored.attachmentSummary)
+    }
+
+    @Test
+    fun anOversizedAttachmentSummaryIsBoundedRatherThanStoredWhole() = runBlocking {
+        val conversationId = repository.createConversation("경계")
+
+        repository.appendMessage(
+            conversationId = conversationId,
+            role = MessageRole.USER,
+            text = "사진",
+            attachmentSummary = "IMAGE:CAMERA".repeat(20),
+        )
+
+        val stored = repository.loadContext(conversationId)!!.recentMessages.single()
+        assertEquals(
+            ConversationRepository.MAX_ATTACHMENT_SUMMARY_CHARACTERS,
+            stored.attachmentSummary!!.length,
+        )
+    }
+
+    @Test
+    fun anOrdinaryMessageStoresNoAttachmentSummary() = runBlocking {
+        val conversationId = repository.createConversation("평범")
+
+        repository.appendMessage(conversationId, MessageRole.USER, "안녕")
+
+        assertNull(repository.loadContext(conversationId)!!.recentMessages.single().attachmentSummary)
+    }
+
+    @Test
     fun appendingToAMissingConversationIsRefused() = runBlocking {
         assertNull(repository.appendMessage("absent", MessageRole.USER, "안녕"))
         assertEquals(0L, repository.messageCount())

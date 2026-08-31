@@ -8,5 +8,7 @@
   "sha256": "cb4e6d0de4bbf6656d177812cf0c6a983967dedd17e7f88e84b901c3a9862a42",
   "litertLmVersion": "0.16.1",
   "contextTokens": 2048,
-  "maxOutputTokens": 384
+  "maxOutputTokens": 384,
+  "supportsImageInput": false,
+  "supportsAudioInput": false
 }

@@ -43,6 +43,15 @@ data class AgentSettings(
     val webSearchEnabled: Boolean = false,
     /** Allows approved cross-thread memory capture and recall. Stored memories remain when off. */
     val memoryEnabled: Boolean = false,
+    /**
+     * Permits photo and voice attachments on a turn. Off until explicitly enabled.
+     *
+     * Separate from the Android camera and microphone permissions rather than redundant with
+     * them: the platform grant says the app *may* reach the sensor, this setting says the owner
+     * wants multimodal turns at all. Turning it off closes the feature without revoking a grant
+     * the owner may have given for another reason.
+     */
+    val mediaInputEnabled: Boolean = false,
     /** Posts one deterministic, model-free morning summary. Off until explicitly enabled. */
     val dailyBriefEnabled: Boolean = false,
     /** Local wall-clock minute for the deterministic brief; 08:00 by default. */
@@ -149,6 +158,10 @@ class SettingsRepository(
         dataStore.edit { preferences -> preferences[KEY_MEMORY_ENABLED] = enabled }
     }
 
+    suspend fun setMediaInputEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[KEY_MEDIA_INPUT_ENABLED] = enabled }
+    }
+
     suspend fun setDailyBriefEnabled(enabled: Boolean) {
         dataStore.edit { preferences -> preferences[KEY_DAILY_BRIEF_ENABLED] = enabled }
     }
@@ -205,6 +218,7 @@ class SettingsRepository(
         routeLookupEnabled = preferences[KEY_ROUTE_LOOKUP] ?: false,
         webSearchEnabled = preferences[KEY_WEB_SEARCH] ?: false,
         memoryEnabled = preferences[KEY_MEMORY_ENABLED] ?: false,
+        mediaInputEnabled = preferences[KEY_MEDIA_INPUT_ENABLED] ?: false,
         dailyBriefEnabled = preferences[KEY_DAILY_BRIEF_ENABLED] ?: false,
         dailyBriefMinutesOfDay = (
             preferences[KEY_DAILY_BRIEF_MINUTES_OF_DAY]
@@ -237,6 +251,7 @@ class SettingsRepository(
         private val KEY_ROUTE_LOOKUP = booleanPreferencesKey("route_lookup_enabled")
         private val KEY_WEB_SEARCH = booleanPreferencesKey("web_search_enabled")
         private val KEY_MEMORY_ENABLED = booleanPreferencesKey("memory_enabled")
+        private val KEY_MEDIA_INPUT_ENABLED = booleanPreferencesKey("media_input_enabled")
         private val KEY_DAILY_BRIEF_ENABLED = booleanPreferencesKey("daily_brief_enabled")
         private val KEY_DAILY_BRIEF_MINUTES_OF_DAY = intPreferencesKey("daily_brief_minutes_of_day")
         private val KEY_PROACTIVE_ROUTE_PLANNING = booleanPreferencesKey("proactive_route_planning_enabled")

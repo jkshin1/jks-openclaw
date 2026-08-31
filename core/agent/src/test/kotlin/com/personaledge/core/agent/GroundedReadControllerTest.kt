@@ -8,6 +8,7 @@ import com.personaledge.core.llm.LlmToolDefinition
 import com.personaledge.core.llm.ModelEvent
 import com.personaledge.core.llm.TrustedToolResponse
 import com.personaledge.core.llm.TurnId
+import com.personaledge.core.llm.TurnMediaKind
 import com.personaledge.core.llm.VerifiedInstalledModel
 import com.personaledge.core.tools.ActionChallenge
 import com.personaledge.core.tools.ActionExecutionState
@@ -503,7 +504,7 @@ class GroundedReadControllerTest {
     }
 
     @Test
-    fun `freshness intent rejects model prose when no grounded read executes`() = runBlocking {
+    fun `volatile public fact rejects local prose when the grounded tool is unavailable`() = runBlocking {
         val turnId = TurnId("grounded-freshness-required")
         val fixture = fixture()
         fixture.runtime.enqueueUser(
@@ -513,7 +514,10 @@ class GroundedReadControllerTest {
             ),
         )
 
-        val events = fixture.controller.runTurn(turnId, "현재 주가를 알려줘").toList()
+        val events = fixture.controller.runTurn(
+            turnId,
+            "삼성전자 현재 주가를 알려줘",
+        ).toList()
 
         assertEquals(
             AgentFailureCode.TOOL_NOT_EXECUTED,
@@ -673,6 +677,7 @@ class GroundedReadControllerTest {
             model: VerifiedInstalledModel,
             backend: InferenceBackend,
             tools: List<LlmToolDefinition>,
+            mediaModalities: Set<TurnMediaKind>,
         ) = Unit
 
         override fun streamUserTurn(turnId: TurnId, prompt: String): Flow<ModelEvent> =

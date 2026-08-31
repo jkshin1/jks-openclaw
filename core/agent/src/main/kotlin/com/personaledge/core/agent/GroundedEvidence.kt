@@ -72,6 +72,7 @@ internal sealed class GroundedReadEvidence(
         internal val query: String,
         result: WebSearchResult,
         internal val intent: WebSearchAnswerIntent = WebSearchAnswerIntent.GENERAL,
+        internal val responseContract: WebSearchResponseContract = WebSearchResponseContract(),
     ) : GroundedReadEvidence(ordinal, WebSearchTool.NAME) {
         internal val result = result.copy(hits = result.hits.toList())
 
@@ -79,6 +80,7 @@ internal sealed class GroundedReadEvidence(
             query = query,
             result = result,
             intent = intent,
+            responseContract = responseContract,
         )
     }
 }

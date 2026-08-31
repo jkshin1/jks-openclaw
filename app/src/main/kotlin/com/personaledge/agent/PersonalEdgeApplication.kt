@@ -41,6 +41,14 @@ class PersonalEdgeApplication : Application() {
         channel.markPhase(DiagnosticPhase.SESSION_START)
         channel.recordSafely(DiagnosticEvent.SessionStarted)
         channel.markPhase(DiagnosticPhase.IDLE)
+        // A camera process can outlive this process and leave its one staging file behind. Sweep
+        // only the fixed private cache directory, off the main thread, before any new capture is
+        // prepared. Payload bytes and paths never enter diagnostics.
+        runCatching {
+            diagnosticExecutor.execute {
+                MediaCaptureStaging(this@PersonalEdgeApplication).sweepProcessStartLeftovers()
+            }
+        }
         // Previous low-memory, crash and ANR exits are available only after a new start.
         channel.recordHistoricalExits()
         channel.recordResourceSnapshot()

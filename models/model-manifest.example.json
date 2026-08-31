@@ -8,5 +8,7 @@
   "sha256": "RECORD_AFTER_DOWNLOAD",
   "litertLmVersion": "0.16.1",
   "contextTokens": 4096,
-  "maxOutputTokens": 1024
+  "maxOutputTokens": 1024,
+  "supportsImageInput": true,
+  "supportsAudioInput": true
 }

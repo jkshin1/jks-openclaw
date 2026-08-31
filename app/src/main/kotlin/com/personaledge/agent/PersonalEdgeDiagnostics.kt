@@ -116,6 +116,8 @@ internal fun LlmFailureCode.toDiagnosticErrorCode(): DiagnosticErrorCode = when 
     LlmFailureCode.TURN_REPLAYED -> DiagnosticErrorCode.TURN_REPLAYED
     LlmFailureCode.TURN_MISMATCH -> DiagnosticErrorCode.TURN_MISMATCH
     LlmFailureCode.INVALID_PROMPT -> DiagnosticErrorCode.INVALID_PROMPT
+    LlmFailureCode.INVALID_MEDIA -> DiagnosticErrorCode.INVALID_MEDIA
+    LlmFailureCode.MEDIA_UNSUPPORTED -> DiagnosticErrorCode.MEDIA_UNSUPPORTED
     LlmFailureCode.INVALID_TOOL_DEFINITION -> DiagnosticErrorCode.INVALID_TOOL_DEFINITION
     LlmFailureCode.INVALID_TOOL_CALL -> DiagnosticErrorCode.INVALID_TOOL_CALL
     LlmFailureCode.INVALID_TOOL_RESPONSE -> DiagnosticErrorCode.INVALID_TOOL_RESPONSE

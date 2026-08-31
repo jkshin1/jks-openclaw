@@ -577,7 +577,7 @@ interface ReminderDeliveryDao {
 }
 
 /** Single source of truth consumed by Room and the deterministic release-provenance gate. */
-internal const val PERSONAL_EDGE_DATABASE_VERSION = 10
+internal const val PERSONAL_EDGE_DATABASE_VERSION = 11
 
 @Database(
     entities = [
@@ -868,6 +868,15 @@ abstract class PersonalEdgeDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Content-free shape of an attachment the owner sent with a message: a kind, a
+                // source, and for audio a whole-second length. Never the media, a path, or a URI.
+                // Existing rows stay NULL, which renders as an ordinary text message.
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `attachment_summary` TEXT")
+            }
+        }
+
         /**
          * Opens the single application database.
          *
@@ -891,6 +900,7 @@ abstract class PersonalEdgeDatabase : RoomDatabase() {
                     MIGRATION_7_8,
                     MIGRATION_8_9,
                     MIGRATION_9_10,
+                    MIGRATION_10_11,
                 )
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                 .build()

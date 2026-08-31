@@ -10,6 +10,7 @@ import com.personaledge.core.llm.LlmTurnToolScope
 import com.personaledge.core.llm.ModelEvent
 import com.personaledge.core.llm.TrustedToolResponse
 import com.personaledge.core.llm.TurnId
+import com.personaledge.core.llm.TurnMediaKind
 import com.personaledge.core.llm.VerifiedInstalledModel
 import com.personaledge.core.tools.ActionChallenge
 import com.personaledge.core.tools.ActionExecutionState
@@ -199,6 +200,53 @@ class ManualToolAgentControllerTest {
         assertEquals(answer, events.filterIsInstance<AgentEvent.TextDelta>().single().text)
         assertEquals(AgentEvent.Completed(turnId), events.last())
         assertEquals(0, fixture.runtime.cancelCount.get())
+    }
+
+    @Test
+    fun `write-scoped turn cannot claim success without executing its tool`() = runBlocking {
+        val turnId = TurnId("turn-write-success-without-tool")
+        val fixture = fixture(registry = deviceRegistry(unusedRouteGateway()))
+        fixture.runtime.enqueueUser(
+            flowOf(
+                ModelEvent.TextDelta(turnId, "캘린더에 일정을 등록했습니다."),
+                ModelEvent.Completed(turnId),
+            ),
+        )
+
+        val events = fixture.controller.runTurn(
+            turnId = turnId,
+            prompt = "trusted write request",
+            currentUserRequest = "내일 오후 3시에 회의 일정을 등록해 줘",
+            toolScope = LlmTurnToolScope.exact(setOf(CalendarCreateEventTool.NAME)),
+        ).toList()
+
+        assertFailure(events, AgentFailureCode.INVALID_MODEL_SEQUENCE)
+        assertTrue(events.none { event -> event is AgentEvent.TextDelta })
+        assertTrue(events.none { event -> event is AgentEvent.ToolExecuted })
+    }
+
+    @Test
+    fun `write-scoped turn may ask for missing details without executing its tool`() = runBlocking {
+        val turnId = TurnId("turn-write-clarification-without-tool")
+        val fixture = fixture(registry = deviceRegistry(unusedRouteGateway()))
+        val clarification = "어느 일정을 언제 등록할까요?"
+        fixture.runtime.enqueueUser(
+            flowOf(
+                ModelEvent.TextDelta(turnId, clarification),
+                ModelEvent.Completed(turnId),
+            ),
+        )
+
+        val events = fixture.controller.runTurn(
+            turnId = turnId,
+            prompt = "trusted write request",
+            currentUserRequest = "일정을 등록해 줘",
+            toolScope = LlmTurnToolScope.exact(setOf(CalendarCreateEventTool.NAME)),
+        ).toList()
+
+        assertEquals(clarification, events.filterIsInstance<AgentEvent.TextDelta>().single().text)
+        assertEquals(AgentEvent.Completed(turnId), events.last())
+        assertTrue(events.none { event -> event is AgentEvent.ToolExecuted })
     }
 
     @Test
@@ -581,6 +629,210 @@ class ManualToolAgentControllerTest {
         }
 
     @Test
+    fun `current officeholder question searches before any local answer and requires the name`() =
+        runBlocking {
+            val turnId = TurnId("turn-current-officeholder")
+            var gatewayQuery: String? = null
+            var searchCount = 0
+            val fixture = fixture(
+                registry = deviceRegistry(
+                    routeGateway = unusedRouteGateway(),
+                    webSearchGateway = object : WebSearchGateway {
+                        override suspend fun credentialsPresent(): Boolean = true
+
+                        override suspend fun search(query: String, limit: Int): WebSearchResponse {
+                            searchCount++
+                            gatewayQuery = query
+                            return WebSearchResponse(
+                                provider = WebSearchProvider.YOU_COM,
+                                hits = listOf(
+                                    WebSearchHit(
+                                        title = "대한민국 대통령실 - 대통령 소개",
+                                        link = "https://www.president.go.kr/fixture",
+                                        snippet = "대한민국의 현직 대통령은 홍길동입니다.",
+                                    ),
+                                ),
+                            )
+                        }
+                    },
+                ),
+                executionInterlock = ExecutionInterlock { InterlockDecision.Allow },
+            )
+            fixture.runtime.enqueueUser(
+                flowOf(
+                    ModelEvent.TextDelta(turnId, "현재 대한민국 대통령은 홍길동입니다."),
+                    ModelEvent.Completed(turnId),
+                ),
+            )
+            val request = "현재 대한민국 대통령이 누구야?"
+
+            val events = fixture.controller.runTurn(
+                turnId = turnId,
+                prompt = request,
+                currentUserRequest = request,
+            ).toList()
+
+            assertEquals("대한민국 현직 대통령 이름 공식", gatewayQuery)
+            assertEquals(1, searchCount)
+            assertEquals(1, fixture.runtime.userInvocations.size)
+            assertFalse(fixture.runtime.userInvocations.single().second == request)
+            assertEquals(1, events.filterIsInstance<AgentEvent.ToolExecuted>().size)
+            val answer = events.filterIsInstance<AgentEvent.TextDelta>().single().text
+            assertTrue(answer.startsWith("현재 대한민국 대통령은 홍길동입니다."))
+            assertTrue(answer.contains("https://www.president.go.kr/fixture"))
+            assertTrue(events.none { event -> event is AgentEvent.Failure })
+            assertEquals(AgentEvent.Completed(turnId), events.last())
+        }
+
+    @Test
+    fun `volatile public fact searches deterministically before any local answer`() = runBlocking {
+        val turnId = TurnId("turn-volatile-openai-news")
+        var gatewayQuery: String? = null
+        val fixture = fixture(
+            registry = deviceRegistry(
+                routeGateway = unusedRouteGateway(),
+                webSearchGateway = object : WebSearchGateway {
+                    override suspend fun credentialsPresent(): Boolean = true
+
+                    override suspend fun search(query: String, limit: Int): WebSearchResponse {
+                        gatewayQuery = query
+                        return WebSearchResponse(
+                            provider = WebSearchProvider.YOU_COM,
+                            hits = listOf(
+                                WebSearchHit(
+                                    title = "OpenAI 최신 뉴스",
+                                    link = "https://openai.com/fixture-news",
+                                    snippet = "OpenAI는 새 공개 모델 소식을 발표했습니다.",
+                                ),
+                            ),
+                        )
+                    }
+                },
+            ),
+            executionInterlock = ExecutionInterlock { InterlockDecision.Allow },
+        )
+        fixture.runtime.enqueueUser(
+            flowOf(
+                ModelEvent.TextDelta(turnId, "OpenAI는 새 공개 모델 소식을 발표했습니다."),
+                ModelEvent.Completed(turnId),
+            ),
+        )
+        val request = "OpenAI 최신 뉴스"
+
+        val events = fixture.controller.runTurn(
+            turnId = turnId,
+            prompt = request,
+            currentUserRequest = request,
+        ).toList()
+
+        assertEquals("OpenAI 최신 뉴스", gatewayQuery)
+        assertEquals(1, events.filterIsInstance<AgentEvent.ToolExecuted>().size)
+        assertEquals(1, fixture.runtime.userInvocations.size)
+        assertFalse(fixture.runtime.userInvocations.single().second == request)
+        assertTrue(
+            events.filterIsInstance<AgentEvent.TextDelta>().single().text
+                .contains("https://openai.com/fixture-news"),
+        )
+        assertEquals(AgentEvent.Completed(turnId), events.last())
+    }
+
+    @Test
+    fun `explicit search preserves english one sentence contract without polluting query`() =
+        runBlocking {
+            val turnId = TurnId("turn-search-response-contract")
+            var gatewayQuery: String? = null
+            val fixture = fixture(
+                registry = deviceRegistry(
+                    routeGateway = unusedRouteGateway(),
+                    webSearchGateway = object : WebSearchGateway {
+                        override suspend fun credentialsPresent(): Boolean = true
+
+                        override suspend fun search(query: String, limit: Int): WebSearchResponse {
+                            gatewayQuery = query
+                            return WebSearchResponse(
+                                provider = WebSearchProvider.YOU_COM,
+                                hits = listOf(
+                                    WebSearchHit(
+                                        title = "OpenAI releases Orion model",
+                                        link = "https://openai.com/news/orion",
+                                        snippet = "OpenAI released the Orion model for developers.",
+                                    ),
+                                ),
+                            )
+                        }
+                    },
+                ),
+                executionInterlock = ExecutionInterlock { InterlockDecision.Allow },
+            )
+            fixture.runtime.enqueueUser(
+                flowOf(
+                    ModelEvent.TextDelta(
+                        turnId,
+                        "OpenAI released the Orion model for developers.",
+                    ),
+                    ModelEvent.Completed(turnId),
+                ),
+            )
+            val request = "OpenAI 최신 소식을 검색해서 영어 한 문장으로 요약해줘"
+
+            val events = fixture.controller.runTurn(
+                turnId = turnId,
+                prompt = request,
+                currentUserRequest = request,
+            ).toList()
+
+            assertEquals("OpenAI 최신 소식", gatewayQuery)
+            val synthesisPrompt = fixture.runtime.userInvocations.single().second
+            assertTrue(synthesisPrompt.contains("영어로만"))
+            assertTrue(synthesisPrompt.contains("정확히 1개"))
+            assertFalse(synthesisPrompt.contains("https://"))
+            val answer = events.filterIsInstance<AgentEvent.TextDelta>().single().text
+            assertTrue(answer.startsWith("OpenAI released"))
+            assertTrue(answer.contains("\n\nSources\n1. "))
+            assertEquals(AgentEvent.Completed(turnId), events.last())
+        }
+
+    @Test
+    fun `current officeholder background pages never become a substitute answer`() = runBlocking {
+        val turnId = TurnId("turn-current-officeholder-no-answer")
+        val fixture = fixture(
+            registry = deviceRegistry(
+                routeGateway = unusedRouteGateway(),
+                webSearchGateway = object : WebSearchGateway {
+                    override suspend fun credentialsPresent(): Boolean = true
+
+                    override suspend fun search(query: String, limit: Int): WebSearchResponse =
+                        WebSearchResponse(
+                            provider = WebSearchProvider.YOU_COM,
+                            hits = listOf(
+                                WebSearchHit(
+                                    title = "대한민국 대통령 임기",
+                                    link = "https://constitution.example/office",
+                                    snippet = "대한민국 대통령은 국가원수이며 임기는 5년입니다.",
+                                ),
+                            ),
+                        )
+                },
+            ),
+            executionInterlock = ExecutionInterlock { InterlockDecision.Allow },
+        )
+        val request = "현재 대한민국 대통령이 누구야?"
+
+        val events = fixture.controller.runTurn(
+            turnId = turnId,
+            prompt = request,
+            currentUserRequest = request,
+        ).toList()
+
+        assertTrue(fixture.runtime.userInvocations.isEmpty())
+        val answer = events.filterIsInstance<AgentEvent.TrustedAnswer>().single().text
+        assertTrue(answer.contains("현재 직책자의 이름"))
+        assertFalse(answer.contains("국가원수"))
+        assertFalse(answer.contains("임기는 5년"))
+        assertEquals(AgentEvent.Completed(turnId), events.last())
+    }
+
+    @Test
     fun `explicit local knowledge gap automatically searches the owner-authored film subject`() =
         runBlocking {
             val turnId = TurnId("turn-automatic-film-search")
@@ -804,6 +1056,60 @@ class ManualToolAgentControllerTest {
             assertEquals(listOf(1_024, 256), fixture.runtime.outputTokenInvocations)
             assertEquals(AgentEvent.Completed(hotTurnId), hotEvents.last())
         }
+
+    @Test
+    fun `meta search correction executes only the inherited general query`() = runBlocking {
+        val turnId = TurnId("turn-contextual-general-search-correction")
+        var gatewayQuery: String? = null
+        val fixture = fixture(
+            registry = deviceRegistry(
+                routeGateway = unusedRouteGateway(),
+                webSearchGateway = object : WebSearchGateway {
+                    override suspend fun credentialsPresent(): Boolean = true
+
+                    override suspend fun search(query: String, limit: Int): WebSearchResponse {
+                        gatewayQuery = query
+                        return WebSearchResponse(
+                            provider = WebSearchProvider.YOU_COM,
+                            hits = listOf(
+                                WebSearchHit(
+                                    title = "OpenAI 공개 정보",
+                                    link = "https://openai.com/fixture",
+                                    snippet = "OpenAI는 인공지능 연구와 제품을 공개합니다.",
+                                ),
+                            ),
+                        )
+                    }
+                },
+            ),
+            executionInterlock = ExecutionInterlock { InterlockDecision.Allow },
+        )
+        fixture.runtime.enqueueUser(
+            flowOf(
+                ModelEvent.TextDelta(turnId, "OpenAI는 인공지능 연구와 제품을 공개합니다."),
+                ModelEvent.Completed(turnId),
+            ),
+        )
+        val correction = "웹 검색을 더 잘해봐"
+        val trusted = requireNotNull(
+            AutomaticWebSearchPolicy.contextualRequestOrNull(
+                followUp = correction,
+                previousUserRequest = "OpenAI를 검색해줘",
+            ),
+        )
+
+        val events = fixture.controller.runTurn(
+            turnId = turnId,
+            prompt = "trusted conversation context",
+            currentUserRequest = correction,
+            contextualWebSearchRequest = trusted,
+        ).toList()
+
+        assertEquals("OpenAI", gatewayQuery)
+        assertFalse(gatewayQuery.orEmpty().contains("더 잘"))
+        assertEquals(1, events.filterIsInstance<AgentEvent.ToolExecuted>().size)
+        assertEquals(AgentEvent.Completed(turnId), events.last())
+    }
 
     @Test
     fun `recovery of automatic web fallback reuses original knowledge request deterministically`() =
@@ -1106,9 +1412,9 @@ class ManualToolAgentControllerTest {
                                 provider = WebSearchProvider.YOU_COM,
                                 hits = listOf(
                                     WebSearchHit(
-                                        title = "OpenAI 새 모델 공개",
+                                        title = "OpenAI 회사 새 모델 공개",
                                         link = "https://openai.com/news/model",
-                                        snippet = "OpenAI는 새로운 모델을 공개했습니다.",
+                                        snippet = "OpenAI 회사는 새로운 모델을 공개했습니다.",
                                     ),
                                     WebSearchHit(
                                         title = "OpenAI 임원 부친상",
@@ -1127,7 +1433,7 @@ class ManualToolAgentControllerTest {
                     call(
                         id = "call-web",
                         name = WebSearchTool.NAME,
-                        arguments = """{"query":"OpenAI 최신 뉴스"}""",
+                        arguments = """{"query":"OpenAI 회사"}""",
                     ),
                 ),
             )
@@ -1140,8 +1446,8 @@ class ManualToolAgentControllerTest {
 
             val events = fixture.controller.runTurn(
                 turnId = turnId,
-                prompt = "OpenAI 최신 뉴스를 알려줘",
-                currentUserRequest = "OpenAI 최신 뉴스를 알려줘",
+                prompt = "OpenAI 회사에 대해 자세히 알려줘",
+                currentUserRequest = "OpenAI 회사에 대해 자세히 알려줘",
             ).toList()
 
             assertEquals(1, fixture.runtime.responseInvocations.size)
@@ -1152,7 +1458,7 @@ class ManualToolAgentControllerTest {
             assertFalse(reinjectedPayload.contains("부친상"))
             val answer = events.filterIsInstance<AgentEvent.TextDelta>().single().text
             assertTrue(answer.startsWith("OpenAI는 새로운 모델을 공개했습니다."))
-            assertTrue(answer.contains("\n\n출처\n1. OpenAI 새 모델 공개"))
+            assertTrue(answer.contains("\n\n출처\n1. OpenAI 회사 새 모델 공개"))
             assertTrue(answer.contains("https://openai.com/news/model"))
             assertFalse(answer.contains("검색 제공:"))
             assertEquals(AgentEvent.Completed(turnId), events.last())
@@ -2131,6 +2437,7 @@ class ManualToolAgentControllerTest {
             model: VerifiedInstalledModel,
             backend: InferenceBackend,
             tools: List<LlmToolDefinition>,
+            mediaModalities: Set<TurnMediaKind>,
         ) = Unit
 
         override fun streamUserTurn(turnId: TurnId, prompt: String): Flow<ModelEvent> {

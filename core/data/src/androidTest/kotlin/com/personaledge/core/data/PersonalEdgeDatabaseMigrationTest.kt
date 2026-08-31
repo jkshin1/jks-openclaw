@@ -24,7 +24,7 @@ class PersonalEdgeDatabaseMigrationTest {
 
     @Test
     @Throws(IOException::class)
-    fun migrationFromOneToTenPreservesConversationAndAddsAllLaterTables() {
+    fun migrationFromOneToElevenPreservesConversationAndAddsAllLaterTables() {
         val databaseName = "memory-migration-${System.nanoTime()}"
         helper.createDatabase(databaseName, 1).apply {
             execSQL(
@@ -38,7 +38,7 @@ class PersonalEdgeDatabaseMigrationTest {
 
         helper.runMigrationsAndValidate(
             databaseName,
-            10,
+            11,
             true,
             PersonalEdgeDatabase.MIGRATION_1_2,
             PersonalEdgeDatabase.MIGRATION_2_3,
@@ -49,6 +49,7 @@ class PersonalEdgeDatabaseMigrationTest {
             PersonalEdgeDatabase.MIGRATION_7_8,
             PersonalEdgeDatabase.MIGRATION_8_9,
             PersonalEdgeDatabase.MIGRATION_9_10,
+            PersonalEdgeDatabase.MIGRATION_10_11,
         ).use { migrated ->
             migrated.query("SELECT COUNT(*) FROM conversations").use { cursor ->
                 cursor.moveToFirst()
@@ -511,6 +512,43 @@ class PersonalEdgeDatabaseMigrationTest {
             ).use { cursor ->
                 assertEquals(true, cursor.moveToFirst())
                 assertEquals(true, cursor.isNull(0))
+            }
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrationFromTenLeavesExistingMessagesWithoutAnAttachment() {
+        val databaseName = "attachment-v11-migration-${System.nanoTime()}"
+        helper.createDatabase(databaseName, 10).apply {
+            execSQL(
+                "INSERT INTO conversations " +
+                    "(id, title, created_at_epoch_millis, updated_at_epoch_millis, summary, " +
+                    "summarized_through_message_ordinal) VALUES " +
+                    "('conversation-v10', '기존 대화', 1, 1, NULL, 0)",
+            )
+            execSQL(
+                "INSERT INTO messages " +
+                    "(id, conversation_id, ordinal, role, text, created_at_epoch_millis) VALUES " +
+                    "('message-v10', 'conversation-v10', 1, 'USER', '기존 텍스트 메시지', 5)",
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(
+            databaseName,
+            11,
+            true,
+            PersonalEdgeDatabase.MIGRATION_10_11,
+        ).use { migrated ->
+            migrated.query(
+                "SELECT text, attachment_summary FROM messages WHERE id = 'message-v10'",
+            ).use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                // The text survives and the new column stays NULL, which renders as an ordinary
+                // message rather than inventing an attachment that never existed.
+                assertEquals("기존 텍스트 메시지", cursor.getString(0))
+                assertEquals(true, cursor.isNull(1))
             }
         }
     }

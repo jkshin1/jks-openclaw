@@ -26,6 +26,7 @@ internal object LiteRtEngineFactory : RuntimeEngineFactory {
         manifest: ModelManifest,
         backend: InferenceBackend,
         cpuThreadCount: Int?,
+        mediaModalities: Set<TurnMediaKind>,
     ): RuntimeEngine {
         val nativeBackend = when (backend) {
             InferenceBackend.CPU -> Backend.CPU(threadCount = cpuThreadCount)
@@ -36,7 +37,22 @@ internal object LiteRtEngineFactory : RuntimeEngineFactory {
                 EngineConfig(
                     modelPath = modelPath,
                     backend = nativeBackend,
+                    // Without these the engine never loads its vision or audio executor, and a
+                    // media turn fails deep in native with "Vision executor should not be null"
+                    // *after* the image has already been decoded and patched — a failure that
+                    // looks like a bad attachment rather than an unconfigured engine.
+                    //
+                    // They follow what the caller enabled, not what the artifact declares. On the
+                    // owner's device, loading these executors made the GPU backend unavailable
+                    // for the entire engine, so leaving them on unconditionally would have made
+                    // every text turn about half as fast for a default-off feature.
+                    visionBackend = nativeBackend
+                        .takeIf { TurnMediaKind.IMAGE in mediaModalities },
+                    audioBackend = nativeBackend
+                        .takeIf { TurnMediaKind.AUDIO in mediaModalities },
                     maxNumTokens = manifest.contextTokens,
+                    maxNumImages = TurnMediaBudget.MAX_ATTACHMENTS_PER_TURN
+                        .takeIf { TurnMediaKind.IMAGE in mediaModalities },
                     cacheDir = cacheDir,
                 ),
             )
@@ -57,6 +73,7 @@ internal object LiteRtEngineFactory : RuntimeEngineFactory {
             delegate = engine,
             backend = backend,
             maxOutputTokens = manifest.maxOutputTokens,
+            mediaModalities = mediaModalities,
         )
     }
 }
@@ -65,6 +82,7 @@ private class LiteRtRuntimeEngine(
     private val delegate: Engine,
     override val backend: InferenceBackend,
     private val maxOutputTokens: Int,
+    override val mediaModalities: Set<TurnMediaKind>,
 ) : RuntimeEngine {
     private val closed = AtomicBoolean(false)
 
@@ -112,6 +130,8 @@ private class LiteRtRuntimeConversation(
         val nativeFlow = try {
             when (input) {
                 is RuntimeTurnInput.User -> delegate.sendMessageAsync(input.prompt)
+                is RuntimeTurnInput.UserWithMedia ->
+                    delegate.sendMessageAsync(Message.user(input.toNativeContents()))
                 is RuntimeTurnInput.ToolResponses -> {
                     val contents = input.responses.map { response ->
                         Content.ToolResponse(
@@ -159,6 +179,32 @@ private class LiteRtRuntimeConversation(
             throw RuntimeDriverException()
         }
     }
+}
+
+/**
+ * Media first, then the request text.
+ *
+ * The artifact's own chat template renders an `image` item as `<|image|>` and an `audio` item as
+ * `<|audio|>` inline, in list order, so ordering here is what the model actually sees. Putting the
+ * attachment ahead of the instruction matches how the template's examples read and keeps the
+ * app-authored task sentence as the last thing before generation begins.
+ *
+ * Bytes are copied out of the validated attachment at this boundary and handed straight to the
+ * native content type; nothing here logs, hashes, or retains them.
+ */
+private fun RuntimeTurnInput.UserWithMedia.toNativeContents(): Contents {
+    val contents = buildList {
+        for (attachment in media) {
+            add(
+                when (attachment.kind) {
+                    TurnMediaKind.IMAGE -> Content.ImageBytes(attachment.copyBytes())
+                    TurnMediaKind.AUDIO -> Content.AudioBytes(attachment.copyBytes())
+                },
+            )
+        }
+        add(Content.Text(prompt))
+    }
+    return Contents.of(contents)
 }
 
 private class ManualOnlyOpenApiTool(

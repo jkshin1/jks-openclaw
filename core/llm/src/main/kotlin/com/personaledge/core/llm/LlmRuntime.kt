@@ -4,6 +4,7 @@ import java.util.Collections
 import java.util.LinkedHashSet
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flowOf
 
 const val MAX_USER_PROMPT_BYTES: Int = 2 * 1024
 
@@ -132,6 +133,8 @@ enum class LlmFailureCode {
     TURN_REPLAYED,
     TURN_MISMATCH,
     INVALID_PROMPT,
+    INVALID_MEDIA,
+    MEDIA_UNSUPPORTED,
     INVALID_TOOL_DEFINITION,
     INVALID_TOOL_CALL,
     INVALID_TOOL_RESPONSE,
@@ -147,10 +150,20 @@ class LlmRuntimeException(
 interface LlmRuntime : AutoCloseable {
     val state: StateFlow<LlmState>
 
+    /**
+     * [mediaModalities] selects which encoders the engine loads, and defaults to none.
+     *
+     * Loading them is not free and not local to media: on the owner's device, enabling the vision
+     * and audio executors made the GPU backend unavailable for the whole engine, so every text
+     * turn fell back to CPU and ran about half as fast, with roughly 1.4 GB more resident memory.
+     * A default-off feature must not impose that, so the caller passes the modalities the owner
+     * actually enabled rather than everything the artifact happens to declare.
+     */
     suspend fun initialize(
         model: VerifiedInstalledModel,
         backend: InferenceBackend = InferenceBackend.CPU,
         tools: List<LlmToolDefinition> = emptyList(),
+        mediaModalities: Set<TurnMediaKind> = emptySet(),
     )
 
     fun streamUserTurn(
@@ -178,6 +191,34 @@ interface LlmRuntime : AutoCloseable {
         maxOutputTokens: Int,
         toolScope: LlmTurnToolScope,
     ): Flow<ModelEvent> = streamUserTurn(turnId, prompt, maxOutputTokens)
+
+    /**
+     * Starts a fresh top-level turn that also prefills bounded, Kotlin-validated media.
+     *
+     * Only production runtimes override this. Every other runtime keeps the text contract and
+     * fails a media request closed rather than silently dropping the attachment, which would
+     * answer a question about a photo the model never received.
+     */
+    fun streamUserTurn(
+        turnId: TurnId,
+        prompt: String,
+        maxOutputTokens: Int,
+        toolScope: LlmTurnToolScope,
+        media: List<TurnMediaAttachment>,
+    ): Flow<ModelEvent> = if (media.isEmpty()) {
+        streamUserTurn(turnId, prompt, maxOutputTokens, toolScope)
+    } else {
+        flowOf(ModelEvent.Failure(turnId, LlmFailureCode.MEDIA_UNSUPPORTED))
+    }
+
+    /**
+     * Native context tokens the current conversation holds, or null when unavailable.
+     *
+     * Content-free by nature: a count, never the tokens. It exists so a per-modality prefill cost
+     * can be measured on the device instead of being carried as documentation, and so a media
+     * turn's real context footprint can be compared against the same request without media.
+     */
+    suspend fun contextTokenCount(): Int? = null
 
     fun streamToolResponses(
         turnId: TurnId,

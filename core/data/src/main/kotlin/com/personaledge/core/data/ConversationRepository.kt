@@ -10,6 +10,8 @@ data class StoredMessage(
     val role: MessageRole,
     val text: String,
     val createdAtEpochMillis: Long,
+    /** Content-free attachment shape written by the app; see [MessageEntity.attachmentSummary]. */
+    val attachmentSummary: String? = null,
 )
 
 data class ConversationContext(
@@ -107,6 +109,7 @@ class ConversationRepository(
         conversationId: String,
         role: MessageRole,
         text: String,
+        attachmentSummary: String? = null,
     ): Long? = database.withTransaction {
         conversationDao.find(conversationId) ?: return@withTransaction null
 
@@ -121,6 +124,11 @@ class ConversationRepository(
                 role = role,
                 text = text.sanitized(MAX_MESSAGE_CHARACTERS),
                 createdAtEpochMillis = now,
+                // Capped and stripped like every other stored string: this column is written by
+                // the app, but a bounded write keeps a future caller from widening it by accident.
+                attachmentSummary = attachmentSummary
+                    ?.sanitized(MAX_ATTACHMENT_SUMMARY_CHARACTERS)
+                    ?.takeIf(String::isNotEmpty),
             ),
         )
         conversationDao.touch(conversationId, now)
@@ -404,6 +412,9 @@ class ConversationRepository(
         const val MAX_MESSAGES_PER_READ = 500
         const val MAX_TITLE_CHARACTERS = 120
         const val MAX_MESSAGE_CHARACTERS = 8_000
+
+        /** A kind, a source, and at most a whole-second count never needs more than this. */
+        const val MAX_ATTACHMENT_SUMMARY_CHARACTERS = 32
         const val MAX_SUMMARY_CHARACTERS = 2_000
         private const val TOOL_COMMIT_MARKER_PREFIX = "tool-commit:"
     }
@@ -436,6 +447,7 @@ private fun MessageEntity.toStoredMessage(): StoredMessage = StoredMessage(
     role = role,
     text = text,
     createdAtEpochMillis = createdAtEpochMillis,
+    attachmentSummary = attachmentSummary,
 )
 
 /** Message ordinals are positive and never wrap into the negative range on corrupted storage. */

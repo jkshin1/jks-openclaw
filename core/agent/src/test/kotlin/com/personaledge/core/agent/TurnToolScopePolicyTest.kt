@@ -17,6 +17,7 @@ class TurnToolScopePolicyTest {
             "리마인더 목록 보여줘" to setOf("reminder_query"),
             "강남역까지 얼마나 걸려" to setOf("route_estimate"),
             "OpenAI 최신 뉴스 알려줘" to setOf("web_search"),
+            "현재 대한민국 대통령이 누구야?" to setOf("web_search"),
         )
 
         cases.forEach { (prompt, expected) ->
@@ -45,12 +46,63 @@ class TurnToolScopePolicyTest {
     }
 
     @Test
-    fun `freshness request cannot answer without web grounding`() {
-        val scoped = TurnToolScopePolicy.forPrompt("현재 주가를 알려줘", ALL_TOOLS)
+    fun `safe volatile fact cannot answer without web grounding`() {
+        val scoped = TurnToolScopePolicy.forPrompt("삼성전자 현재 주가를 알려줘", ALL_TOOLS)
 
         requireNotNull(scoped)
         assertEquals(setOf("web_search"), scoped.scope.toolNames)
         assertTrue(scoped.requiresGroundedRead)
+    }
+
+    @Test
+    fun `closed volatile facts expose only grounded web search`() {
+        listOf(
+            "OpenAI 최신 뉴스",
+            "비트코인 시세",
+            "원달러 환율",
+            "한국은행 기준금리",
+            "KBO 순위",
+            "삼성전자 최근 실적",
+        ).forEach { prompt ->
+            val scoped = requireNotNull(TurnToolScopePolicy.forPrompt(prompt, ALL_TOOLS))
+            assertEquals(prompt, setOf("web_search"), scoped.scope.toolNames)
+            assertTrue(prompt, scoped.requiresGroundedRead)
+        }
+    }
+
+    @Test
+    fun `raw freshness text never reopens web after trusted parsing rejects it`() {
+        listOf(
+            "최신 뉴스",
+            "현재 주가를 알려줘",
+            "내 우울증 진단 기록 최신 뉴스",
+            "내가 가진 비트코인 시세",
+            "내프로젝트 최신 뉴스",
+            "내 비밀번호 12345678 최신 뉴스",
+            "우리 회사 최신 실적",
+            "우리회사 최신 실적",
+            "OpenAI 최신 뉴스를 저장해",
+            "OpenAI 최신 뉴스와 비트코인 시세",
+            "OpenAI 최신 뉴스와 내일 일정 알려줘",
+            "웹 검색을 더 잘해봐",
+            "검색어를 바꿔서 다시 찾아줘",
+        ).forEach { prompt ->
+            val scoped = requireNotNull(TurnToolScopePolicy.forPrompt(prompt, ALL_TOOLS))
+            assertFalse(prompt, "web_search" in scoped.scope.toolNames)
+        }
+    }
+
+    @Test
+    fun `standalone explicit search remains web scoped`() {
+        listOf(
+            "검색해줘: OpenAI",
+            "OpenAI를 다시 검색해줘",
+            "비트코인 시세를 다시 검색해줘",
+        ).forEach { prompt ->
+            val scoped = requireNotNull(TurnToolScopePolicy.forPrompt(prompt, ALL_TOOLS))
+            assertEquals(prompt, setOf("web_search"), scoped.scope.toolNames)
+            assertTrue(prompt, scoped.requiresGroundedRead)
+        }
     }
 
     @Test

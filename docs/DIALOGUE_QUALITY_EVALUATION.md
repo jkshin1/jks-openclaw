@@ -139,6 +139,26 @@ The fixed Fold8 test also reports a content-free pre-turn output budget and ther
 each case. The owner-requested measurement lane keeps the selected foreground ceiling unchanged
 through SEVERE; CRITICAL remains the cooperative-cancellation boundary.
 
+Tool-backed dialogue journeys are deliberately not scored as rows in the fixed no-Tool v1 corpus.
+The screenshot regression is instead pinned by deterministic Kotlin tests across four boundaries:
+
+- the first `현재 대한민국 대통령이 누구야?` turn becomes a mandatory canonical web read before
+  any local answer;
+- `웹 검색 할 수 있잖아`, explicit `첫 질문` wording, and one bounded correction chain recover
+  only a completed safe USER source row;
+- constitution/term-only hits fail current-officeholder answerability and permit the existing
+  provider fallback; and
+- the final body is accepted only when its first sentence contains the evidence-backed name and
+  role, while the deterministic fallback never substitutes office background for that name.
+
+These tests use a fictional officeholder and fake providers. They prove routing and validation
+contracts without freezing a real person's name, but they are not live-provider, device, ranking,
+or current-fact accuracy evidence.
+
+The bounded failed-correction/`첫 질문` Room resolver also ran in the 2026-09-01 disposable API 37
+AVD suite. That full reviewed lane selected 269 methods, passed 238, reached 31 explicit owner/live
+guards, and failed none. The officeholder provider fixtures remain host-only and fictional.
+
 Within that envelope, the current clock/zone and current request are mandatory. Full calendar
 display text and the focused-web reminder are lower-priority metadata and are omitted first when
 space is tight. This prevents a valid long request from being rejected merely because trusted

@@ -5,6 +5,7 @@ import java.io.DataOutputStream
 import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,7 +13,7 @@ class UserDataArchiveTest {
     private val passphrase = "correct horse battery staple"
 
     @Test
-    fun `selected data round trips with schema hash and calendar remap metadata`() {
+    fun `selected data and content free attachment summary round trip`() {
         val snapshot = sampleSnapshot()
 
         val archive = EncryptedUserDataArchive.encrypt(snapshot, passphrase)
@@ -20,6 +21,7 @@ class UserDataArchiveTest {
             as UserDataArchiveReadResult.Ready
 
         assertEquals(snapshot, result.snapshot)
+        assertEquals("AUDIO:VOICE:12", result.snapshot.messages.single().attachmentSummary)
         assertEquals(1, EncryptedUserDataArchive.preview(result.snapshot).messageCount)
         assertTrue(result.snapshot.calendarRemapRequired)
     }
@@ -65,7 +67,7 @@ class UserDataArchiveTest {
                 UserDataArchiveFailure.UNSUPPORTED_VERSION,
             )
         }
-        listOf(0, 4, 6, Int.MAX_VALUE).forEach { version ->
+        listOf(0, 4, 7, Int.MAX_VALUE).forEach { version ->
             assertArchiveFailure(
                 archive.copyOf().putInt(SCHEMA_VERSION_OFFSET, version),
                 UserDataArchiveFailure.SCHEMA_MISMATCH,
@@ -107,7 +109,7 @@ class UserDataArchiveTest {
     fun `payload version booleans counts and string sizes fail closed before allocation`() {
         assertPayloadRejected(payload { writeLong(Long.MAX_VALUE) })
         assertPayloadRejected(payload {
-            writeInt(1)
+            writeInt(2)
             writeByte(2)
         })
         assertPayloadRejected(payloadWithPrelude { writeLong(Long.MAX_VALUE) })
@@ -123,6 +125,35 @@ class UserDataArchiveTest {
             writeInt(1)
             writeInt(Int.MAX_VALUE)
         })
+    }
+
+    @Test
+    fun `legacy schema 5 payload decodes messages with no attachment summary`() {
+        val selection = UserDataSelection(
+            conversations = true,
+            memories = false,
+            reminders = false,
+            proposals = false,
+        )
+        val legacyPayload = legacyConversationPayload()
+
+        val decoded = UserDataPayloadCodec.decode(
+            payload = legacyPayload,
+            selection = selection,
+            transferSchemaVersion = 5,
+        )
+
+        assertEquals("legacy-message", decoded.messages.single().id)
+        assertNull(decoded.messages.single().attachmentSummary)
+        assertTrue(
+            runCatching {
+                UserDataPayloadCodec.decode(
+                    payload = legacyPayload,
+                    selection = selection,
+                    transferSchemaVersion = EncryptedUserDataArchive.DATABASE_SCHEMA_VERSION.toLong(),
+                )
+            }.isFailure,
+        )
     }
 
     @Test
@@ -159,6 +190,68 @@ class UserDataArchiveTest {
                     messages = listOf(
                         message.copy(id = "message-1", conversationId = conversation.id, ordinal = 1),
                         message.copy(id = "message-2", conversationId = otherConversation.id, ordinal = 1),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `attachment summary accepts only canonical content free codes`() {
+        val snapshot = sampleSnapshot()
+        val message = snapshot.messages.single()
+
+        listOf(
+            "IMAGE:CAMERA",
+            "IMAGE:GALLERY",
+            "AUDIO:VOICE:0",
+            "AUDIO:VOICE:3600",
+        ).forEach { summary ->
+            assertTrue(
+                summary,
+                UserDataSnapshotValidator.isSafeForImport(
+                    snapshot.copy(messages = listOf(message.copy(attachmentSummary = summary))),
+                ),
+            )
+        }
+        listOf(
+            "",
+            "사진 속 비밀번호",
+            "IMAGE:VOICE",
+            "IMAGE:CAMERA:1",
+            "AUDIO:CAMERA:12",
+            "AUDIO:GALLERY:12",
+            "AUDIO:VOICE:01",
+            "AUDIO:VOICE:3601",
+            "AUDIO:VOICE:1:extra",
+        ).forEach { summary ->
+            assertFalse(
+                summary,
+                UserDataSnapshotValidator.isSafeForImport(
+                    snapshot.copy(messages = listOf(message.copy(attachmentSummary = summary))),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `attachment summary belongs only to a user message`() {
+        val snapshot = sampleSnapshot()
+        val message = snapshot.messages.single()
+
+        listOf(MessageRole.ASSISTANT, MessageRole.TOOL_RECEIPT).forEach { role ->
+            assertFalse(
+                role.name,
+                UserDataSnapshotValidator.isSafeForImport(
+                    snapshot.copy(messages = listOf(message.copy(role = role))),
+                ),
+            )
+        }
+        assertTrue(
+            UserDataSnapshotValidator.isSafeForImport(
+                snapshot.copy(
+                    messages = listOf(
+                        message.copy(role = MessageRole.ASSISTANT, attachmentSummary = null),
                     ),
                 ),
             ),
@@ -294,10 +387,37 @@ class UserDataArchiveTest {
         }
 
     private fun payloadWithPrelude(write: DataOutputStream.() -> Unit): ByteArray = payload {
-        writeInt(1)
+        writeInt(2)
         writeByte(0)
         writeByte(0)
         write()
+    }
+
+    private fun legacyConversationPayload(): ByteArray = payload {
+        writeInt(1)
+        writeBoolean(false)
+        writeBoolean(false)
+        writeInt(1)
+        writeTransferString("legacy-conversation")
+        writeTransferString("legacy title")
+        writeLong(1)
+        writeLong(2)
+        writeBoolean(false)
+        writeLong(0)
+        writeInt(1)
+        writeTransferString("legacy-message")
+        writeTransferString("legacy-conversation")
+        writeLong(1)
+        writeTransferString(MessageRole.USER.name)
+        writeTransferString("legacy text")
+        writeLong(2)
+        repeat(4) { writeInt(0) }
+    }
+
+    private fun DataOutputStream.writeTransferString(value: String) {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        writeInt(bytes.size)
+        write(bytes)
     }
 
     private fun ByteArray.putInt(offset: Int, value: Int): ByteArray = apply {
@@ -312,7 +432,15 @@ class UserDataArchiveTest {
         // The repository intentionally retains recent messages that overlap the summary boundary.
         // Keeping this in the round-trip fixture protects compatibility with those v1 archives.
         val conversation = ConversationEntity("conversation", "제목", 1, 2, "요약", 1)
-        val message = MessageEntity("message", conversation.id, 1, MessageRole.USER, "안녕", 2)
+        val message = MessageEntity(
+            "message",
+            conversation.id,
+            1,
+            MessageRole.USER,
+            "안녕",
+            2,
+            attachmentSummary = "AUDIO:VOICE:12",
+        )
         val memory = MemoryEntity(
             id = "memory",
             content = "사용자는 민트색을 좋아한다.",

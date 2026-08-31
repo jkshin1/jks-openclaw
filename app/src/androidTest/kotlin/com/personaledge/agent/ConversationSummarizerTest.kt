@@ -386,6 +386,30 @@ class ConversationSummarizerTest {
     }
 
     @Test
+    fun attachmentOnlyUserRowReachesTheLongTermSummaryAsContentFreeShape() = runBlocking {
+        val mediaSummarizer = ConversationSummarizer(repository, messagesBeforeSummary = 1)
+        val id = repository.createConversation("첨부 문맥")
+        repository.appendMessage(
+            conversationId = id,
+            role = MessageRole.USER,
+            text = "",
+            attachmentSummary = "IMAGE:GALLERY",
+        )
+
+        val request = requireNotNull(mediaSummarizer.requestFor(id))
+
+        assertTrue(request.prompt.contains("사용자: [첨부: 사진 1장(선택)]"))
+        assertFalse(request.prompt.contains("IMAGE:GALLERY"))
+        assertTrue(
+            mediaSummarizer.acceptSummary(
+                request,
+                "[미완료·참조] 사진 1장(선택)이 첨부되었습니다.",
+            ),
+        )
+        assertTrue(repository.findConversation(id)!!.summary!!.contains("사진 1장(선택)"))
+    }
+
+    @Test
     fun aLegacyKoreanSummaryStillLeavesRoomForOneCompleteNewRow() = runBlocking {
         val id = conversationWith(4)
         assertTrue(
