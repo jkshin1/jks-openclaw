@@ -42,6 +42,20 @@ before any device work.
   completion, changed battery temperature from 34.2 to 35.5 C while plugged in, and left reported
   capacity at 94%. These are bounded fixed-case and sustained-turn receipts, not general semantic
   proof or proof that all 1,024 available output tokens were consumed.
+- A later intent/search-context audit reproduced the owner's complete bad-answer screenshot chain,
+  including the intermediate `내가 뭘 물어봤지? 위 대답이 적절해?` review. The bounded Room
+  resolver may now cross exactly one completed, closed-form answer-review turn and a short run of
+  search corrections to recover the original owner USER row. Appended private, write, or new-topic
+  text fails the full-match review grammar and stops recovery. Current-officeholder evidence no
+  longer treats historical `당선`, `취임`, or similar event wording as proof of current status.
+  Explicit public software subjects followed by `최신 버전`, `최신 안정 버전`, `최신 릴리스`,
+  or `최근 릴리스` now take the immediate grounded-search path; local `내/우리 앱`, subjectless,
+  compound, current-installed-version, and install requests remain closed.
+- Media turns now receive the same trusted device clock, bounded prior conversation, allowed
+  memory, and rolling summary as text turns. Context is built before the current content-free
+  attachment USER row is stored, completion stays pinned to the captured conversation even if the
+  UI switches threads, and successful media turns trigger normal background compaction. Tight
+  context budgets reserve both a bounded summary slice and the newest user/assistant pair.
 - The same final code candidate displayed actual LiteRT thought-channel text inside the expandable
   `생각 중` disclosure on the normal dark MainActivity. Expand, live-stream, collapse, and final
   clearing were observed. The earlier all-white screen was isolated to the instrumentation-only
@@ -103,8 +117,11 @@ before any device work.
   matched minified release lane selected 35 methods: its ABI smoke passed and 34 canary/live
   methods reached their reviewed guards, with zero failures under the unchanged owner
   certificate. This latest run covers the cache sweep, attachment transfer/context, mirrored EXIF
-  handling, and provider-free grounded-web journey. It is emulator evidence only; no Fold8 was
-  connected, inspected, installed, or changed.
+  handling, provider-free grounded-web journey, the complete answer-review/re-search chain, and its
+  appended-write rejection. A subsequent final-code rerun produced the same 279/248/31/0 debug
+  and 35/1/34/0 minified-release counts after the current-evidence, media-context, and software-
+  release routing changes. It is emulator evidence only; no Fold8 was connected, inspected,
+  installed, or changed.
 - **The 2026-09-01 Fold8 session changed the design.** A same-certificate release update installed
   cleanly (pulled-back hash matched, `firstInstallTime` preserved, before/after preservation
   snapshots identical), and three things came out of it. `EngineConfig` needs `visionBackend`,

@@ -1,8 +1,12 @@
 package com.personaledge.agent
 
+import com.personaledge.core.agent.TurnMediaIntent
+import com.personaledge.core.agent.TurnMediaPolicy
 import com.personaledge.core.data.ConversationContext
 import com.personaledge.core.data.MessageRole
 import com.personaledge.core.data.StoredMessage
+import com.personaledge.core.llm.MAX_USER_PROMPT_BYTES
+import com.personaledge.core.llm.TurnMediaKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -58,6 +62,101 @@ class TurnContextBuilderTest {
 
         assertTrue(built.contains("사용자: \"（첨부: 사진 1장(촬영)）\""))
         assertFalse(built.contains("IMAGE:CAMERA"))
+    }
+
+    @Test
+    fun `media plan receives device time and the preceding conversation`() {
+        val plan = requireNotNull(
+            TurnMediaPolicy.planOrNull(
+                kind = TurnMediaKind.IMAGE,
+                ownerText = "이전 질문의 조건에 맞는지 확인해 줘",
+                requestedIntent = TurnMediaIntent.IMAGE_QUESTION,
+            ),
+        )
+        val built = TurnContextBuilder.buildResult(
+            prompt = plan.prompt,
+            device = device(),
+            conversation = ConversationContext(
+                conversationId = "conversation-media-follow-up",
+                summary = "[목표] 여행 가방 규격을 확인한다. [결정·제약] 기내 반입만 허용한다.",
+                recentMessages = listOf(
+                    message(1, MessageRole.USER, "가로와 세로가 모두 기준 안인지 봐 줘."),
+                    message(2, MessageRole.ASSISTANT, "규격표 사진을 첨부해 주세요."),
+                ),
+            ),
+            maximumBytes = MAX_USER_PROMPT_BYTES,
+        )
+
+        assertTrue(built.deviceContextIncluded)
+        assertTrue(built.text.startsWith("[기기 정보] 현재=2026-08-22(토) 10:00"))
+        assertTrue(built.text.contains("시간대=Asia/Seoul"))
+        assertTrue(built.text.contains("여행 가방 규격"))
+        assertTrue(built.text.contains("가로와 세로가 모두 기준 안인지"))
+        assertTrue(built.text.contains("규격표 사진을 첨부해 주세요."))
+        assertTrue(built.text.endsWith("[현재 사용자 요청]\n${plan.prompt}"))
+        assertTrue(built.text.toByteArray(Charsets.UTF_8).size <= MAX_USER_PROMPT_BYTES)
+    }
+
+    @Test
+    fun `maximum accepted media owner text still keeps the trusted clock`() {
+        val plan = requireNotNull(
+            TurnMediaPolicy.planOrNull(
+                kind = TurnMediaKind.IMAGE,
+                ownerText = "a".repeat(TurnMediaPolicy.MAX_OWNER_TEXT_BYTES),
+                requestedIntent = TurnMediaIntent.IMAGE_QUESTION,
+            ),
+        )
+        val built = TurnContextBuilder.buildResult(
+            prompt = plan.prompt,
+            device = device(),
+            conversation = null,
+            maximumBytes = MAX_USER_PROMPT_BYTES,
+        )
+
+        assertTrue(built.deviceContextIncluded)
+        assertTrue(built.text.contains("현재=2026-08-22(토) 10:00"))
+        assertTrue(built.text.contains("시간대=Asia/Seoul"))
+        assertTrue(built.text.endsWith("[현재 사용자 요청]\n${plan.prompt}"))
+        assertTrue(built.text.toByteArray(Charsets.UTF_8).size <= MAX_USER_PROMPT_BYTES)
+    }
+
+    @Test
+    fun `tight media follow-up keeps compressed instruction and attachment-only antecedent`() {
+        val plan = requireNotNull(
+            TurnMediaPolicy.planOrNull(
+                kind = TurnMediaKind.IMAGE,
+                ownerText = "a".repeat(300),
+                requestedIntent = TurnMediaIntent.IMAGE_QUESTION,
+            ),
+        )
+        val summaryHead = "LONG-GOAL-HEAD"
+        val summaryTail = "UNRESOLVED-INSTRUCTION-TAIL"
+        val built = TurnContextBuilder.buildResult(
+            prompt = plan.prompt,
+            device = device(),
+            conversation = ConversationContext(
+                conversationId = "conversation-tight-media",
+                summary = "$summaryHead ${"압축된 이전 대화 ".repeat(80)} $summaryTail",
+                recentMessages = listOf(
+                    message(
+                        ordinal = 41,
+                        role = MessageRole.USER,
+                        text = "",
+                        attachmentSummary = "IMAGE:GALLERY",
+                    ),
+                    message(42, MessageRole.ASSISTANT, "그 사진에서 어느 항목을 비교할까요?"),
+                ),
+            ),
+            maximumBytes = MAX_USER_PROMPT_BYTES,
+        )
+
+        assertTrue(built.deviceContextIncluded)
+        assertTrue(built.text.contains(summaryHead))
+        assertTrue(built.text.contains(summaryTail))
+        assertTrue(built.text.contains("（첨부: 사진 1장(선택)）"))
+        assertTrue(built.text.contains("어느 항목을 비교할까요?"))
+        assertTrue(built.text.endsWith("[현재 사용자 요청]\n${plan.prompt}"))
+        assertTrue(built.text.toByteArray(Charsets.UTF_8).size <= MAX_USER_PROMPT_BYTES)
     }
 
     @Test

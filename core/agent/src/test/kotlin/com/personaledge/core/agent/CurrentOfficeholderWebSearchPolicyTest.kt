@@ -128,6 +128,12 @@ class CurrentOfficeholderWebSearchPolicyTest {
                 "현재 대한민국 대통령 정보입니다.",
             ),
         )
+        assertNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                plan,
+                "현재 대한민국 대통령은 홍길동이 아닙니다.",
+            ),
+        )
 
         val answer = requireNotNull(
             WebSearchAnswerPolicy.answerFromModelOrNull(

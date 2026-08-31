@@ -163,9 +163,23 @@ internal object TurnContextBuilder {
         }
 
         val recentMessages = context?.recentMessages.orEmpty()
+        val summaryText = context?.summary?.takeIf(String::isNotBlank)
         val recentHeader = if (recentMessages.isEmpty()) "" else "최근 메시지:\n"
+        // The rolling capsule may be the only remaining copy of an older goal or unresolved
+        // instruction. Reserve a bounded slice before recent rows take their share, while leaving
+        // enough for the latest user/assistant pair. This matters most for media plans, whose
+        // app-authored safety frame is larger than an ordinary text request.
+        val summaryReservedBytes = summaryText
+            ?.takeIf { requiredPriorAnswer == null }
+            ?.let { text ->
+                reserveSummaryBytes(
+                    text = text,
+                    availableBytes = innerBudget,
+                    hasRecentMessages = recentMessages.isNotEmpty(),
+                )
+            } ?: 0
         val recentContentBudget = minOf(
-            (innerBudget - recentHeader.utf8Size()).coerceAtLeast(0),
+            (innerBudget - summaryReservedBytes - recentHeader.utf8Size()).coerceAtLeast(0),
             if (focusPreviousWebAnswer) MAX_FOCUSED_RECENT_BLOCK_BYTES else MAX_RECENT_BLOCK_BYTES,
         )
         val recentSelection = selectRecentBlocks(
@@ -188,7 +202,7 @@ internal object TurnContextBuilder {
             if (recentBlocks.isEmpty()) 0 else recentHeader.utf8Size()
         innerBudget -= recentBytes
 
-        val summaryBlock = context?.summary?.takeIf(String::isNotBlank)?.let { text ->
+        val summaryBlock = summaryText?.let { text ->
             val prefix = "요약: \""
             val suffix = "\"\n"
             val contentBudget = minOf(
@@ -254,6 +268,31 @@ internal object TurnContextBuilder {
             includedMemoryCount = memoryBlocks.size,
             requiredPriorAnswerIncluded = requiredPriorAnswerIncluded,
         )
+    }
+
+    private fun reserveSummaryBytes(
+        text: String,
+        availableBytes: Int,
+        hasRecentMessages: Boolean,
+    ): Int {
+        if (availableBytes <= 0) return 0
+        val prefix = "요약: \""
+        val suffix = "\"\n"
+        val overhead = prefix.utf8Size() + suffix.utf8Size()
+        val safeContentBytes = minOf(
+            sanitizeFully(text).utf8Size(),
+            MAX_SUMMARY_BYTES,
+            MAX_SUMMARY_BLOCK_BYTES,
+        )
+        if (safeContentBytes <= 0) return 0
+        val fullBlockBytes = overhead + safeContentBytes
+        if (!hasRecentMessages) return minOf(fullBlockBytes, availableBytes)
+
+        val availableAfterRecentFloor =
+            (availableBytes - MIN_RECENT_CONTEXT_RESERVED_BYTES).coerceAtLeast(0)
+        val targetBytes = maxOf(MIN_SUMMARY_CONTEXT_RESERVED_BYTES, availableBytes / 3)
+        val reserved = minOf(fullBlockBytes, availableAfterRecentFloor, targetBytes)
+        return reserved.takeIf { bytes -> bytes >= overhead + MIN_SUMMARY_CONTENT_BYTES } ?: 0
     }
 
     /** Adds a checklist only when the request combines candidate selection with explicit criteria. */
@@ -584,6 +623,9 @@ internal object TurnContextBuilder {
     private const val MAX_SINGLE_MEMORY_BYTES = 240
     private const val MAX_MEMORY_BLOCK_BYTES = 640
     private const val MIN_HISTORY_INNER_BYTES = 48
+    private const val MIN_SUMMARY_CONTENT_BYTES = 24
+    private const val MIN_SUMMARY_CONTEXT_RESERVED_BYTES = 64
+    private const val MIN_RECENT_CONTEXT_RESERVED_BYTES = 96
     private const val MIN_MESSAGE_BLOCK_BYTES = 16
     private const val MIN_ANCHOR_CONTENT_BYTES = 12
     private const val MIN_HEAD_TAIL_CONTENT_BYTES = 12

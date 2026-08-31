@@ -63,6 +63,9 @@ class TurnToolScopePolicyTest {
             "한국은행 기준금리",
             "KBO 순위",
             "삼성전자 최근 실적",
+            "Android 최신 버전이 뭐야?",
+            "Kotlin 최신 안정 버전을 알려줘",
+            "Jetpack Compose 최신 릴리스를 확인해 줘",
         ).forEach { prompt ->
             val scoped = requireNotNull(TurnToolScopePolicy.forPrompt(prompt, ALL_TOOLS))
             assertEquals(prompt, setOf("web_search"), scoped.scope.toolNames)
@@ -84,6 +87,14 @@ class TurnToolScopePolicyTest {
             "OpenAI 최신 뉴스를 저장해",
             "OpenAI 최신 뉴스와 비트코인 시세",
             "OpenAI 최신 뉴스와 내일 일정 알려줘",
+            "최신 버전",
+            "앱 최신 버전",
+            "내 앱 최신 버전",
+            "내앱 최신 버전",
+            "우리 앱 최신 버전",
+            "Android 현재 버전이 뭐야?",
+            "Chrome 최신 버전과 Kotlin 최신 버전",
+            "Chrome 최신 버전을 설치해줘",
             "웹 검색을 더 잘해봐",
             "검색어를 바꿔서 다시 찾아줘",
         ).forEach { prompt ->

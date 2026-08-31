@@ -1480,6 +1480,7 @@ class PersonalEdgeViewModel(
     private suspend fun withTrustedTurnContext(
         prompt: String,
         requiredPriorAnswer: PriorWebResultReference? = null,
+        contextConversationId: String? = null,
     ): TrustedTurnContextResult {
         val temporal = runCatching {
             val zone = ZoneId.systemDefault()
@@ -1497,6 +1498,7 @@ class PersonalEdgeViewModel(
             .onFailure { unavailable += DiagnosticContextComponent.SETTINGS }
             .getOrNull()
         val conversationId = requiredPriorAnswer?.conversationId
+            ?: contextConversationId
             ?: _chatHistory.value.activeConversationId
         val conversation = conversationId?.let { activeConversationId ->
             runCatching {
@@ -2005,23 +2007,62 @@ class PersonalEdgeViewModel(
                 var deltaCount = 0
                 var deltaByteCount = 0L
                 var completed = false
+                var conversationId: String? = null
                 try {
-                    val conversationId = history.ensureConversation(
+                    conversationId = history.ensureConversation(
                         activeConversationId = _chatHistory.value.activeConversationId,
                         firstPrompt = ownerText.ifEmpty { attachmentLabel },
                     )
                     _chatHistory.update { state -> state.copy(activeConversationId = conversationId) }
+
+                    // A media turn keeps its separate, tool-free execution boundary, but it must
+                    // not lose the trusted context every ordinary text turn receives. Build the
+                    // context before recording this USER row so the current attachment is not
+                    // echoed back as previous history. Only the app-authored media plan, current
+                    // device clock/zone, and already persisted conversation data reach the model.
+                    val trustedContext = withTrustedTurnContext(
+                        prompt = plan.prompt,
+                        contextConversationId = conversationId,
+                    )
+                    if (trustedContext is TrustedTurnContextResult.Unavailable) {
+                        diagnostics.recordSafely(
+                            DiagnosticEvent.ContextUnavailable(trustedContext.component),
+                        )
+                        removeMessageIfBlank(assistantEntryId)
+                        addMessage(ChatRole.STATUS, trustedContext.userMessage)
+                        return@launch
+                    }
+                    trustedContext as TrustedTurnContextResult.Ready
+                    trustedContext.unavailableComponents.forEach { component ->
+                        diagnostics.recordSafely(DiagnosticEvent.ContextUnavailable(component))
+                    }
+                    if (trustedContext.unavailableComponents.isNotEmpty()) {
+                        addMessage(
+                            ChatRole.STATUS,
+                            "대화 문맥 일부를 불러오지 못했지만 현재 날짜와 시간대는 확인했습니다.",
+                        )
+                    }
+                    trustedContext.recalledMemoryNotices.forEach { notice ->
+                        addMessage(ChatRole.STATUS, notice)
+                    }
+                    val requestText = trustedContext.text
+
                     // The typed line and a content-free attachment shape; never the media itself.
-                    history.recordOrdinal(
+                    val userMessageOrdinal = history.recordOrdinal(
                         conversationId = conversationId,
                         role = MessageRole.USER,
                         text = ownerText,
                         attachmentSummary = attachmentSummary,
                     )
+                    if (userMessageOrdinal == null) {
+                        _chatHistory.update { state ->
+                            state.copy(error = "이 첨부 요청은 현재 기기에 저장되지 않고 있습니다.")
+                        }
+                    }
 
                     diagnostics.markPhase(DiagnosticPhase.TURN_PROCESSING)
                     diagnostics.recordSafely(
-                        DiagnosticEvent.TurnStarted(plan.prompt.toByteArray(Charsets.UTF_8).size),
+                        DiagnosticEvent.TurnStarted(requestText.toByteArray(Charsets.UTF_8).size),
                     )
                     recordMediaDiagnostic(
                         kind = attachment.kind,
@@ -2032,7 +2073,7 @@ class PersonalEdgeViewModel(
 
                     controller.runTurn(
                         turnId = turnId,
-                        prompt = plan.prompt,
+                        prompt = requestText,
                         turnLimits = mediaTurnLimits(plan.maxOutputTokens),
                         media = listOf(attachment),
                     ).collect { event ->
@@ -2124,11 +2165,16 @@ class PersonalEdgeViewModel(
                     withContext(NonCancellable) {
                         val answer = currentMessageText(assistantEntryId)
                         if (answer.isNotBlank()) {
-                            history.record(
-                                conversationId = _chatHistory.value.activeConversationId,
+                            val stored = history.record(
+                                conversationId = conversationId,
                                 role = MessageRole.ASSISTANT,
                                 text = answer,
                             )
+                            if (!stored) {
+                                _chatHistory.update { state ->
+                                    state.copy(error = "첨부 답변을 현재 기기에 저장하지 못했습니다.")
+                                }
+                            }
                         } else {
                             removeMessageIfBlank(assistantEntryId)
                         }
@@ -2144,6 +2190,9 @@ class PersonalEdgeViewModel(
                     }
                     finishDiagnosticPhase()
                 }
+                // Media-only conversations need the same bounded rolling capsule as text chats.
+                // Start it only after this turn has released the single-owner controller.
+                summarizeInBackground(conversationId)
             }.also(thermalTurn.job::set)
         } finally {
             mutationLease.close()

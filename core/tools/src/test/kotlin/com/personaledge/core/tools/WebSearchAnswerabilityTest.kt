@@ -97,6 +97,25 @@ class WebSearchAnswerabilityTest {
     }
 
     @Test
+    fun `past appointment event words never make an old officeholder current`() {
+        listOf(
+            "2022년 한강시 시장은 홍길동입니다. 2022년에 당선되었습니다.",
+            "2022년 한강시 시장은 홍길동입니다. 2022년에 취임했습니다.",
+            "2017년부터 2022년까지 한강시 시장은 홍길동이며 재임했습니다.",
+            "2017년부터 한강시 시장은 홍길동이며 시정을 이끌고 있습니다.",
+            "2017년부터 한강시 시장은 홍길동이며 직무를 맡고 있습니다.",
+        ).forEach { snippet ->
+            assertNull(
+                snippet,
+                WebSearchAnswerability.currentOfficeholderEvidenceOrNull(
+                    QUERY,
+                    hit(link = "https://hanriver.go.kr/archive", snippet = snippet),
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `current role to spaced or Latin person names is supported without using the entity`() {
         val cases = mapOf(
             "OpenAI의 current CEO is Sam Altman." to "Sam Altman",

@@ -244,6 +244,10 @@ object AutomaticWebSearchPolicy {
         "현재주가" -> "현재 주가"
         "실시간주가" -> "실시간 주가"
         "현재가격" -> "현재 가격"
+        "최신안정버전" -> "최신 안정 버전"
+        "최신버전" -> "최신 버전"
+        "최신릴리스" -> "최신 릴리스"
+        "최근릴리스" -> "최근 릴리스"
         else -> null
     }
 
@@ -390,15 +394,20 @@ object AutomaticWebSearchPolicy {
     )
     private val PRIVATE_CONTEXT_MARKERS = listOf(
         "내 ", "나의 ", "저의 ", "제 ", "내가 ", "제가 ", "우리 회사", "우리 기업",
-        "우리 학교", "우리 가족",
+        "우리 학교", "우리 가족", "우리 앱", "우리 서비스", "우리 프로젝트", "우리 제품",
+        "우리 소프트웨어", "우리 패키지", "우리 라이브러리",
         "우리 팀", "사내", "미공개", "비공개", "기밀", "초안", "관람 기록", "구매 기록",
         "검색 기록", "업무 기록", "회의록", "my ", "our company", "confidential", "private",
     )
     // Whitespace is not a security boundary. Keep this list narrow enough not to reject ordinary
     // public names such as `제주도`, while covering the owner-relative forms seen in Korean input.
     private val PRIVATE_CONTEXT_COMPACT_MARKERS = listOf(
-        "내프로젝트", "내회사", "내기업", "내학교", "내가족", "내팀", "우리회사",
-        "우리기업", "우리학교", "우리가족", "우리팀", "사내", "미공개", "비공개", "기밀",
+        "내앱", "내서비스", "내프로젝트", "내제품", "내소프트웨어", "내패키지",
+        "내라이브러리", "내회사", "내기업", "내학교", "내가족", "내팀", "우리회사",
+        "우리기업", "우리학교", "우리가족", "우리팀", "우리앱", "우리서비스",
+        "우리프로젝트", "우리제품", "우리소프트웨어", "우리패키지", "우리라이브러리",
+        "사내", "미공개",
+        "비공개", "기밀",
         "myproject", "mycompany", "ourcompany", "confidential", "private",
     )
     private val OFFICEHOLDER_FOREIGN_DOMAIN_MARKERS = listOf(
@@ -431,13 +440,16 @@ object AutomaticWebSearchPolicy {
     private val VOLATILE_FACT_COMPACT_MARKERS = listOf(
         "최신뉴스", "최근뉴스", "오늘뉴스", "실시간뉴스", "시세", "환율", "기준금리",
         "순위", "최근실적", "최신실적", "최근분기실적", "주가", "현재가격",
+        "최신안정버전", "최신버전", "최신릴리스", "최근릴리스",
     )
     private val VOLATILE_COMPOUND_MARKERS = listOf(
         " 그리고 ", " 및 ", "와 ", "과 ", ",", ";", " / ", "도 알려", "도 보여",
     )
     private val GENERIC_VOLATILE_SUBJECTS = GENERIC_KNOWLEDGE_SUBJECTS + setOf(
         "현재", "지금", "오늘", "요즘", "최신", "최근", "실시간", "가격", "시세", "환율",
-        "금리", "기준금리", "순위", "실적", "주가", "뉴스",
+        "금리", "기준금리", "순위", "실적", "주가", "뉴스", "버전", "릴리스",
+        "앱", "어플", "프로그램", "소프트웨어", "제품", "운영체제", "패키지", "라이브러리",
+        "프레임워크", "이앱", "그앱", "해당앱",
     )
     private val MODEL_KNOWLEDGE_GAP_MARKERS = listOf(
         "가지고 있는 정보로는", "제가 아는 정보로는", "제가 알고 있는 정보로는",
@@ -459,6 +471,7 @@ object AutomaticWebSearchPolicy {
             "현재\\s*시세|실시간\\s*시세|현재\\s*환율|실시간\\s*환율|" +
             "현재\\s*기준\\s*금리|기준\\s*금리|현재\\s*순위|최신\\s*순위|" +
             "최근\\s*실적|최신\\s*실적|현재\\s*주가|실시간\\s*주가|현재\\s*가격|" +
+            "최신\\s*안정\\s*버전|최신\\s*버전|최신\\s*릴리스|최근\\s*릴리스|" +
             "시세|환율|순위|주가" +
             ")(?:\\s*(?:을|를|이|가|은|는)?\\s*(?:좀\\s*)?(?:" +
             "알려\\s*줘|알려\\s*주세요|보여\\s*줘|보여\\s*주세요|" +

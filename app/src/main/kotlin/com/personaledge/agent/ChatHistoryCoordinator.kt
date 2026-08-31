@@ -330,8 +330,10 @@ class ChatHistoryCoordinator(
      *
      * Ordinarily the source is the latest completed USER/ASSISTANT pair. A failed correction can
      * leave a trailing USER row, so that row may be skipped only when the core policy classifies it
-     * as a closed search correction. Assistant text, summaries, memories, and Tool results are
-     * never candidate query sources, and an unrelated USER row stops the walk.
+     * as a closed search correction. One completed, tightly classified answer-review turn may also
+     * be crossed: owners often challenge an irrelevant search answer before asking for a better
+     * search. Assistant text, summaries, memories, and Tool results are never candidate query
+     * sources, and an unrelated USER row stops the walk.
      */
     internal suspend fun contextualWebSearchRequestForFollowUp(
         conversationId: String?,
@@ -349,6 +351,7 @@ class ChatHistoryCoordinator(
             ) {
                 return@runCatching null
             }
+            var crossedCompletedAnswerReview = false
             messages.asReversed()
                 .asSequence()
                 .filter { message -> message.role == MessageRole.USER }
@@ -359,10 +362,7 @@ class ChatHistoryCoordinator(
                         previousUserRequest = previousUser.text,
                     )
                     if (trusted != null) {
-                        val completed = messages.any { message ->
-                            message.ordinal > previousUser.ordinal &&
-                                message.role == MessageRole.ASSISTANT
-                        }
+                        val completed = hasCompletedAssistantReply(messages, previousUser)
                         if (!completed) return@runCatching null
                         return@runCatching ContextualWebSearchRequest(
                             conversationId = conversationId,
@@ -371,6 +371,14 @@ class ChatHistoryCoordinator(
                             inheritLongFormRequest =
                                 TurnOutputBudgetPolicy.requestsLongForm(previousUser.text),
                         )
+                    }
+                    if (
+                        !crossedCompletedAnswerReview &&
+                        isAnswerReviewTurn(previousUser.text) &&
+                        hasCompletedAssistantReply(messages, previousUser)
+                    ) {
+                        crossedCompletedAnswerReview = true
+                        return@forEach
                     }
                     if (!AutomaticWebSearchPolicy.isContextualSearchCorrection(previousUser.text)) {
                         return@runCatching null
@@ -506,16 +514,77 @@ class ChatHistoryCoordinator(
         ?.takeCodePoints(MAX_TITLE_CHARACTERS)
         .orEmpty()
 
+    /** Requires a nonblank assistant row before the next USER turn, not merely somewhere later. */
+    private fun hasCompletedAssistantReply(
+        messages: List<MessageEntity>,
+        userMessage: MessageEntity,
+    ): Boolean {
+        val nextUserOrdinal = messages.firstOrNull { message ->
+            message.ordinal > userMessage.ordinal && message.role == MessageRole.USER
+        }?.ordinal
+        return messages.any { message ->
+            message.ordinal > userMessage.ordinal &&
+                (nextUserOrdinal == null || message.ordinal < nextUserOrdinal) &&
+                message.role == MessageRole.ASSISTANT &&
+                message.text.isNotBlank()
+        }
+    }
+
+    /**
+     * A deliberately narrow bridge for the exact "what did I ask / was that answer apt" pattern.
+     * Compacting punctuation and spacing accepts natural Korean variants without treating a new
+     * subject, private content, or a write request as transparent conversation glue.
+     */
+    private fun isAnswerReviewTurn(value: String): Boolean {
+        val compact = value
+            .lowercase()
+            .filter { character -> character.isLetterOrDigit() }
+        if (compact.length !in MIN_ANSWER_REVIEW_CHARACTERS..MAX_ANSWER_REVIEW_CHARACTERS) {
+            return false
+        }
+        return ANSWER_REVIEW_QUESTION_CLAUSES.any { questionClause ->
+            ANSWER_REVIEW_CONNECTORS.any { connector ->
+                ANSWER_REVIEW_EVALUATION_CLAUSES.any { evaluationClause ->
+                    compact == questionClause + connector + evaluationClause
+                }
+            }
+        }
+    }
+
     private companion object {
         const val MAX_TITLE_CHARACTERS = 40
         const val MAX_RECOVERED_REQUEST_CHARACTERS = 500
         const val RECOVERY_MESSAGE_WINDOW = 12
-        const val CONTEXTUAL_SEARCH_MESSAGE_WINDOW = 8
-        const val MAX_CONTEXTUAL_USER_ROWS = 3
+        const val CONTEXTUAL_SEARCH_MESSAGE_WINDOW = 16
+        const val MAX_CONTEXTUAL_USER_ROWS = 5
+        const val MIN_ANSWER_REVIEW_CHARACTERS = 8
+        const val MAX_ANSWER_REVIEW_CHARACTERS = 80
         const val PRIOR_WEB_RESULT_MESSAGE_WINDOW = 12
         const val RECENT_WEATHER_CONTEXT_MESSAGES = 6
         const val WEB_SEARCH_READ_RECEIPT = "웹 검색을 완료했습니다."
         const val WEATHER_READ_RECEIPT = "현재 및 오늘 날씨를 확인했습니다."
+        val ANSWER_REVIEW_QUESTION_CLAUSES = listOf(
+            "내가뭘물어봤지",
+            "내가뭘물어봤어",
+            "내가무엇을물어봤지",
+            "내가무엇을물어봤어",
+            "내질문이뭐였지",
+            "내질문이뭐였어",
+            "처음질문이뭐였지",
+            "첫질문이뭐였지",
+            "원래질문이뭐였지",
+        )
+        val ANSWER_REVIEW_CONNECTORS = listOf("", "위", "그리고위", "그런데위")
+        val ANSWER_REVIEW_EVALUATION_CLAUSES = listOf(
+            "대답이적절해",
+            "답변이적절해",
+            "대답이적절했어",
+            "답변이적절했어",
+            "대답이맞아",
+            "답변이맞아",
+            "대답이엉뚱해",
+            "답변이엉뚱해",
+        )
         val RECOVERABLE_READ_RECEIPTS = setOf(
             WEB_SEARCH_READ_RECEIPT,
             WEATHER_READ_RECEIPT,

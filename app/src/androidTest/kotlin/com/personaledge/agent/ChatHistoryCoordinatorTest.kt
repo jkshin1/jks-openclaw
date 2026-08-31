@@ -436,6 +436,7 @@ class ChatHistoryCoordinatorTest {
     @Test
     fun failedSearchCorrectionCanResolveAnExplicitFirstQuestionReference() = runBlocking {
         val original = "현재 대한민국 대통령이 누구야?"
+        val firstRetry = "웹검색을 해서 첫질문에 대한 답을 해줘"
         val conversationId = coordinator.ensureConversation(null, original)!!
         val originalOrdinal = coordinator.recordOrdinal(
             conversationId,
@@ -449,12 +450,42 @@ class ChatHistoryCoordinatorTest {
         val inherited = requireNotNull(
             coordinator.contextualWebSearchRequestForFollowUp(
                 conversationId,
-                "웹검색을 해서 첫질문에 대한 답을 해줘",
+                firstRetry,
             ),
         )
 
         assertEquals(originalOrdinal, inherited.userMessageOrdinal)
         assertFalse(inherited.toString().contains("대통령"))
+
+        // Reproduce the complete screenshot journey: a poor search answer is challenged before
+        // the owner asks for a better search. The answer-review turn is conversational glue, not a
+        // new public subject, so the retry must remain bound to the original durable USER row.
+        coordinator.record(conversationId, MessageRole.USER, firstRetry)
+        coordinator.record(conversationId, MessageRole.TOOL_RECEIPT, "웹 검색을 완료했습니다.")
+        coordinator.record(
+            conversationId,
+            MessageRole.ASSISTANT,
+            "대한민국 헌법상 대통령의 임기는 5년입니다.",
+        )
+        coordinator.record(
+            conversationId,
+            MessageRole.USER,
+            "내가 뭘 물어봤지? 위 대답이 적절해?",
+        )
+        coordinator.record(
+            conversationId,
+            MessageRole.ASSISTANT,
+            "현재 대통령의 이름을 물으셨고, 위 답변은 적절하지 않았습니다.",
+        )
+
+        val retried = requireNotNull(
+            coordinator.contextualWebSearchRequestForFollowUp(
+                conversationId,
+                "대통령 이름을 찾기 위해 웹검색을 더 잘해봐",
+            ),
+        )
+        assertEquals(originalOrdinal, retried.userMessageOrdinal)
+        assertFalse(retried.toString().contains("대통령"))
     }
 
     @Test
@@ -477,6 +508,35 @@ class ChatHistoryCoordinatorTest {
             coordinator.contextualWebSearchRequestForFollowUp(
                 incompleteConversation,
                 "모르면 웹에서 찾아줘",
+            ),
+        )
+
+        val unrelated = "대한민국 대통령이 누구야?"
+        val unrelatedConversation = coordinator.ensureConversation(null, unrelated)!!
+        coordinator.record(unrelatedConversation, MessageRole.USER, unrelated)
+        coordinator.record(unrelatedConversation, MessageRole.ASSISTANT, "잘 모르겠습니다.")
+        coordinator.record(unrelatedConversation, MessageRole.USER, "내 친구 주소가 어디였지?")
+        coordinator.record(unrelatedConversation, MessageRole.ASSISTANT, "저장된 주소가 없습니다.")
+        assertNull(
+            coordinator.contextualWebSearchRequestForFollowUp(
+                unrelatedConversation,
+                "대통령 이름을 찾기 위해 웹검색을 더 잘해봐",
+            ),
+        )
+
+        val appendedWriteConversation = coordinator.ensureConversation(null, unrelated)!!
+        coordinator.record(appendedWriteConversation, MessageRole.USER, unrelated)
+        coordinator.record(appendedWriteConversation, MessageRole.ASSISTANT, "잘 모르겠습니다.")
+        coordinator.record(
+            appendedWriteConversation,
+            MessageRole.USER,
+            "내가 뭘 물어봤지? 위 답변이 적절해? 그리고 내 친구 주소를 저장해",
+        )
+        coordinator.record(appendedWriteConversation, MessageRole.ASSISTANT, "저장하지 않았습니다.")
+        assertNull(
+            coordinator.contextualWebSearchRequestForFollowUp(
+                appendedWriteConversation,
+                "대통령 이름을 찾기 위해 웹검색을 더 잘해봐",
             ),
         )
     }

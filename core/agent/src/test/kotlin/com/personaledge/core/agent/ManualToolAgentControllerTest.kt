@@ -833,6 +833,85 @@ class ManualToolAgentControllerTest {
     }
 
     @Test
+    fun `current officeholder search rejects stale and negated hits then replaces a receipt with the name`() =
+        runBlocking {
+            val turnId = TurnId("turn-current-officeholder-adversarial")
+            var gatewayQuery: String? = null
+            var searchCount = 0
+            val fixture = fixture(
+                registry = deviceRegistry(
+                    routeGateway = unusedRouteGateway(),
+                    webSearchGateway = object : WebSearchGateway {
+                        override suspend fun credentialsPresent(): Boolean = true
+
+                        override suspend fun search(query: String, limit: Int): WebSearchResponse {
+                            searchCount++
+                            gatewayQuery = query
+                            return WebSearchResponse(
+                                provider = WebSearchProvider.YOU_COM,
+                                hits = listOf(
+                                    WebSearchHit(
+                                        title = "대한민국 대통령의 지위와 임기",
+                                        link = "https://constitution.example/president",
+                                        snippet = "대한민국 대통령은 국가원수이며 임기는 5년입니다.",
+                                    ),
+                                    WebSearchHit(
+                                        title = "2022년 대통령 취임 기록",
+                                        link = "https://archive.go.kr/old-president",
+                                        snippet = "2022년 대한민국 대통령은 옛이름입니다. 2022년에 당선되어 취임했습니다.",
+                                    ),
+                                    WebSearchHit(
+                                        title = "사실 확인",
+                                        link = "https://factcheck.example/not-president",
+                                        snippet = "현재 대한민국 대통령은 거짓이름이 아닙니다.",
+                                    ),
+                                    WebSearchHit(
+                                        title = "대한민국 대통령실 - 대통령 소개",
+                                        link = "https://www.president.go.kr/current-president",
+                                        snippet = "대한민국의 현직 대통령은 홍길동입니다.",
+                                    ),
+                                ),
+                            )
+                        }
+                    },
+                ),
+                executionInterlock = ExecutionInterlock { InterlockDecision.Allow },
+            )
+            fixture.runtime.enqueueUser(
+                flowOf(
+                    ModelEvent.TextDelta(turnId, "웹 검색을 완료했습니다."),
+                    ModelEvent.Completed(turnId),
+                ),
+            )
+            val request = "현재 대한민국 대통령이 누구야?"
+
+            val events = fixture.controller.runTurn(
+                turnId = turnId,
+                prompt = request,
+                currentUserRequest = request,
+            ).toList()
+
+            assertEquals("대한민국 현직 대통령 이름 공식", gatewayQuery)
+            assertEquals(1, searchCount)
+            assertEquals(1, events.filterIsInstance<AgentEvent.ToolExecuted>().size)
+            val synthesisPrompt = fixture.runtime.userInvocations.single().second
+            assertTrue(synthesisPrompt.contains("현직 대통령은 홍길동"))
+            assertFalse(synthesisPrompt.contains("국가원수"))
+            assertFalse(synthesisPrompt.contains("옛이름"))
+            assertFalse(synthesisPrompt.contains("거짓이름"))
+            val answer = events.filterIsInstance<AgentEvent.TrustedAnswer>().single().text
+            assertTrue(answer.startsWith("현재 대한민국 대통령은 홍길동입니다."))
+            assertTrue(answer.contains("https://www.president.go.kr/current-president"))
+            assertFalse(answer.contains("웹 검색을 완료했습니다"))
+            assertFalse(answer.contains("국가원수"))
+            assertFalse(answer.contains("옛이름"))
+            assertFalse(answer.contains("거짓이름"))
+            assertTrue(events.none { event -> event is AgentEvent.TextDelta })
+            assertTrue(events.none { event -> event is AgentEvent.Failure })
+            assertEquals(AgentEvent.Completed(turnId), events.last())
+        }
+
+    @Test
     fun `explicit local knowledge gap automatically searches the owner-authored film subject`() =
         runBlocking {
             val turnId = TurnId("turn-automatic-film-search")

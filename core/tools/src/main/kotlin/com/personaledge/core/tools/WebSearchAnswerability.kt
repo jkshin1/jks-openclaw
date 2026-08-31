@@ -152,9 +152,11 @@ object WebSearchAnswerability {
     private val OFFICEHOLDER_ROLES = setOf(
         "국무총리", "최고경영자", "대표이사", "대통령", "도지사", "총리", "수상", "ceo", "시장", "회장",
     )
+    // Event and present-tense words such as `당선`, `취임`, `재임`, `이끌고`, and `맡고` do
+    // not prove freshness: archived pages use all of them for former officeholders. Require an
+    // explicit current-time marker before a role-to-name assertion can answer a volatile question.
     private val CURRENT_EVIDENCE_MARKERS = listOf(
-        "현재", "현직", "지금", "오늘", "재임", "취임", "당선", "이끌고", "맡고",
-        "current", "currently", "incumbent",
+        "현재", "현직", "지금", "오늘", "current", "currently", "incumbent",
     )
     private val HISTORICAL_MARKERS = listOf(
         "역대", "초대", "전직", "전임", "당시", "예전", "연표", "역사",

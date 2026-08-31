@@ -140,6 +140,10 @@ class AutomaticWebSearchPolicyTest {
             "KBO 순위" to "KBO 순위",
             "삼성전자 최근 실적" to "삼성전자 최근 실적",
             "삼성전자 현재 주가를 알려줘" to "삼성전자 현재 주가",
+            "Android 최신 버전이 뭐야?" to "Android 최신 버전",
+            "Kotlin 최신 안정 버전을 알려줘" to "Kotlin 최신 안정 버전",
+            "Jetpack Compose 최신 릴리스를 확인해 줘" to "Jetpack Compose 최신 릴리스",
+            "Chrome 최근 릴리스" to "Chrome 최근 릴리스",
         )
 
         cases.forEach { (prompt, expectedQuery) ->
@@ -169,6 +173,16 @@ class AutomaticWebSearchPolicyTest {
             "OpenAI 최신뉴스 비트코인 시세",
             "OpenAI 최신 뉴스와 내일 일정 알려줘",
             "비트코인 시세와 원달러 환율",
+            "최신 버전",
+            "앱 최신 버전",
+            "이 앱 최신 버전",
+            "내 앱 최신 버전",
+            "내앱 최신 버전",
+            "우리 앱 최신 버전",
+            "우리프로젝트 최신 릴리스",
+            "Android 현재 버전이 뭐야?",
+            "Chrome 최신 버전과 Kotlin 최신 버전",
+            "Chrome 최신 버전을 설치해줘",
             "OpenAI 최신 뉴스\u202E",
         ).forEach { prompt ->
             assertNull(prompt, AutomaticWebSearchPolicy.knowledgeRequestOrNull(prompt))
