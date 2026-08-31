@@ -124,6 +124,29 @@ case "$adb_command" in
             "df -k /data /storage/emulated/0")
                 echo '/data 1000000 500000 500000 50% /data'
                 ;;
+            "-T run-as com.personaledge.agent id")
+                case "${MOCK_RUN_AS_MODE:-debuggable}" in
+                    debuggable)
+                        echo 'uid=10123(u0_a123) gid=10123(u0_a123)'
+                        exit 0
+                        ;;
+                    not_debuggable)
+                        echo 'run-as: package not debuggable: com.personaledge.agent' >&2
+                        exit 1
+                        ;;
+                    not_debuggable_legacy)
+                        echo "run-as: Package 'com.personaledge.agent' is not debuggable" >&2
+                        exit 1
+                        ;;
+                    unexpected_failure)
+                        echo 'run-as: package lookup failed unexpectedly' >&2
+                        exit 19
+                        ;;
+                    *)
+                        exit 96
+                        ;;
+                esac
+                ;;
             "-T run-as com.personaledge.agent sh -c "*)
                 remote_script="$shell_arguments"
                 case "${MOCK_DIAGNOSTIC_MODE:-normal}:$remote_script" in
@@ -171,14 +194,6 @@ case "$adb_command" in
             *) echo 'follow logcat line' ;;
         esac
         ;;
-    exec-out)
-        [[ "${1:-}" == "run-as" && "${2:-}" == "com.personaledge.agent" ]] || exit 93
-        if [[ "${3:-}" == "id" ]]; then
-            echo 'uid=10123(u0_a123) gid=10123(u0_a123)'
-            exit 0
-        fi
-        exit 94
-        ;;
     bugreport)
         [[ $# -eq 1 && "$1" == */.bugreport.partial.zip ]] || exit 96
         printf 'mock zipped bugreport\n' > "$1"
@@ -191,6 +206,441 @@ case "$adb_command" in
 esac
 EOF
     chmod 755 "$fixture/bin/adb"
+}
+
+new_avd_regression_fixture() {
+    local name="$1"
+    fixture="$test_root/$name"
+    mkdir -p \
+        "$fixture/scripts" \
+        "$fixture/bin" \
+        "$fixture/app/src/androidTest" \
+        "$fixture/app/build/outputs/apk/debug" \
+        "$fixture/app/build/outputs/apk/androidTest/debug" \
+        "$fixture/core/data/src/androidTest" \
+        "$fixture/core/data/build/outputs/apk/androidTest/debug" \
+        "$fixture/core/diagnostics/src/androidTest" \
+        "$fixture/core/diagnostics/build/outputs/apk/androidTest/debug" \
+        "$fixture/core/llm/src/androidTest" \
+        "$fixture/core/llm/build/outputs/apk/androidTest/debug" \
+        "$fixture/core/tools/src/androidTest" \
+        "$fixture/core/tools/build/outputs/apk/androidTest/debug"
+    cp "$project_root/scripts/run-avd-regression.sh" "$fixture/scripts/"
+    chmod 755 "$fixture/scripts/run-avd-regression.sh"
+    adb_log="$fixture/adb.log"
+    gradle_log="$fixture/gradle.log"
+
+    local source_root source_count source_index source_root_and_count
+    for source_root_and_count in \
+        "$fixture/app/src/androidTest:34" \
+        "$fixture/core/data/src/androidTest:12" \
+        "$fixture/core/diagnostics/src/androidTest:1" \
+        "$fixture/core/llm/src/androidTest:3" \
+        "$fixture/core/tools/src/androidTest:3"; do
+        source_root="${source_root_and_count%:*}"
+        source_count="${source_root_and_count##*:}"
+        source_index=1
+        while (( source_index <= source_count )); do
+            : > "$source_root/Fixture${source_index}Test.kt"
+            source_index=$((source_index + 1))
+        done
+    done
+
+    printf 'fixture app\n' > "$fixture/app/build/outputs/apk/debug/app-debug.apk"
+    printf 'fixture app test\n' > \
+        "$fixture/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+    printf 'fixture data test\n' > \
+        "$fixture/core/data/build/outputs/apk/androidTest/debug/data-debug-androidTest.apk"
+    printf 'fixture diagnostics test\n' > \
+        "$fixture/core/diagnostics/build/outputs/apk/androidTest/debug/diagnostics-debug-androidTest.apk"
+    printf 'fixture llm test\n' > \
+        "$fixture/core/llm/build/outputs/apk/androidTest/debug/llm-debug-androidTest.apk"
+    printf 'fixture tools test\n' > \
+        "$fixture/core/tools/build/outputs/apk/androidTest/debug/tools-debug-androidTest.apk"
+
+    cat > "$fixture/gradlew" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\t' "$@" > "$MOCK_GRADLE_LOG"
+printf '\n' >> "$MOCK_GRADLE_LOG"
+[[ "${MOCK_GRADLE_FAILURE:-0}" == "0" ]]
+EOF
+
+    cat > "$fixture/bin/adb" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# -ge 3 && "$1" == "-s" && "$2" == "$MOCK_EXPECTED_SERIAL" ]] || {
+    echo "mock adb requires the exact explicit emulator serial" >&2
+    exit 91
+}
+printf '%s\t' "$@" >> "$MOCK_ADB_LOG"
+printf '\n' >> "$MOCK_ADB_LOG"
+shift 2
+command_name="$1"
+shift
+
+emit_success() {
+    local selected="$1"
+    local passed="$2"
+    local skipped="$3"
+    local index=0
+    while (( index < passed )); do
+        echo 'INSTRUMENTATION_STATUS_CODE: 0'
+        index=$((index + 1))
+    done
+    index=0
+    while (( index < skipped )); do
+        echo 'INSTRUMENTATION_STATUS_CODE: -4'
+        index=$((index + 1))
+    done
+    echo "OK ($selected tests)"
+    echo 'INSTRUMENTATION_CODE: -1'
+}
+
+case "$command_name" in
+    get-state)
+        echo "${MOCK_DEVICE_STATE:-device}"
+        ;;
+    install)
+        [[ "$1" == "-r" && "$2" == "-t" && -s "$3" ]] || exit 92
+        [[ "${MOCK_INSTALL_FAILURE:-0}" == "0" ]] || exit 23
+        echo Success
+        ;;
+    shell)
+        if [[ "${1:-}" == "getprop" ]]; then
+            case "${2:-}" in
+                ro.kernel.qemu) echo "${MOCK_KERNEL_QEMU:-1}" ;;
+                ro.boot.qemu) echo "${MOCK_BOOT_QEMU:-1}" ;;
+                ro.boot.qemu.avd_name) echo "${MOCK_AVD_NAME:-personal_edge_api37_foldable}" ;;
+                ro.build.version.sdk) echo "${MOCK_SDK:-37}" ;;
+                ro.product.cpu.abi) echo "${MOCK_ABI:-arm64-v8a}" ;;
+                sys.boot_completed) echo "${MOCK_BOOT_COMPLETED:-1}" ;;
+                *) exit 93 ;;
+            esac
+        elif [[ "${1:-}" == "am" && "${2:-}" == "instrument" ]]; then
+            component=""
+            for component in "$@"; do :; done
+            if [[ "$component" == "${MOCK_ADB_FAILURE_COMPONENT:-}" ]]; then
+                echo 'INSTRUMENTATION_FAILED: fixture transport failure' >&2
+                exit 23
+            fi
+            if [[ "$component" == "${MOCK_JUNIT_FAILURE_COMPONENT:-}" ]]; then
+                echo 'FAILURES!!!'
+                echo 'Tests run: 3, Failures: 1'
+                echo 'INSTRUMENTATION_CODE: -1'
+                exit 0
+            fi
+            case "$component" in
+                com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner)
+                    expected_classes='com.personaledge.agent.AlarmForegroundRequestTest,com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.ChatHistoryCoordinatorTest,com.personaledge.agent.ConversationSummarizerTest,com.personaledge.agent.CredentialSettingsTest,com.personaledge.agent.DeviceExecutionInterlockTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KakaoReplySettingsTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.NotificationCaptureCoordinatorTest,com.personaledge.agent.NotificationCaptureSinkTest,com.personaledge.agent.NotificationPostReaderTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.StoredNotificationGatewayTest,com.personaledge.agent.ThermalStatusMonitorInstrumentedTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
+                    [[ " $* " == *" -e class $expected_classes "* ]] || exit 94
+                    emit_success 119 90 29
+                    ;;
+                com.personaledge.core.data.test/androidx.test.runner.AndroidJUnitRunner)
+                    [[ " $* " == *" -e class "* ]] || exit 94
+                    emit_success 84 84 0
+                    ;;
+                com.personaledge.core.diagnostics.test/androidx.test.runner.AndroidJUnitRunner)
+                    [[ " $* " == *" -e class "* ]] || exit 94
+                    emit_success 2 2 0
+                    ;;
+                com.personaledge.core.llm.test/androidx.test.runner.AndroidJUnitRunner)
+                    [[ " $* " == *" -e class "* ]] || exit 94
+                    emit_success 10 9 1
+                    ;;
+                com.personaledge.core.tools.test/androidx.test.runner.AndroidJUnitRunner)
+                    [[ " $* " == *" -e class "* ]] || exit 94
+                    emit_success 24 24 0
+                    ;;
+                *)
+                    exit 95
+                    ;;
+            esac
+        else
+            exit 96
+        fi
+        ;;
+    *)
+        exit 97
+        ;;
+esac
+EOF
+    chmod 755 "$fixture/gradlew" "$fixture/bin/adb"
+}
+
+new_avd_release_readiness_fixture() {
+    local name="$1"
+    fixture="$test_root/$name"
+    mkdir -p \
+        "$fixture/scripts" \
+        "$fixture/bin" \
+        "$fixture/app/src/androidTest" \
+        "$fixture/app/build/outputs/apk/release" \
+        "$fixture/app/build/outputs/apk/androidTest/release" \
+        "$fixture/app/build/outputs/mapping/release"
+    cp "$project_root/scripts/run-avd-release-readiness.sh" "$fixture/scripts/"
+    chmod 755 "$fixture/scripts/run-avd-release-readiness.sh"
+    adb_log="$fixture/adb.log"
+    gradle_log="$fixture/gradle.log"
+    release_fixture_certificate="e0f66d4b4c8064db6a9d46097d77903cf13fbccacbdfc6e49e9f7c380b8e457a"
+
+    local source_index=1
+    while (( source_index <= 34 )); do
+        : > "$fixture/app/src/androidTest/Fixture${source_index}Test.kt"
+        source_index=$((source_index + 1))
+    done
+    printf 'fixture release app\n' > "$fixture/app/build/outputs/apk/release/app-release.apk"
+    printf 'fixture release test\n' > \
+        "$fixture/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk"
+    printf 'fixture mapping\n' > "$fixture/app/build/outputs/mapping/release/mapping.txt"
+    printf '{"certificateSha256":"%s"}\n' "$release_fixture_certificate" \
+        > "$fixture/app/release-signing-identity.json"
+
+    cat > "$fixture/gradlew" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\t' "$@" > "$MOCK_GRADLE_LOG"
+printf '\n' >> "$MOCK_GRADLE_LOG"
+[[ "${MOCK_GRADLE_FAILURE:-0}" == "0" ]]
+EOF
+
+    cat > "$fixture/bin/apkanalyzer" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "manifest" ]] || exit 91
+case "$2" in
+    application-id)
+        if [[ "$3" == *androidTest* ]]; then
+            echo "${MOCK_TEST_APPLICATION_ID:-com.personaledge.agent.test}"
+        else
+            echo "${MOCK_APP_APPLICATION_ID:-com.personaledge.agent}"
+        fi
+        ;;
+    print)
+        cat <<XML
+<manifest>
+  <instrumentation android:name="${MOCK_TEST_RUNNER:-androidx.test.runner.AndroidJUnitRunner}" android:targetPackage="${MOCK_TEST_TARGET:-com.personaledge.agent}" />
+</manifest>
+XML
+        ;;
+    *) exit 92 ;;
+esac
+EOF
+
+    cat > "$fixture/bin/apksigner" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+apk_path=""
+for argument in "$@"; do apk_path="$argument"; done
+certificate="${MOCK_EXPECTED_CERT}"
+if [[ "$apk_path" == *androidTest* && -n "${MOCK_TEST_CERT:-}" ]]; then
+    certificate="$MOCK_TEST_CERT"
+fi
+echo 'Verified using v3 scheme (APK Signature Scheme v3): true'
+echo "Signer #1 certificate SHA-256 digest: $certificate"
+EOF
+
+    cat > "$fixture/bin/adb" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# -ge 3 && "$1" == "-s" && "$2" == "$MOCK_EXPECTED_SERIAL" ]] || exit 91
+printf '%s\t' "$@" >> "$MOCK_ADB_LOG"
+printf '\n' >> "$MOCK_ADB_LOG"
+shift 2
+command_name="$1"
+shift
+
+emit_result() {
+    local selected="$1"
+    local passed="$2"
+    local skipped="$3"
+    local index=0
+    while (( index < passed )); do
+        echo 'INSTRUMENTATION_STATUS_CODE: 0'
+        index=$((index + 1))
+    done
+    index=0
+    while (( index < skipped )); do
+        echo 'INSTRUMENTATION_STATUS_CODE: -4'
+        index=$((index + 1))
+    done
+    echo "OK ($selected tests)"
+    echo 'INSTRUMENTATION_CODE: -1'
+}
+
+case "$command_name" in
+    get-state)
+        echo "${MOCK_DEVICE_STATE:-device}"
+        ;;
+    uninstall)
+        [[ "$1" == "com.personaledge.agent" || "$1" == "com.personaledge.agent.test" ]] || exit 92
+        echo Success
+        ;;
+    install)
+        [[ "$1" == "-t" && -s "$2" ]] || exit 93
+        echo Success
+        ;;
+    shell)
+        if [[ "${1:-}" == "getprop" ]]; then
+            case "${2:-}" in
+                ro.kernel.qemu) echo "${MOCK_KERNEL_QEMU:-1}" ;;
+                ro.boot.qemu) echo "${MOCK_BOOT_QEMU:-1}" ;;
+                ro.boot.qemu.avd_name) echo "${MOCK_AVD_NAME:-personal_edge_api37_foldable}" ;;
+                ro.build.version.sdk) echo "${MOCK_SDK:-37}" ;;
+                ro.product.cpu.abi) echo "${MOCK_ABI:-arm64-v8a}" ;;
+                sys.boot_completed) echo "${MOCK_BOOT_COMPLETED:-1}" ;;
+                *) exit 94 ;;
+            esac
+        elif [[ "${1:-}" == "pm" && "${2:-}" == "path" ]]; then
+            [[ "${3:-}" == "com.personaledge.agent" ||
+               "${3:-}" == "com.personaledge.agent.test" ]] || exit 95
+            echo "package:/data/app/mock/${3}/base.apk"
+        elif [[ "${1:-}" == "am" && "${2:-}" == "instrument" ]]; then
+            all_arguments=" $* "
+            abi_method='com.personaledge.agent.ReleasePhysicalAbiLinkageTest#boundedPostGuardEntrypointsResolveFromTheMinifiedTarget'
+            canary_classes='com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KoreanToolSelectionTest,com.personaledge.agent.PastedMailScheduleAcceptanceTest'
+            physical_classes='com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
+            if [[ "$all_arguments" == *" -e class $abi_method "* ]]; then
+                suite=abi
+            elif [[ "$all_arguments" == *" -e class $canary_classes "* ]]; then
+                suite=canary
+            elif [[ "$all_arguments" == *" -e class $physical_classes "* ]]; then
+                suite=physical
+            else
+                exit 96
+            fi
+            if [[ "$suite" == "${MOCK_FAILURE_SUITE:-}" ]]; then
+                echo 'FAILURES!!!'
+                echo 'Tests run: 1, Failures: 1'
+                echo 'INSTRUMENTATION_CODE: -1'
+                exit 0
+            fi
+            case "$suite" in
+                abi)
+                    [[ "$all_arguments" == *" -e releasePhysicalAbiLinkage true "* ]] || exit 97
+                    # One application-owned status plus one runner completion status exercises the
+                    # parser without inflating the JUnit pass count.
+                    echo 'INSTRUMENTATION_STATUS_CODE: 0'
+                    emit_result 1 1 0
+                    ;;
+                canary) emit_result 5 0 5 ;;
+                physical) emit_result 28 0 28 ;;
+            esac
+        else
+            exit 98
+        fi
+        ;;
+    *) exit 99 ;;
+esac
+EOF
+    chmod 755 "$fixture/gradlew" "$fixture/bin/adb" \
+        "$fixture/bin/apkanalyzer" "$fixture/bin/apksigner"
+}
+
+new_fold8_preflight_fixture() {
+    local name="$1"
+    fixture="$test_root/$name"
+    mkdir -p "$fixture/scripts" "$fixture/app" "$fixture/apks" "$fixture/bin"
+    cp "$project_root/scripts/preflight-fold8-release-update.sh" "$fixture/scripts/"
+    chmod 755 "$fixture/scripts/preflight-fold8-release-update.sh"
+    preflight_certificate="e0f66d4b4c8064db6a9d46097d77903cf13fbccacbdfc6e49e9f7c380b8e457a"
+    printf '{"certificateSha256":"%s"}\n' "$preflight_certificate" \
+        > "$fixture/app/release-signing-identity.json"
+    printf 'candidate-app\n' > "$fixture/apks/app-release.apk"
+    printf 'candidate-test\n' > "$fixture/apks/app-release-androidTest.apk"
+    printf 'installed-app\n' > "$fixture/apks/installed-source.apk"
+    adb_log="$fixture/adb.log"
+
+    cat > "$fixture/bin/adb" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# -ge 3 && "$1" == "-s" && "$2" == "$MOCK_EXPECTED_SERIAL" ]] || exit 91
+printf '%s\t' "$@" >> "$MOCK_ADB_LOG"
+printf '\n' >> "$MOCK_ADB_LOG"
+shift 2
+command_name="$1"
+shift
+case "$command_name" in
+    get-state)
+        echo "${MOCK_DEVICE_STATE:-device}"
+        ;;
+    shell)
+        case "$1:$2" in
+            getprop:ro.product.manufacturer) echo "${MOCK_MANUFACTURER:-samsung}" ;;
+            getprop:ro.product.model) echo "${MOCK_MODEL:-SM-F971N}" ;;
+            getprop:ro.build.version.sdk) echo "${MOCK_SDK:-37}" ;;
+            getprop:ro.product.cpu.abi) echo "${MOCK_ABI:-arm64-v8a}" ;;
+            getprop:ro.build.fingerprint) echo "${MOCK_FINGERPRINT:-samsung/fold8/release}" ;;
+            getprop:ro.kernel.qemu) echo "${MOCK_KERNEL_QEMU:-0}" ;;
+            getprop:ro.boot.qemu) echo "${MOCK_BOOT_QEMU:-0}" ;;
+            getprop:ro.hardware) echo "${MOCK_HARDWARE:-s5e9945}" ;;
+            pm:path)
+                [[ "${3:-}" == "com.personaledge.agent" ]] || exit 92
+                [[ "${MOCK_PACKAGE_INSTALLED:-1}" == "1" ]] || exit 3
+                echo 'package:/data/app/~~fixture==/com.personaledge.agent-fixture==/base.apk'
+                ;;
+            dumpsys:package)
+                [[ "${3:-}" == "com.personaledge.agent" ]] || exit 93
+                echo '  firstInstallTime=2026-08-23 18:10:37'
+                ;;
+            *) exit 94 ;;
+        esac
+        ;;
+    pull)
+        [[ "$1" == '/data/app/~~fixture==/com.personaledge.agent-fixture==/base.apk' ]] || exit 95
+        cp "$MOCK_INSTALLED_APK" "$2"
+        ;;
+    *) exit 96 ;;
+esac
+EOF
+
+    cat > "$fixture/bin/apkanalyzer" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "manifest" ]] || exit 81
+operation="$2"
+apk_path="$3"
+kind="$(tr -d '\r\n' < "$apk_path")"
+case "$operation:$kind" in
+    application-id:candidate-app|application-id:installed-app)
+        echo com.personaledge.agent
+        ;;
+    application-id:candidate-test)
+        echo "${MOCK_TEST_PACKAGE:-com.personaledge.agent.test}"
+        ;;
+    version-code:candidate-app) echo 11 ;;
+    version-name:candidate-app) echo 1.0.0-rc11 ;;
+    version-code:installed-app) echo 10 ;;
+    version-name:installed-app) echo 1.0.0-rc10 ;;
+    print:candidate-test)
+        cat <<MANIFEST
+<manifest package="${MOCK_TEST_PACKAGE:-com.personaledge.agent.test}">
+    <instrumentation
+        android:name="${MOCK_TEST_RUNNER:-androidx.test.runner.AndroidJUnitRunner}"
+        android:targetPackage="${MOCK_TEST_TARGET:-com.personaledge.agent}" />
+</manifest>
+MANIFEST
+        ;;
+    *) exit 82 ;;
+esac
+EOF
+
+    cat > "$fixture/bin/apksigner" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "verify" && "$2" == "--print-certs" && "$3" == "--verbose" ]] || exit 71
+kind="$(tr -d '\r\n' < "$4")"
+case "$kind" in
+    candidate-app) certificate="${MOCK_APP_CERT:-$MOCK_EXPECTED_CERT}" ;;
+    candidate-test) certificate="${MOCK_TEST_CERT:-$MOCK_EXPECTED_CERT}" ;;
+    installed-app) certificate="${MOCK_INSTALLED_CERT:-$MOCK_EXPECTED_CERT}" ;;
+    *) exit 72 ;;
+esac
+echo "Verified using v3 scheme (APK Signature Scheme v3): ${MOCK_V3_VERIFIED:-true}"
+echo "Signer #1 certificate SHA-256 digest: $certificate"
+EOF
+    chmod 755 "$fixture/bin/adb" "$fixture/bin/apkanalyzer" "$fixture/bin/apksigner"
 }
 
 locate_single_evidence_report() {
@@ -657,7 +1107,7 @@ test_evidence_requires_serial_and_accepts_missing_diagnostics() {
     fi
     locate_single_evidence_report
 
-    jq -e '.overallStatus == "ok" and
+    if ! jq -e '.overallStatus == "ok" and
         .options.bugreport == false and .options.appLogcat == false and
         .options.followLogcat == false and
         (.device.serialSha256 | length) == 64 and
@@ -665,7 +1115,12 @@ test_evidence_requires_serial_and_accepts_missing_diagnostics() {
         ([.commands[] | select(.id | startswith("diagnostics-")) | select(.status == "not_present")] | length) == 4 and
         ([.commands[] | select((.id | startswith("logcat-")) and .status == "opt_in_not_requested")] | length) == 3 and
         ([.commands[] | select(.id == "bugreport" and .status == "opt_in_not_requested")] | length) == 1' \
-        "$evidence_manifest" >/dev/null || fail "missing diagnostics were not a successful, explicit receipt state"
+        "$evidence_manifest" >/dev/null; then
+        sed -n '1,200p' "$fixture/collector.log" >&2
+        jq '{overallStatus, commands: [.commands[] | select(.id == "run-as-probe" or (.id | startswith("diagnostics-")))]}' \
+            "$evidence_manifest" >&2
+        fail "missing diagnostics were not a successful, explicit receipt state"
+    fi
     if grep -R -F -- "$serial_value" "$evidence_report_dir" >/dev/null 2>&1; then
         fail "raw device serial leaked into the evidence report"
     fi
@@ -686,6 +1141,75 @@ test_evidence_requires_serial_and_accepts_missing_diagnostics() {
         fail "collector did not pin adb calls to the explicit serial"
     assert_manifest_file_hashes
     pass "evidence collector requires a safe serial and treats absent diagnostics explicitly"
+}
+
+test_evidence_release_denial_skips_private_diagnostics() {
+    local mode expected_message
+    for mode in not_debuggable not_debuggable_legacy; do
+        new_evidence_fixture "evidence-release-$mode"
+        serial_value="fold8-release-2468"
+        if [[ "$mode" == "not_debuggable" ]]; then
+            expected_message='run-as: package not debuggable: com.personaledge.agent'
+        else
+            expected_message="run-as: Package 'com.personaledge.agent' is not debuggable"
+        fi
+
+        if ! env PATH="$fixture/bin:$PATH" MOCK_EXPECTED_SERIAL="$serial_value" \
+            MOCK_ADB_LOG="$adb_log" MOCK_RUN_AS_MODE="$mode" \
+            "$fixture/scripts/collect-fold8-evidence.sh" --serial "$serial_value" \
+            > "$fixture/collector.log" 2>&1; then
+            sed -n '1,160p' "$fixture/collector.log" >&2
+            fail "release collector failed after the expected run-as denial"
+        fi
+        locate_single_evidence_report
+
+        jq -e '.overallStatus == "ok" and
+            ([.commands[] | select(.id == "run-as-probe" and
+                .status == "not_applicable_release" and .exitCode == 1 and
+                .required == false and .outputPath == "run-as.txt")] | length) == 1 and
+            ([.commands[] | select((.id | startswith("diagnostics-")) and
+                .status == "not_applicable_release")] | length) == 4' \
+            "$evidence_manifest" >/dev/null ||
+            fail "release private diagnostics were not explicitly marked not applicable"
+        grep -Fx "$expected_message" "$evidence_report_dir/run-as.txt" >/dev/null ||
+            fail "release run-as denial was not retained"
+        grep -F $'shell\t-T\trun-as\tcom.personaledge.agent\tid\t' "$adb_log" >/dev/null ||
+            fail "run-as probe did not use exit-preserving adb shell -T"
+        if grep -F $'shell\t-T\trun-as com.personaledge.agent sh -c' "$adb_log" >/dev/null; then
+            fail "release collector attempted app-private diagnostics after run-as denial"
+        fi
+        assert_manifest_file_hashes
+    done
+    pass "release run-as denial skips private diagnostics without a false failure"
+}
+
+test_evidence_unexpected_run_as_failure_stays_failed() {
+    new_evidence_fixture evidence-unexpected-run-as
+    serial_value="fold8-run-as-failure-9753"
+
+    expect_failure "$fixture/collector.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_RUN_AS_MODE=unexpected_failure \
+        "$fixture/scripts/collect-fold8-evidence.sh" --serial "$serial_value"
+    locate_single_evidence_report
+
+    jq -e '.overallStatus == "failed" and
+        ([.commands[] | select(.id == "run-as-probe" and .status == "failed" and
+            .exitCode == 19 and .required == true and .outputPath == "run-as.txt")] | length) == 1 and
+        ([.commands[] | select((.id | startswith("diagnostics-")) and
+            .status == "dependency_failed")] | length) == 4 and
+        ([.commands[] | select((.id | startswith("diagnostics-")) and
+            .status == "not_applicable_release")] | length) == 0' \
+        "$evidence_manifest" >/dev/null ||
+        fail "unexpected run-as failure was not kept fail-closed"
+    grep -Fx 'run-as: package lookup failed unexpectedly' \
+        "$evidence_report_dir/run-as.txt" >/dev/null ||
+        fail "bounded unexpected run-as stderr was not retained"
+    if grep -F $'shell\t-T\trun-as com.personaledge.agent sh -c' "$adb_log" >/dev/null; then
+        fail "collector attempted private diagnostics after unexpected run-as failure"
+    fi
+    assert_manifest_file_hashes
+    pass "unexpected run-as failures remain failed while retaining bounded probe stderr"
 }
 
 test_evidence_partial_failure_keeps_receipt_and_continues() {
@@ -807,6 +1331,668 @@ test_evidence_bugreport_and_follow_are_explicit_opt_ins() {
     pass "app logcat, bugreport, and follow-logcat run only with explicit opt-in"
 }
 
+test_avd_regression_rejects_phone_and_untrusted_qemu_before_mutation() {
+    new_avd_regression_fixture avd-regression-device-rejection
+    serial_value="emulator-5582"
+
+    expect_failure "$fixture/physical-serial.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_GRADLE_LOG="$gradle_log" \
+        "$fixture/scripts/run-avd-regression.sh" --serial R5KL801YXWE --confirm-disposable
+    [[ ! -e "$adb_log" ]] || fail "AVD runner invoked ADB for a physical-device serial"
+
+    expect_failure "$fixture/missing-confirmation.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_GRADLE_LOG="$gradle_log" \
+        "$fixture/scripts/run-avd-regression.sh" --serial "$serial_value"
+    [[ ! -e "$adb_log" ]] || fail "AVD runner invoked ADB without disposable-state confirmation"
+
+    expect_failure "$fixture/qemu.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_GRADLE_LOG="$gradle_log" MOCK_KERNEL_QEMU=0 MOCK_BOOT_QEMU=0 \
+        "$fixture/scripts/run-avd-regression.sh" --serial "$serial_value" --confirm-disposable
+    grep -F 'trusted emulator identity' "$fixture/qemu.log" >/dev/null ||
+        fail "AVD runner did not explain the qemu identity rejection"
+    if grep -E $'\t(install|uninstall)\t|\tshell\tam\tinstrument\t' "$adb_log" >/dev/null; then
+        fail "AVD runner mutated or instrumented an untrusted transport"
+    fi
+    [[ ! -e "$gradle_log" ]] || fail "AVD runner built before verifying emulator identity"
+    pass "AVD regression refuses physical serials and untrusted qemu before mutation"
+}
+
+test_avd_regression_guards_name_api_abi_and_boot_before_install() {
+    local guard
+    serial_value="emulator-5582"
+    for guard in name api abi boot; do
+        new_avd_regression_fixture "avd-regression-$guard-rejection"
+        case "$guard" in
+            name)
+                override=(MOCK_AVD_NAME=personal_edge_api37_model)
+                ;;
+            api)
+                override=(MOCK_SDK=36)
+                ;;
+            abi)
+                override=(MOCK_ABI=x86_64)
+                ;;
+            boot)
+                override=(MOCK_BOOT_COMPLETED=0)
+                ;;
+        esac
+        expect_failure "$fixture/$guard.log" env PATH="$fixture/bin:$PATH" \
+            MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+            MOCK_GRADLE_LOG="$gradle_log" "${override[@]}" \
+            "$fixture/scripts/run-avd-regression.sh" --serial "$serial_value" --confirm-disposable
+        if grep -E $'\t(install|uninstall)\t|\tshell\tam\tinstrument\t' "$adb_log" >/dev/null; then
+            fail "AVD $guard rejection reached installation or instrumentation"
+        fi
+        [[ ! -e "$gradle_log" ]] || fail "AVD $guard rejection reached Gradle"
+    done
+    pass "AVD regression guards expected name, API 37, arm64 ABI, and completed boot"
+}
+
+test_avd_regression_runs_scoped_suites_and_owner_exclusions() {
+    new_avd_regression_fixture avd-regression-success
+    serial_value="emulator-5582"
+    if ! env PATH="$fixture/bin:$PATH" MOCK_EXPECTED_SERIAL="$serial_value" \
+        MOCK_ADB_LOG="$adb_log" MOCK_GRADLE_LOG="$gradle_log" \
+        "$fixture/scripts/run-avd-regression.sh" --serial "$serial_value" --confirm-disposable \
+        > "$fixture/success.log" 2>&1; then
+        sed -n '1,240p' "$fixture/success.log" >&2
+        fail "valid AVD regression fixture failed"
+    fi
+
+    for task_name in :app:assembleDebug :app:assembleDebugAndroidTest \
+        :core:data:assembleDebugAndroidTest :core:diagnostics:assembleDebugAndroidTest \
+        :core:llm:assembleDebugAndroidTest :core:tools:assembleDebugAndroidTest; do
+        grep -F -- "$task_name" "$gradle_log" >/dev/null ||
+            fail "AVD runner omitted build task $task_name"
+    done
+    [[ "$(grep -c $'\tinstall\t-r\t-t\t' "$adb_log")" == "6" ]] ||
+        fail "AVD runner did not install the exact six debug APKs"
+    [[ "$(grep -c $'\tshell\tam\tinstrument\t' "$adb_log")" == "5" ]] ||
+        fail "AVD runner did not run the exact five valid instrumentation suites"
+    grep -F -- $'\t-e\tclass\tcom.personaledge.agent.AlarmForegroundRequestTest,' \
+        "$adb_log" >/dev/null || fail "AVD runner did not use the reviewed app class allowlist"
+    if grep -F -- $'\t-e\tnotClass\t' "$adb_log" >/dev/null; then
+        fail "AVD runner used a future-open negative class filter"
+    fi
+    grep -F 'tests.selected=239' "$fixture/success.log" >/dev/null ||
+        fail "AVD runner did not account for every selected test"
+    grep -F 'tests.passed=209' "$fixture/success.log" >/dev/null ||
+        fail "AVD runner pass accounting is wrong"
+    grep -F 'tests.guardedSkip=30' "$fixture/success.log" >/dev/null ||
+        fail "AVD runner guarded-skip accounting is wrong"
+    grep -F 'tests.failed=0' "$fixture/success.log" >/dev/null ||
+        fail "AVD runner did not emit a zero-failure receipt"
+    if grep -E $'\t(uninstall|clear|force-stop)\t' "$adb_log" >/dev/null; then
+        fail "AVD runner issued an out-of-scope destructive ADB command"
+    fi
+    pass "AVD regression runs five scoped suites with exact owner and model exclusions"
+}
+
+test_avd_regression_propagates_transport_and_junit_failures() {
+    local failure_mode failure_component expected_message
+    serial_value="emulator-5582"
+    failure_component='com.personaledge.core.tools.test/androidx.test.runner.AndroidJUnitRunner'
+    for failure_mode in transport junit; do
+        new_avd_regression_fixture "avd-regression-$failure_mode-failure"
+        if [[ "$failure_mode" == "transport" ]]; then
+            override=(MOCK_ADB_FAILURE_COMPONENT="$failure_component")
+            expected_message='tools instrumentation command failed'
+        else
+            override=(MOCK_JUNIT_FAILURE_COMPONENT="$failure_component")
+            expected_message='tools instrumentation reported a test or process failure'
+        fi
+        expect_failure "$fixture/$failure_mode.log" env PATH="$fixture/bin:$PATH" \
+            MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+            MOCK_GRADLE_LOG="$gradle_log" "${override[@]}" \
+            "$fixture/scripts/run-avd-regression.sh" --serial "$serial_value" --confirm-disposable
+        grep -F "$expected_message" "$fixture/$failure_mode.log" >/dev/null ||
+            fail "AVD runner hid the $failure_mode instrumentation failure"
+        grep -F -- $'\tshell\tam\tinstrument\t' "$adb_log" >/dev/null ||
+            fail "AVD runner did not invoke instrumentation"
+        grep -F -- "$failure_component" "$adb_log" >/dev/null ||
+            fail "AVD runner did not reach the failing suite"
+    done
+    pass "AVD regression propagates transport and zero-exit JUnit failures"
+}
+
+test_avd_release_readiness_rejects_phone_and_untrusted_qemu_before_mutation() {
+    new_avd_release_readiness_fixture avd-release-device-rejection
+    serial_value="emulator-5584"
+
+    expect_failure "$fixture/physical-serial.log" env PATH="$fixture/bin:$PATH" \
+        ADB="$fixture/bin/adb" APKANALYZER="$fixture/bin/apkanalyzer" \
+        APKSIGNER="$fixture/bin/apksigner" GRADLEW="$fixture/gradlew" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_GRADLE_LOG="$gradle_log" MOCK_EXPECTED_CERT="$release_fixture_certificate" \
+        "$fixture/scripts/run-avd-release-readiness.sh" \
+        --serial R5KL801YXWE --confirm-disposable
+    [[ ! -e "$adb_log" && ! -e "$gradle_log" ]] ||
+        fail "release AVD runner touched tools for a physical serial"
+
+    expect_failure "$fixture/missing-confirmation.log" env PATH="$fixture/bin:$PATH" \
+        ADB="$fixture/bin/adb" APKANALYZER="$fixture/bin/apkanalyzer" \
+        APKSIGNER="$fixture/bin/apksigner" GRADLEW="$fixture/gradlew" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_GRADLE_LOG="$gradle_log" MOCK_EXPECTED_CERT="$release_fixture_certificate" \
+        "$fixture/scripts/run-avd-release-readiness.sh" --serial "$serial_value"
+    [[ ! -e "$adb_log" && ! -e "$gradle_log" ]] ||
+        fail "release AVD runner touched tools without disposable confirmation"
+
+    expect_failure "$fixture/qemu.log" env PATH="$fixture/bin:$PATH" \
+        ADB="$fixture/bin/adb" APKANALYZER="$fixture/bin/apkanalyzer" \
+        APKSIGNER="$fixture/bin/apksigner" GRADLEW="$fixture/gradlew" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_GRADLE_LOG="$gradle_log" MOCK_EXPECTED_CERT="$release_fixture_certificate" \
+        MOCK_KERNEL_QEMU=0 MOCK_BOOT_QEMU=0 \
+        "$fixture/scripts/run-avd-release-readiness.sh" \
+        --serial "$serial_value" --confirm-disposable
+    if grep -E $'\t(uninstall|install)\t|\tshell\tam\tinstrument\t' "$adb_log" >/dev/null; then
+        fail "release AVD runner mutated or instrumented an untrusted transport"
+    fi
+    [[ ! -e "$gradle_log" ]] || fail "release AVD runner built before qemu verification"
+    pass "release AVD readiness refuses physical serials and untrusted qemu before mutation"
+}
+
+test_avd_release_readiness_runs_exact_paired_release_lane() {
+    new_avd_release_readiness_fixture avd-release-success
+    serial_value="emulator-5584"
+    if ! env PATH="$fixture/bin:$PATH" \
+        ADB="$fixture/bin/adb" APKANALYZER="$fixture/bin/apkanalyzer" \
+        APKSIGNER="$fixture/bin/apksigner" GRADLEW="$fixture/gradlew" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_GRADLE_LOG="$gradle_log" MOCK_EXPECTED_CERT="$release_fixture_certificate" \
+        "$fixture/scripts/run-avd-release-readiness.sh" \
+        --serial "$serial_value" --confirm-disposable > "$fixture/success.log" 2>&1; then
+        sed -n '1,240p' "$fixture/success.log" >&2
+        fail "valid release AVD readiness fixture failed"
+    fi
+
+    grep -F -- '-PpersonalEdgePhysicalReleaseTest=true' "$gradle_log" >/dev/null ||
+        fail "release AVD runner did not select the minified physical test target"
+    grep -F -- ':app:assembleRelease' "$gradle_log" >/dev/null ||
+        fail "release AVD runner omitted the release app build"
+    grep -F -- ':app:assembleReleaseAndroidTest' "$gradle_log" >/dev/null ||
+        fail "release AVD runner omitted the matched release test build"
+    [[ "$(grep -c $'\tuninstall\t' "$adb_log")" == "2" ]] ||
+        fail "release AVD runner did not replace the exact two disposable packages"
+    [[ "$(grep -c $'\tinstall\t-t\t' "$adb_log")" == "2" ]] ||
+        fail "release AVD runner did not install the exact release pair"
+    [[ "$(grep -c $'\tshell\tam\tinstrument\t' "$adb_log")" == "3" ]] ||
+        fail "release AVD runner did not run the exact three readiness suites"
+    grep -F 'ReleasePhysicalAbiLinkageTest#boundedPostGuardEntrypointsResolveFromTheMinifiedTarget' \
+        "$adb_log" >/dev/null || fail "release ABI method was not selected exactly"
+    grep -F 'Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KoreanToolSelectionTest,com.personaledge.agent.PastedMailScheduleAcceptanceTest' \
+        "$adb_log" >/dev/null || fail "release five-case canary allowlist changed"
+    if grep -F 'AlarmForegroundRequestTest' "$adb_log" >/dev/null; then
+        fail "release AVD runner selected a debug-only instrumentation class"
+    fi
+    grep -F 'tests.selected=34' "$fixture/success.log" >/dev/null ||
+        fail "release AVD runner selected-count receipt is wrong"
+    grep -F 'tests.passed=1' "$fixture/success.log" >/dev/null ||
+        fail "release AVD runner pass receipt is wrong"
+    grep -F 'tests.guardedSkip=33' "$fixture/success.log" >/dev/null ||
+        fail "release AVD runner guard receipt is wrong"
+    grep -F "release.certificateSha256=$release_fixture_certificate" \
+        "$fixture/success.log" >/dev/null || fail "release certificate was not bound to the receipt"
+    pass "release AVD readiness binds one release pair to exact ABI and guard allowlists"
+}
+
+test_avd_release_readiness_rejects_stale_identity_and_junit_failure() {
+    new_avd_release_readiness_fixture avd-release-certificate-failure
+    serial_value="emulator-5584"
+    expect_failure "$fixture/certificate.log" env PATH="$fixture/bin:$PATH" \
+        ADB="$fixture/bin/adb" APKANALYZER="$fixture/bin/apkanalyzer" \
+        APKSIGNER="$fixture/bin/apksigner" GRADLEW="$fixture/gradlew" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_GRADLE_LOG="$gradle_log" MOCK_EXPECTED_CERT="$release_fixture_certificate" \
+        MOCK_TEST_CERT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+        "$fixture/scripts/run-avd-release-readiness.sh" \
+        --serial "$serial_value" --confirm-disposable
+    grep -F 'release test certificate is not the owner identity' "$fixture/certificate.log" >/dev/null ||
+        fail "release AVD runner hid the mismatched test certificate"
+    if grep -E $'\t(uninstall|install)\t|\tshell\tam\tinstrument\t' "$adb_log" >/dev/null; then
+        fail "release AVD runner mutated after a certificate mismatch"
+    fi
+
+    new_avd_release_readiness_fixture avd-release-junit-failure
+    expect_failure "$fixture/junit.log" env PATH="$fixture/bin:$PATH" \
+        ADB="$fixture/bin/adb" APKANALYZER="$fixture/bin/apkanalyzer" \
+        APKSIGNER="$fixture/bin/apksigner" GRADLEW="$fixture/gradlew" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_GRADLE_LOG="$gradle_log" MOCK_EXPECTED_CERT="$release_fixture_certificate" \
+        MOCK_FAILURE_SUITE=canary \
+        "$fixture/scripts/run-avd-release-readiness.sh" \
+        --serial "$serial_value" --confirm-disposable
+    grep -F 'canary instrumentation reported a test or process failure' "$fixture/junit.log" >/dev/null ||
+        fail "release AVD runner hid a zero-exit JUnit failure"
+    pass "release AVD readiness rejects signer drift and zero-exit JUnit failures"
+}
+
+test_fold8_preflight_verifies_release_pair_and_installed_app_read_only() {
+    new_fold8_preflight_fixture fold8-preflight-ok
+    serial_value="R5KL801YXWE"
+    if ! env PATH="$fixture/bin:$PATH" MOCK_EXPECTED_SERIAL="$serial_value" \
+        MOCK_ADB_LOG="$adb_log" MOCK_INSTALLED_APK="$fixture/apks/installed-source.apk" \
+        MOCK_EXPECTED_CERT="$preflight_certificate" \
+        "$fixture/scripts/preflight-fold8-release-update.sh" \
+        --serial "$serial_value" \
+        --app-apk "$fixture/apks/app-release.apk" \
+        --test-apk "$fixture/apks/app-release-androidTest.apk" \
+        > "$fixture/preflight.log" 2>&1; then
+        sed -n '1,200p' "$fixture/preflight.log" >&2
+        fail "valid Fold8 release preflight failed"
+    fi
+
+    grep -F 'device.model=SM-F971N' "$fixture/preflight.log" >/dev/null ||
+        fail "preflight did not report the exact Fold8 model"
+    grep -F 'candidate.versionCode=11' "$fixture/preflight.log" >/dev/null ||
+        fail "preflight did not report the candidate version"
+    grep -F 'installed.versionName=1.0.0-rc10' "$fixture/preflight.log" >/dev/null ||
+        fail "preflight did not report the installed version"
+    grep -F 'installed.firstInstallTime=2026-08-23 18:10:37' \
+        "$fixture/preflight.log" >/dev/null || fail "preflight did not report firstInstallTime"
+    grep -F "signing.certificateSha256=$preflight_certificate" "$fixture/preflight.log" >/dev/null ||
+        fail "preflight did not bind the owner certificate"
+    for hash_field in candidate.appApkSha256 candidate.testApkSha256 installed.appApkSha256; do
+        grep -E "^${hash_field}=[0-9a-f]{64}$" "$fixture/preflight.log" >/dev/null ||
+            fail "preflight did not report $hash_field"
+    done
+    grep -F $'pull\t/data/app/~~fixture==/com.personaledge.agent-fixture==/base.apk\t' \
+        "$adb_log" >/dev/null || fail "preflight did not pull the installed base APK read-only"
+    if grep -Ei '(^|[[:space:]])(install|uninstall|instrument|grant|revoke|clear|force-stop|settings|input)([[:space:]]|$)' \
+        "$adb_log" >/dev/null; then
+        fail "Fold8 preflight issued a state-changing ADB command"
+    fi
+    pass "Fold8 preflight binds release APKs and installed base APK without device mutation"
+}
+
+test_fold8_preflight_rejects_unsafe_or_wrong_device_before_pull() {
+    new_fold8_preflight_fixture fold8-preflight-device-rejection
+    serial_value="R5KL801YXWE"
+    expect_failure "$fixture/missing-serial.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_INSTALLED_APK="$fixture/apks/installed-source.apk" MOCK_EXPECTED_CERT="$preflight_certificate" \
+        "$fixture/scripts/preflight-fold8-release-update.sh" \
+        --app-apk "$fixture/apks/app-release.apk" \
+        --test-apk "$fixture/apks/app-release-androidTest.apk"
+    [[ ! -e "$adb_log" ]] || fail "preflight invoked ADB without an explicit serial"
+
+    for override in MOCK_MODEL=not-the-owner-fold8 MOCK_SDK=36 MOCK_ABI=x86_64 MOCK_KERNEL_QEMU=1; do
+        : > "$adb_log"
+        expect_failure "$fixture/${override%%=*}.log" env PATH="$fixture/bin:$PATH" \
+            MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+            MOCK_INSTALLED_APK="$fixture/apks/installed-source.apk" MOCK_EXPECTED_CERT="$preflight_certificate" \
+            "$override" "$fixture/scripts/preflight-fold8-release-update.sh" \
+            --serial "$serial_value" --app-apk "$fixture/apks/app-release.apk" \
+            --test-apk "$fixture/apks/app-release-androidTest.apk"
+        if grep -F $'pull\t' "$adb_log" >/dev/null; then
+            fail "wrong-device preflight reached installed APK pull: $override"
+        fi
+    done
+    pass "Fold8 preflight rejects missing serial, wrong hardware, API, ABI, and emulator identity"
+}
+
+test_fold8_preflight_fails_closed_on_package_manifest_or_certificate_mismatch() {
+    serial_value="R5KL801YXWE"
+
+    new_fold8_preflight_fixture fold8-preflight-target-mismatch
+    expect_failure "$fixture/target.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_INSTALLED_APK="$fixture/apks/installed-source.apk" MOCK_EXPECTED_CERT="$preflight_certificate" \
+        MOCK_TEST_TARGET=com.example.wrong \
+        "$fixture/scripts/preflight-fold8-release-update.sh" --serial "$serial_value" \
+        --app-apk "$fixture/apks/app-release.apk" --test-apk "$fixture/apks/app-release-androidTest.apk"
+    [[ ! -e "$adb_log" ]] || fail "test-manifest mismatch reached ADB"
+
+    new_fold8_preflight_fixture fold8-preflight-host-cert-mismatch
+    expect_failure "$fixture/host-cert.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_INSTALLED_APK="$fixture/apks/installed-source.apk" MOCK_EXPECTED_CERT="$preflight_certificate" \
+        MOCK_TEST_CERT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+        "$fixture/scripts/preflight-fold8-release-update.sh" --serial "$serial_value" \
+        --app-apk "$fixture/apks/app-release.apk" --test-apk "$fixture/apks/app-release-androidTest.apk"
+    [[ ! -e "$adb_log" ]] || fail "host test-certificate mismatch reached ADB"
+
+    new_fold8_preflight_fixture fold8-preflight-v3-missing
+    expect_failure "$fixture/v3.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_INSTALLED_APK="$fixture/apks/installed-source.apk" MOCK_EXPECTED_CERT="$preflight_certificate" \
+        MOCK_V3_VERIFIED=false \
+        "$fixture/scripts/preflight-fold8-release-update.sh" --serial "$serial_value" \
+        --app-apk "$fixture/apks/app-release.apk" --test-apk "$fixture/apks/app-release-androidTest.apk"
+    grep -F 'not verified with APK Signature Scheme v3' "$fixture/v3.log" >/dev/null ||
+        fail "non-v3 APK rejection was not explicit"
+    [[ ! -e "$adb_log" ]] || fail "non-v3 host APK reached ADB"
+
+    new_fold8_preflight_fixture fold8-preflight-cert-mismatch
+    expect_failure "$fixture/cert.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_INSTALLED_APK="$fixture/apks/installed-source.apk" MOCK_EXPECTED_CERT="$preflight_certificate" \
+        MOCK_INSTALLED_CERT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+        "$fixture/scripts/preflight-fold8-release-update.sh" --serial "$serial_value" \
+        --app-apk "$fixture/apks/app-release.apk" --test-apk "$fixture/apks/app-release-androidTest.apk"
+    grep -F 'installed app certificate does not match' "$fixture/cert.log" >/dev/null ||
+        fail "installed certificate mismatch was not explicit"
+
+    new_fold8_preflight_fixture fold8-preflight-package-missing
+    expect_failure "$fixture/package.log" env PATH="$fixture/bin:$PATH" \
+        MOCK_EXPECTED_SERIAL="$serial_value" MOCK_ADB_LOG="$adb_log" \
+        MOCK_INSTALLED_APK="$fixture/apks/installed-source.apk" MOCK_EXPECTED_CERT="$preflight_certificate" \
+        MOCK_PACKAGE_INSTALLED=0 \
+        "$fixture/scripts/preflight-fold8-release-update.sh" --serial "$serial_value" \
+        --app-apk "$fixture/apks/app-release.apk" --test-apk "$fixture/apks/app-release-androidTest.apk"
+    if grep -F $'pull\t' "$adb_log" >/dev/null; then
+        fail "missing installed package reached APK pull"
+    fi
+    pass "Fold8 preflight fails closed on test target, package, and owner certificate mismatch"
+}
+
+test_signing_recovery_verifies_copy_and_private_key() {
+    local recovery_fixture="$test_root/signing-recovery"
+    local fixture_password='fixture-recovery-password-123'
+    local fixture_alias='personal-edge-release'
+    mkdir -p "$recovery_fixture/scripts" "$recovery_fixture/app" "$recovery_fixture/offline"
+    cp "$project_root/scripts/verify-signing-recovery.sh" "$recovery_fixture/scripts/"
+    chmod 755 "$recovery_fixture/scripts/verify-signing-recovery.sh"
+
+    keytool -genkeypair \
+        -keystore "$recovery_fixture/app/personal-edge-release.jks" \
+        -storetype PKCS12 \
+        -storepass "$fixture_password" \
+        -keypass "$fixture_password" \
+        -alias "$fixture_alias" \
+        -keyalg RSA \
+        -keysize 2048 \
+        -validity 2 \
+        -dname 'CN=Recovery Fixture' >/dev/null 2>&1
+    chmod 600 "$recovery_fixture/app/personal-edge-release.jks"
+
+    local fixture_keystore_sha fixture_certificate_sha
+    fixture_keystore_sha="$(
+        shasum -a 256 "$recovery_fixture/app/personal-edge-release.jks" | awk '{print $1}'
+    )"
+    fixture_certificate_sha="$(
+        LC_ALL=C keytool -list -v \
+            -keystore "$recovery_fixture/app/personal-edge-release.jks" \
+            -storepass "$fixture_password" \
+            -alias "$fixture_alias" |
+            sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' |
+            head -n 1 |
+            tr -d ':' |
+            tr '[:upper:]' '[:lower:]'
+    )"
+    cat > "$recovery_fixture/app/release-signing-identity.json" <<EOF
+{
+  "schemaVersion": 1,
+  "keyAlias": "$fixture_alias",
+  "keystoreSha256": "$fixture_keystore_sha",
+  "certificateSha256": "$fixture_certificate_sha"
+}
+EOF
+
+    cp "$recovery_fixture/app/personal-edge-release.jks" \
+        "$recovery_fixture/offline/personal-edge-release.jks"
+    chmod 600 "$recovery_fixture/offline/personal-edge-release.jks"
+    env PERSONAL_EDGE_BACKUP_STORE_PASSWORD="$fixture_password" \
+        PERSONAL_EDGE_BACKUP_KEY_PASSWORD="$fixture_password" \
+        "$recovery_fixture/scripts/verify-signing-recovery.sh" \
+        "$recovery_fixture/offline/personal-edge-release.jks" \
+        > "$recovery_fixture/success.log"
+    grep -F 'private-key password are recoverable' "$recovery_fixture/success.log" >/dev/null ||
+        fail "recovery verifier did not exercise the private key"
+
+    expect_failure "$recovery_fixture/original.log" \
+        "$recovery_fixture/scripts/verify-signing-recovery.sh" \
+        "$recovery_fixture/app/personal-edge-release.jks"
+    grep -F 'not the repository keystore itself' "$recovery_fixture/original.log" >/dev/null ||
+        fail "recovery verifier accepted the repository keystore as a backup"
+
+    ln -s "$recovery_fixture/offline/personal-edge-release.jks" \
+        "$recovery_fixture/offline/symlink.jks"
+    expect_failure "$recovery_fixture/symlink.log" \
+        "$recovery_fixture/scripts/verify-signing-recovery.sh" \
+        "$recovery_fixture/offline/symlink.jks"
+    grep -F 'regular non-symlink file' "$recovery_fixture/symlink.log" >/dev/null ||
+        fail "recovery verifier followed a symlink"
+
+    printf 'corrupt recovery copy\n' > "$recovery_fixture/offline/corrupt.jks"
+    expect_failure "$recovery_fixture/corrupt.log" \
+        "$recovery_fixture/scripts/verify-signing-recovery.sh" \
+        "$recovery_fixture/offline/corrupt.jks"
+    grep -F 'SHA-256 mismatch' "$recovery_fixture/corrupt.log" >/dev/null ||
+        fail "recovery verifier did not reject a changed copy before password input"
+
+    pass "signing recovery verifies exact copy, certificate, and private-key access"
+}
+
+test_model_eval_corpus_and_scorer() {
+    local corpus="$project_root/models/eval/korean-tool-use-v1.jsonl"
+    local predictions="$test_root/model-eval-predictions.jsonl"
+    local score="$test_root/model-eval-score.json"
+    local wrong_language_predictions="$test_root/model-eval-wrong-language.jsonl"
+    local wrong_language_score="$test_root/model-eval-wrong-language-score.json"
+    local invalid_corpus="$test_root/model-eval-invalid-schema.jsonl"
+    local drifted_corpus="$test_root/model-eval-drifted-corpus.jsonl"
+    local unsafe_predictions="$test_root/model-eval-unsafe-write-substitution.jsonl"
+    local unsafe_score="$test_root/model-eval-unsafe-write-substitution-score.json"
+    local malformed_dir="$test_root/model-eval-malformed"
+
+    python3 "$project_root/scripts/validate-model-eval-corpus.py" "$corpus" >/dev/null
+    python3 - "$corpus" "$invalid_corpus" "$drifted_corpus" <<'PY'
+import json
+import sys
+
+rows = []
+with open(sys.argv[1], encoding="utf-8") as source:
+    for line in source:
+        rows.append(json.loads(line))
+calendar_update = next(row for row in rows if row["id"] == "calendar-update-01")
+calendar_update["expected"]["arguments"]["expectedStart"] = "2026-08-24T15:00"
+with open(sys.argv[2], "w", encoding="utf-8") as target:
+    for row in rows:
+        target.write(json.dumps(row, ensure_ascii=False) + "\n")
+calendar_update["expected"]["arguments"].pop("expectedStart")
+rows[0]["prompt"] += " "
+with open(sys.argv[3], "w", encoding="utf-8") as target:
+    for row in rows:
+        target.write(json.dumps(row, ensure_ascii=False) + "\n")
+PY
+    if python3 "$project_root/scripts/validate-model-eval-corpus.py" "$invalid_corpus" >/dev/null 2>&1; then
+        fail "model evaluation validator accepted an argument outside the production Tool schema"
+    fi
+    if python3 "$project_root/scripts/validate-model-eval-corpus.py" "$drifted_corpus" >/dev/null 2>&1; then
+        fail "model evaluation validator accepted unversioned fixed-corpus drift"
+    fi
+    python3 - "$corpus" "$predictions" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source, open(sys.argv[2], "w", encoding="utf-8") as target:
+    for line in source:
+        case = json.loads(line)
+        expected = case["expected"]
+        tool_calls = [] if expected["tool"] is None else [{
+            "name": expected["tool"],
+            "arguments": expected["arguments"],
+        }]
+        target.write(json.dumps({
+            "id": case["id"],
+            "tool": expected["tool"],
+            "arguments": expected["arguments"],
+            "tool_calls": tool_calls,
+            "rejected_tool_call_count": 0,
+            "clarification": expected["clarification"],
+            "final_state": expected["final_state"],
+            "response_language": expected["response_language"],
+            "response_language_observed": True,
+            "ttft_ms": 100,
+            "turn_ms": 500,
+            "pss_mb": 4000,
+            "battery_delta_percent": 0.1,
+            "max_thermal": "MODERATE",
+            "fold_transition_ok": True,
+            "cancel_recovered": True,
+            "device_run": {
+                "environment": "android-physical",
+                "deviceManufacturer": "samsung",
+                "deviceModel": "SM-F971N",
+                "deviceSerialSha256": "5" * 64,
+                "androidBuildFingerprintSha256": "6" * 64,
+                "inferenceBackend": "GPU",
+                "liteRtLmVersion": "0.16.1",
+                "applicationId": "com.personaledge.agent",
+                "buildType": "release",
+                "sourceStateSha256": "1" * 64,
+                "appApkSha256": "2" * 64,
+                "testApkSha256": "3" * 64,
+                "appSigningCertificateSha256": "4" * 64,
+                "modelArtifactSha256": "0" * 64,
+                "runId": "fixture-run",
+            },
+        }, ensure_ascii=False) + "\n")
+PY
+    python3 "$project_root/scripts/score-model-eval.py" \
+        --corpus "$corpus" \
+        --predictions "$predictions" \
+        --model-label fixture > "$score"
+    python3 - "$score" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    score = json.load(source)
+assert score["caseCount"] == 26
+assert score["quality"]["toolSelectionAccuracy"] == 1.0
+assert score["quality"]["argumentExactMatch"] == 1.0
+assert score["quality"]["responseLanguageAccuracy"] == 1.0
+assert score["device"]["foldTransitionSuccessRate"] == 1.0
+PY
+
+    python3 - "$predictions" "$unsafe_predictions" <<'PY'
+import json
+import sys
+
+rows = []
+with open(sys.argv[1], encoding="utf-8") as source:
+    for line in source:
+        rows.append(json.loads(line))
+unsafe = next(row for row in rows if row["id"] == "memory-preference-01")
+unsafe["tool"] = "alarm_set"
+unsafe["arguments"] = {"time": "07:00"}
+unsafe["tool_calls"] = [{"name": "alarm_set", "arguments": {"time": "07:00"}}]
+with open(sys.argv[2], "w", encoding="utf-8") as target:
+    for row in rows:
+        target.write(json.dumps(row, ensure_ascii=False) + "\n")
+PY
+    python3 "$project_root/scripts/score-model-eval.py" \
+        --corpus "$corpus" \
+        --predictions "$unsafe_predictions" \
+        --model-label unsafe-write-substitution-fixture > "$unsafe_score"
+    python3 - "$unsafe_score" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    score = json.load(source)
+assert score["quality"]["toolSelectionAccuracy"] >= 0.95
+assert score["quality"]["argumentExactMatch"] >= 0.90
+assert score["quality"]["stateChangingToolMiscalledRate"] > 0.0
+PY
+    expect_failure "$test_root/model-eval-unsafe-write-gate.log" \
+        python3 "$project_root/scripts/gate-model-eval.py" \
+        --score "$unsafe_score" --profile quality
+
+    mkdir -p "$malformed_dir"
+    python3 - "$predictions" "$malformed_dir" <<'PY'
+import json
+import math
+import pathlib
+import sys
+
+rows = []
+with open(sys.argv[1], encoding="utf-8") as source:
+    for line in source:
+        rows.append(json.loads(line))
+variants = {
+    "negative-ttft.jsonl": ("ttft_ms", -1),
+    "nonfinite-turn.jsonl": ("turn_ms", math.inf),
+    "malformed-pss.jsonl": ("pss_mb", "4000"),
+    "oversized-battery.jsonl": ("battery_delta_percent", 10 ** 1000),
+    "invalid-thermal.jsonl": ("max_thermal", "HOT"),
+    "invalid-fold-bool.jsonl": ("fold_transition_ok", "true"),
+    "invalid-cancel-bool.jsonl": ("cancel_recovered", 1),
+}
+target_dir = pathlib.Path(sys.argv[2])
+for filename, (key, value) in variants.items():
+    changed = [dict(row) for row in rows]
+    changed[0][key] = value
+    with (target_dir / filename).open("w", encoding="utf-8") as target:
+        for row in changed:
+            target.write(json.dumps(row, ensure_ascii=False) + "\n")
+binding_changed = [dict(row) for row in rows]
+binding_changed[0]["device_run"] = dict(binding_changed[0]["device_run"])
+binding_changed[0]["device_run"]["inferenceBackend"] = "CPU"
+with (target_dir / "mismatched-run-binding.jsonl").open("w", encoding="utf-8") as target:
+    for row in binding_changed:
+        target.write(json.dumps(row, ensure_ascii=False) + "\n")
+PY
+    local malformed
+    for malformed in "$malformed_dir"/*.jsonl; do
+        expect_failure "$malformed.log" \
+            python3 "$project_root/scripts/score-model-eval.py" \
+            --corpus "$corpus" --predictions "$malformed" --model-label malformed-fixture
+    done
+
+    python3 - "$predictions" "$wrong_language_predictions" <<'PY'
+import json
+import sys
+
+rows = []
+with open(sys.argv[1], encoding="utf-8") as source:
+    for line in source:
+        rows.append(json.loads(line))
+rows[0]["response_language"] = "en" if rows[0]["response_language"] == "ko" else "ko"
+with open(sys.argv[2], "w", encoding="utf-8") as target:
+    for row in rows:
+        target.write(json.dumps(row, ensure_ascii=False) + "\n")
+PY
+    python3 "$project_root/scripts/score-model-eval.py" \
+        --corpus "$corpus" \
+        --predictions "$wrong_language_predictions" \
+        --model-label wrong-language-fixture > "$wrong_language_score"
+    python3 - "$wrong_language_score" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    score = json.load(source)
+assert score["quality"]["responseLanguageAccuracy"] < 1.0
+assert score["mismatches"][0]["expectedResponseLanguage"] != score["mismatches"][0]["actualResponseLanguage"]
+PY
+    pass "model evaluation corpus, unsafe writes, telemetry, binding, and scoring fail closed"
+}
+
+test_model_eval_threshold_gate() {
+    "$project_root/scripts/test-model-eval-gate.sh" >/dev/null ||
+        fail "model evaluation threshold gate tests failed"
+    pass "model evaluation quality, AVD, and Fold8 thresholds fail closed"
+}
+
+test_model_eval_host_harness() {
+    "$project_root/scripts/test-model-eval-harness.sh" >/dev/null ||
+        fail "host model evaluation harness tests failed"
+    pass "host eval harness mirrors production contract and emits no device telemetry"
+}
+
+test_dialogue_quality_eval() {
+    "$project_root/scripts/test-dialogue-quality-eval.sh" >/dev/null ||
+        fail "dialogue quality evaluation fixture tests failed"
+    pass "dialogue quality lexical screen, human rubric, and strict fixtures stay independent"
+}
+
 test_verified_download_and_protocol_policy
 test_verify_rejects_aliases_and_unsafe_mode
 test_space_preflight_stops_before_curl
@@ -817,10 +2003,27 @@ test_curl_resume_and_retry_exhaustion
 test_os_lock_contends_and_releases
 test_doctor_dynamic_avd_and_versions
 test_evidence_requires_serial_and_accepts_missing_diagnostics
+test_evidence_release_denial_skips_private_diagnostics
+test_evidence_unexpected_run_as_failure_stays_failed
 test_evidence_partial_failure_keeps_receipt_and_continues
 test_evidence_refuses_unscoped_logcat_when_uid_is_unavailable
 test_evidence_caps_oversize_diagnostics
 test_evidence_validates_jsonl_and_distinguishes_empty_from_missing
 test_evidence_bugreport_and_follow_are_explicit_opt_ins
+test_avd_regression_rejects_phone_and_untrusted_qemu_before_mutation
+test_avd_regression_guards_name_api_abi_and_boot_before_install
+test_avd_regression_runs_scoped_suites_and_owner_exclusions
+test_avd_regression_propagates_transport_and_junit_failures
+test_avd_release_readiness_rejects_phone_and_untrusted_qemu_before_mutation
+test_avd_release_readiness_runs_exact_paired_release_lane
+test_avd_release_readiness_rejects_stale_identity_and_junit_failure
+test_fold8_preflight_verifies_release_pair_and_installed_app_read_only
+test_fold8_preflight_rejects_unsafe_or_wrong_device_before_pull
+test_fold8_preflight_fails_closed_on_package_manifest_or_certificate_mismatch
+test_signing_recovery_verifies_copy_and_private_key
+test_model_eval_corpus_and_scorer
+test_model_eval_threshold_gate
+test_model_eval_host_harness
+test_dialogue_quality_eval
 
 echo "All $tests_run host script tests passed."

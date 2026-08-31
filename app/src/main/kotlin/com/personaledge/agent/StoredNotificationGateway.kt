@@ -23,6 +23,7 @@ class StoredNotificationGateway(
     context: Context,
     private val notifications: NotificationRepository,
     private val settings: SettingsRepository,
+    private val captureInterlock: NotificationCaptureInterlock = NotificationCaptureInterlock(),
     private val allowedPackages: Set<String> = NotificationCapture.DEFAULT_ALLOWED_PACKAGES,
     private val zoneProvider: () -> ZoneId = ZoneId::systemDefault,
 ) : NotificationGateway {
@@ -34,8 +35,11 @@ class StoredNotificationGateway(
             NotificationManagerCompat.getEnabledListenerPackages(applicationContext)
     }.getOrDefault(false)
 
-    suspend fun captureEnabled(): Boolean =
-        runCatching { settings.settings.first().notificationCaptureEnabled }.getOrDefault(false)
+    suspend fun captureEnabled(): Boolean = captureInterlock.withMutationBoundary {
+        runCatching {
+            captureInterlock.captureAllowed(settings.settings.first().notificationCaptureEnabled)
+        }.getOrDefault(false)
+    }
 
     /**
      * This is read on every settings-screen resume, so it also clears rows that expired while the
@@ -53,16 +57,18 @@ class StoredNotificationGateway(
         query: String?,
         postedAtOrAfter: Long,
         limit: Int,
-    ): List<CapturedMessageSummary> {
+    ): List<CapturedMessageSummary> = captureInterlock.withMutationBoundary {
         val current = settings.current()
-        return notifications.search(
+        if (!captureInterlock.captureAllowed(current.notificationCaptureEnabled)) {
+            return@withMutationBoundary emptyList()
+        }
+        notifications.search(
             packageNames = allowedPackages.toList(),
             query = query,
             postedAtOrAfter = postedAtOrAfter,
             retentionDays = current.notificationRetentionDays,
             limit = limit,
-        )
-            .map { message -> message.toSummary(zoneProvider()) }
+        ).map { message -> message.toSummary(zoneProvider()) }
     }
 }
 

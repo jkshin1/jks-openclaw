@@ -20,8 +20,17 @@ import kotlinx.coroutines.withContext
 enum class SecretKeyName(internal val fileName: String) {
     NAVER_MAP_CLIENT_ID("naver-map-client-id.bin"),
     NAVER_MAP_CLIENT_SECRET("naver-map-client-secret.bin"),
+    // Legacy identifiers stay closed over their old filenames so an upgrade never destroys or
+    // aliases ciphertext that may still exist from the retired NAVER Search integration.
     NAVER_SEARCH_CLIENT_ID("naver-search-client-id.bin"),
     NAVER_SEARCH_CLIENT_SECRET("naver-search-client-secret.bin"),
+    TAVILY_API_KEY("tavily-api-key.bin"),
+}
+
+enum class SecretHealth {
+    ABSENT,
+    READABLE,
+    UNREADABLE,
 }
 
 /**
@@ -40,6 +49,7 @@ class SecretVault internal constructor(
     private val directory: File,
     private val keyStoreProvider: () -> SecretKey,
     private val ioDispatcher: CoroutineDispatcher,
+    private val fileSystem: SecureSecretFileSystem,
 ) {
     private val mutex = Mutex()
 
@@ -57,49 +67,39 @@ class SecretVault internal constructor(
 
                 val target = secretFile(name)
                 val temporary = File(directory, ".${name.fileName}.tmp")
-                directory.mkdirs()
-                temporary.writeBytes(initializationVector + ciphertext)
-                // Publish atomically so an interrupted write never leaves a truncated secret.
-                check(temporary.renameTo(target)) { "Could not publish ${name.fileName}." }
+                fileSystem.atomicReplace(
+                    target = target,
+                    temporary = temporary,
+                    bytes = initializationVector + ciphertext,
+                    maxBytes = MAX_SECRET_FILE_BYTES,
+                )
             }
         }
     }
 
     /** Returns null when the secret was never stored or can no longer be decrypted. */
     suspend fun read(name: SecretKeyName): String? = mutex.withLock {
+        withContext(ioDispatcher) { decryptOrNull(secretFile(name)) }
+    }
+
+    /** Checks decryptability without returning plaintext outside this method. */
+    suspend fun health(name: SecretKeyName): SecretHealth = mutex.withLock {
         withContext(ioDispatcher) {
             val file = secretFile(name)
-            if (!file.isFile) return@withContext null
-
-            try {
-                val stored = file.readBytes()
-                if (stored.size <= GCM_IV_BYTES) return@withContext null
-
-                val cipher = Cipher.getInstance(TRANSFORMATION).apply {
-                    init(
-                        Cipher.DECRYPT_MODE,
-                        keyStoreProvider(),
-                        GCMParameterSpec(GCM_TAG_BITS, stored, 0, GCM_IV_BYTES),
-                    )
-                }
-                String(
-                    cipher.doFinal(stored, GCM_IV_BYTES, stored.size - GCM_IV_BYTES),
-                    Charsets.UTF_8,
-                )
-            } catch (_: GeneralSecurityException) {
-                // A rotated or invalidated key makes the ciphertext unreadable. Report "absent"
-                // so the caller prompts for the credential instead of crashing.
-                null
+            when {
+                !fileSystem.exists(file) -> SecretHealth.ABSENT
+                decryptOrNull(file) != null -> SecretHealth.READABLE
+                else -> SecretHealth.UNREADABLE
             }
         }
     }
 
-    suspend fun contains(name: SecretKeyName): Boolean = withContext(ioDispatcher) {
-        secretFile(name).isFile
+    suspend fun contains(name: SecretKeyName): Boolean = mutex.withLock {
+        withContext(ioDispatcher) { fileSystem.exists(secretFile(name)) }
     }
 
     suspend fun remove(name: SecretKeyName): Boolean = mutex.withLock {
-        withContext(ioDispatcher) { secretFile(name).delete() }
+        withContext(ioDispatcher) { fileSystem.remove(secretFile(name)) }
     }
 
     /**
@@ -112,12 +112,34 @@ class SecretVault internal constructor(
     suspend fun clear() {
         mutex.withLock {
             withContext(ioDispatcher) {
-                directory.listFiles()?.forEach { file -> file.delete() }
+                fileSystem.clear()
             }
         }
     }
 
     private fun secretFile(name: SecretKeyName) = File(directory, name.fileName)
+
+    private fun decryptOrNull(file: File): String? {
+        return try {
+            val stored = fileSystem.readOrNull(file, MAX_SECRET_FILE_BYTES) ?: return null
+            if (stored.size <= GCM_IV_BYTES) return null
+            val cipher = Cipher.getInstance(TRANSFORMATION).apply {
+                init(
+                    Cipher.DECRYPT_MODE,
+                    keyStoreProvider(),
+                    GCMParameterSpec(GCM_TAG_BITS, stored, 0, GCM_IV_BYTES),
+                )
+            }
+            String(
+                cipher.doFinal(stored, GCM_IV_BYTES, stored.size - GCM_IV_BYTES),
+                Charsets.UTF_8,
+            )
+        } catch (_: GeneralSecurityException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
 
     companion object {
         internal const val DIRECTORY_NAME = "secrets"
@@ -127,17 +149,18 @@ class SecretVault internal constructor(
         private const val GCM_IV_BYTES = 12
         private const val GCM_TAG_BITS = 128
         private const val MAX_SECRET_CHARACTERS = 4_096
+        private const val MAX_SECRET_FILE_BYTES = MAX_SECRET_CHARACTERS * 4 + GCM_IV_BYTES + 32
 
         fun create(
             context: Context,
             ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
         ): SecretVault {
             val directory = File(context.applicationContext.noBackupFilesDir, DIRECTORY_NAME)
-            directory.mkdirs()
             return SecretVault(
                 directory = directory,
                 keyStoreProvider = ::loadOrCreateKey,
                 ioDispatcher = ioDispatcher,
+                fileSystem = AndroidSecureSecretFileSystem(directory),
             )
         }
 

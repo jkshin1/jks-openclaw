@@ -17,9 +17,188 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LiteRtLlmRuntimeTest {
+    @Test
+    fun thoughtDeltasAreEmittedSeparatelyBeforeVisibleText() = runBlocking {
+        val conversation = FakeConversation(
+            streams = ArrayDeque(
+                listOf(
+                    flowOf(
+                        RuntimeChunk(
+                            thoughtDeltas = listOf("요청의 핵심을 확인합니다."),
+                            textDeltas = listOf("핵심 답변입니다."),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val runtime = createRuntime(
+            factory = FakeEngineFactory(FakeEngine { conversation }),
+            lease = FakeLease(),
+        )
+
+        try {
+            runtime.initialize(verifiedModel())
+            val turnId = TurnId("thought-stream")
+
+            assertEquals(
+                listOf(
+                    ModelEvent.ThoughtDelta(turnId, "요청의 핵심을 확인합니다."),
+                    ModelEvent.TextDelta(turnId, "핵심 답변입니다."),
+                    ModelEvent.Completed(turnId),
+                ),
+                runtime.streamUserTurn(turnId, "질문").toList(),
+            )
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun oversizedThoughtDeltaFailsBeforeRawReasoningIsExposed() = runBlocking {
+        val conversation = FakeConversation(
+            streams = ArrayDeque(
+                listOf(
+                    flowOf(
+                        RuntimeChunk(thoughtDeltas = listOf("x".repeat(1_000_001))),
+                    ),
+                ),
+            ),
+        )
+        val engine = FakeEngine { conversation }
+        val runtime = createRuntime(
+            factory = FakeEngineFactory(engine),
+            lease = FakeLease(),
+        )
+
+        try {
+            runtime.initialize(verifiedModel())
+            val turnId = TurnId("oversized-thought")
+
+            assertEquals(
+                listOf(ModelEvent.Failure(turnId, LlmFailureCode.INVALID_TOOL_CALL)),
+                runtime.streamUserTurn(turnId, "질문").toList(),
+            )
+            assertEquals(1, conversation.cancelCount)
+            assertEquals(1, conversation.closeCount)
+            assertEquals(2, engine.createConversationCount)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun perTurnToolScopeRecreatesConversationWithOnlyValidatedSubset() = runBlocking {
+        val initial = FakeConversation(ArrayDeque())
+        val scoped = FakeConversation(
+            ArrayDeque(listOf(flowOf(RuntimeChunk(textDeltas = listOf("완료"))))),
+        )
+        val conversations = ArrayDeque(listOf(initial, scoped))
+        val engine = FakeEngine { conversations.removeFirst() }
+        val runtime = createRuntime(factory = FakeEngineFactory(engine), lease = FakeLease())
+        val lookup = LlmToolDefinition(
+            name = "lookup",
+            description = "Read a local record",
+            parametersJsonSchema = "{\"type\":\"object\",\"properties\":{}}",
+        )
+        val write = LlmToolDefinition(
+            name = "write_record",
+            description = "Write a local record",
+            parametersJsonSchema = "{\"type\":\"object\",\"properties\":{}}",
+        )
+
+        try {
+            runtime.initialize(verifiedModel(), tools = listOf(lookup, write))
+            val events = runtime.streamUserTurn(
+                turnId = TurnId("scoped-turn"),
+                prompt = "조회",
+                maxOutputTokens = 256,
+                toolScope = LlmTurnToolScope.exact(setOf("lookup")),
+            ).toList()
+
+            assertEquals(
+                listOf(setOf("lookup", "write_record"), setOf("lookup")),
+                engine.toolNameSnapshots,
+            )
+            assertEquals(
+                listOf(
+                    ModelEvent.TextDelta(TurnId("scoped-turn"), "완료"),
+                    ModelEvent.Completed(TurnId("scoped-turn")),
+                ),
+                events,
+            )
+            assertEquals(1, initial.closeCount)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun unknownPerTurnToolScopeFailsBeforeNativeConversationReplacement() = runBlocking {
+        val initial = FakeConversation(ArrayDeque())
+        val engine = FakeEngine { initial }
+        val runtime = createRuntime(factory = FakeEngineFactory(engine), lease = FakeLease())
+        val lookup = LlmToolDefinition(
+            name = "lookup",
+            description = "Read a local record",
+            parametersJsonSchema = "{\"type\":\"object\",\"properties\":{}}",
+        )
+
+        try {
+            runtime.initialize(verifiedModel(), tools = listOf(lookup))
+            val events = runtime.streamUserTurn(
+                turnId = TurnId("unknown-scope"),
+                prompt = "조회",
+                maxOutputTokens = 256,
+                toolScope = LlmTurnToolScope.exact(setOf("unknown_tool")),
+            ).toList()
+
+            assertEquals(
+                listOf(
+                    ModelEvent.Failure(
+                        TurnId("unknown-scope"),
+                        LlmFailureCode.INVALID_TOOL_DEFINITION,
+                    ),
+                ),
+                events,
+            )
+            assertEquals(1, engine.createConversationCount)
+            assertTrue(initial.inputs.isEmpty())
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun explicitOutputBudgetRecreatesConversationWithNativeLimit() = runBlocking {
+        val initial = FakeConversation(ArrayDeque())
+        val limited = FakeConversation(
+            streams = ArrayDeque(listOf(flowOf(RuntimeChunk(textDeltas = listOf("짧은 답"))))),
+        )
+        val conversations = ArrayDeque(listOf(initial, limited))
+        val engine = FakeEngine { conversations.removeFirst() }
+        val runtime = createRuntime(FakeEngineFactory(engine), FakeLease())
+
+        try {
+            runtime.initialize(verifiedModel())
+            val turnId = TurnId("limited-turn")
+            assertEquals(
+                listOf(ModelEvent.TextDelta(turnId, "짧은 답"), ModelEvent.Completed(turnId)),
+                runtime.streamUserTurn(turnId, "다음 알람", maxOutputTokens = 256).toList(),
+            )
+            assertEquals(
+                listOf(PinnedModelManifest.value.maxOutputTokens, 256),
+                engine.outputTokenLimits,
+            )
+            assertEquals(1, initial.closeCount)
+        } finally {
+            runtime.close()
+        }
+    }
+
     @Test
     fun finalToolCallsAreHeldUntilDoneAndSameNameResponsesAreInjectedExactlyOnce() = runBlocking {
         val conversation = FakeConversation(
@@ -425,6 +604,150 @@ class LiteRtLlmRuntimeTest {
         }
     }
 
+    @Test
+    fun oversizedCanonicalToolResponseIsTerminalBeforeNativeReinjection() = runBlocking {
+        val first = FakeConversation(
+            streams = ArrayDeque(
+                listOf(
+                    flowOf(
+                        RuntimeChunk(
+                            toolCalls = listOf(
+                                RuntimeToolCall("lookup", "{\"query\":\"first\"}"),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val replacement = FakeConversation(ArrayDeque())
+        val conversations = ArrayDeque(listOf(first, replacement))
+        val engine = FakeEngine { conversations.removeFirst() }
+        val runtime = createRuntime(FakeEngineFactory(engine), FakeLease())
+
+        try {
+            runtime.initialize(
+                verifiedModel(),
+                tools = listOf(
+                    LlmToolDefinition(
+                        name = "lookup",
+                        description = "Look up a local record",
+                        parametersJsonSchema = "{\"type\":\"object\"}",
+                    ),
+                ),
+            )
+            val turnId = TurnId("oversized-tool-response")
+            val call = (
+                runtime.streamUserTurn(turnId, "look up").toList()[0]
+                    as ModelEvent.FinalToolCalls
+                ).toolCalls.single()
+            val oversized = TrustedToolResponse(
+                callId = call.id,
+                name = call.name,
+                payloadJson =
+                    "{\"value\":\"${"x".repeat(
+                        TrustedToolResponseBudget.MAX_TOTAL_PAYLOAD_UTF8_BYTES,
+                    )}\"}",
+            )
+
+            assertEquals(
+                listOf(ModelEvent.Failure(turnId, LlmFailureCode.CONTEXT_BUDGET_EXCEEDED)),
+                runtime.streamToolResponses(turnId, listOf(oversized)).toList(),
+            )
+            assertEquals(1, first.inputs.size)
+            assertEquals(1, first.closeCount)
+            assertEquals(2, engine.createConversationCount)
+
+            assertEquals(
+                listOf(ModelEvent.Failure(turnId, LlmFailureCode.NO_PENDING_TOOL_CALLS)),
+                runtime.streamToolResponses(turnId, listOf(oversized)).toList(),
+            )
+            assertEquals(1, first.inputs.size)
+            assertEquals(1, first.closeCount)
+            assertEquals(2, engine.createConversationCount)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun toolResponseReserveUsesTheActiveBoundedOutputLimit() = runBlocking {
+        val manifest = PinnedModelManifest.value
+        val boundedOutputTokens = minOf(384, manifest.maxOutputTokens - 128)
+        val tokenCountPastFullOutputReserve =
+            manifest.contextTokens -
+                manifest.maxOutputTokens -
+                TrustedToolResponseBudget.RESERVED_CONTEXT_TOKENS +
+                1
+        require(boundedOutputTokens > 0)
+        require(
+            tokenCountPastFullOutputReserve <=
+                manifest.contextTokens -
+                    boundedOutputTokens -
+                    TrustedToolResponseBudget.RESERVED_CONTEXT_TOKENS,
+        )
+        val initial = FakeConversation(ArrayDeque())
+        val bounded = FakeConversation(
+            streams = ArrayDeque(
+                listOf(
+                    flowOf(
+                        RuntimeChunk(
+                            toolCalls = listOf(
+                                RuntimeToolCall("lookup", "{\"query\":\"first\"}"),
+                            ),
+                        ),
+                    ),
+                    flowOf(RuntimeChunk(textDeltas = listOf("완료"))),
+                ),
+            ),
+            tokenCount = tokenCountPastFullOutputReserve,
+        )
+        val conversations = ArrayDeque(listOf(initial, bounded))
+        val engine = FakeEngine { conversations.removeFirst() }
+        val runtime = createRuntime(FakeEngineFactory(engine), FakeLease())
+
+        try {
+            runtime.initialize(
+                verifiedModel(),
+                tools = listOf(
+                    LlmToolDefinition(
+                        name = "lookup",
+                        description = "Look up a local record",
+                        parametersJsonSchema = "{\"type\":\"object\"}",
+                    ),
+                ),
+            )
+            val turnId = TurnId("bounded-context-budget")
+            val calls = (
+                runtime.streamUserTurn(
+                    turnId,
+                    "look up",
+                    maxOutputTokens = boundedOutputTokens,
+                ).toList()[0] as ModelEvent.FinalToolCalls
+                ).toolCalls
+
+            assertEquals(
+                listOf(ModelEvent.TextDelta(turnId, "완료"), ModelEvent.Completed(turnId)),
+                runtime.streamToolResponses(
+                    turnId,
+                    listOf(
+                        TrustedToolResponse(
+                            callId = calls.single().id,
+                            name = "lookup",
+                            payloadJson = "{\"value\":1}",
+                        ),
+                    ),
+                ).toList(),
+            )
+            assertEquals(
+                listOf(manifest.maxOutputTokens, boundedOutputTokens),
+                engine.outputTokenLimits,
+            )
+            assertEquals(2, bounded.inputs.size)
+        } finally {
+            runtime.close()
+        }
+    }
+
     private fun createRuntime(
         factory: RuntimeEngineFactory,
         lease: FakeLease,
@@ -507,12 +830,17 @@ class LiteRtLlmRuntimeTest {
 
         var selectedBackend = InferenceBackend.CPU
         var createConversationCount = 0
+        val outputTokenLimits = mutableListOf<Int>()
+        val toolNameSnapshots = mutableListOf<Set<String>>()
         var closeCount = 0
 
         override fun createConversation(
             tools: List<LlmToolDefinition>,
+            maxOutputTokens: Int,
         ): RuntimeConversation {
             createConversationCount += 1
+            outputTokenLimits += maxOutputTokens
+            toolNameSnapshots += tools.mapTo(linkedSetOf()) { definition -> definition.name }
             return conversationFactory()
         }
 

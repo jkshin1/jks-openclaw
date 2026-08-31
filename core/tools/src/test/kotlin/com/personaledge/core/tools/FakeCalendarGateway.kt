@@ -103,6 +103,19 @@ internal class FakeCalendarGateway(
         return applyPatch(eventId, existing, patch)
     }
 
+    override suspend fun updateEvent(
+        expected: CalendarEventMutationSnapshot,
+        patch: CalendarEventPatch,
+    ): Boolean {
+        var existing = stored[expected.eventId] ?: return false
+        onProviderUpdate?.let { mutate ->
+            existing = mutate(existing)
+            stored[expected.eventId] = existing
+        }
+        if (existing.mutationSnapshot() != expected) return false
+        return applyPatch(expected.eventId, existing, patch)
+    }
+
     private fun applyPatch(
         eventId: Long,
         existing: CalendarEvent,

@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.personaledge.core.data.AgentSettings
+import com.personaledge.core.data.CommitmentProposalRepository
 import com.personaledge.core.data.NotificationRepository
 import com.personaledge.core.data.PersonalEdgeDatabase
 import com.personaledge.core.data.SettingsRepository
@@ -28,6 +29,7 @@ class NotificationCaptureSinkTest {
 
     private lateinit var database: PersonalEdgeDatabase
     private lateinit var notifications: NotificationRepository
+    private lateinit var proposals: CommitmentProposalRepository
     private lateinit var settings: SettingsRepository
     private lateinit var scope: CoroutineScope
     private lateinit var storeFile: File
@@ -40,6 +42,7 @@ class NotificationCaptureSinkTest {
             .inMemoryDatabaseBuilder(context, PersonalEdgeDatabase::class.java)
             .build()
         notifications = NotificationRepository(database, clock = { now })
+        proposals = CommitmentProposalRepository(database, clock = { now })
         storeFile = File(context.cacheDir, "capture-test-${System.nanoTime()}.preferences_pb")
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         settings = SettingsRepository(PreferenceDataStoreFactory.create(scope = scope) { storeFile })
@@ -52,9 +55,15 @@ class NotificationCaptureSinkTest {
         storeFile.delete()
     }
 
-    private fun sink() = NotificationCaptureSink(
+    private fun sink(
+        interlock: NotificationCaptureInterlock = NotificationCaptureInterlock(),
+        ownerConsentInterlock: OwnerConsentInterlock = OwnerConsentInterlock(),
+    ) = NotificationCaptureSink(
         settings = settings,
         notifications = notifications,
+        proposals = proposals,
+        captureInterlock = interlock,
+        ownerConsentInterlock = ownerConsentInterlock,
         clock = { now },
     )
 
@@ -105,6 +114,40 @@ class NotificationCaptureSinkTest {
     }
 
     @Test
+    fun commitmentCandidatesRequireSeparateOptInAndNeverCreateAReminder() = runBlocking {
+        settings.setNotificationCaptureEnabled(true)
+        val sink = sink()
+        assertTrue(sink.accept(post(sourceKey = "first", text = "내일 오후 7시에 만나자")))
+        assertTrue(proposals.pending().isEmpty())
+
+        settings.setCommitmentProposalsEnabled(true)
+        assertTrue(sink.accept(post(sourceKey = "second", text = "내일 오후 7시에 만나자")))
+
+        assertEquals(1, proposals.pending().size)
+        assertTrue(database.reminderDao().listActive().isEmpty())
+    }
+
+    @Test
+    fun commitmentDisableRequestBlocksProposalBeforeDurableWrite() = runBlocking {
+        settings.setNotificationCaptureEnabled(true)
+        settings.setCommitmentProposalsEnabled(true)
+        val ownerInterlock = OwnerConsentInterlock()
+        ownerInterlock.requestEnabled(
+            OwnerConsentFeature.COMMITMENT_PROPOSALS,
+            enabled = false,
+        )
+
+        assertTrue(
+            sink(ownerConsentInterlock = ownerInterlock).accept(
+                post(sourceKey = "blocked", text = "내일 오후 7시에 만나자"),
+            ),
+        )
+
+        assertEquals(1L, notifications.count())
+        assertTrue(proposals.pending().isEmpty())
+    }
+
+    @Test
     fun turningCaptureOffStopsFurtherStorage() = runBlocking {
         val sink = sink()
         settings.setNotificationCaptureEnabled(true)
@@ -114,6 +157,19 @@ class NotificationCaptureSinkTest {
         assertFalse(sink.accept(post(sourceKey = "key-2")))
 
         assertEquals(1L, notifications.count())
+    }
+
+    @Test
+    fun disableRequestRejectsAPostPreparedBeforeItsListenerCoroutineStarted() = runBlocking {
+        settings.setNotificationCaptureEnabled(true)
+        val interlock = NotificationCaptureInterlock()
+        val sink = sink(interlock)
+        val queuedRequest = requireNotNull(sink.prepareCapture())
+
+        interlock.requestCaptureEnabled(false)
+
+        assertFalse(sink.accept(post(), queuedRequest))
+        assertEquals(0L, notifications.count())
     }
 
     @Test

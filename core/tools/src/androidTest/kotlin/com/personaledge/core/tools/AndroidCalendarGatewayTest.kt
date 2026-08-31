@@ -237,9 +237,9 @@ class AndroidCalendarGatewayTest {
             ),
         )!!
 
+        val expected = requireNotNull(gateway.findEvent(eventId)).mutationSnapshot()
         val updated = gateway.updateEvent(
-            expectedCalendarId = calendarId,
-            eventId = eventId,
+            expected = expected,
             patch = CalendarEventPatch(
                 startEpochMillis = at("2026-08-22T16:00"),
                 endEpochMillis = at("2026-08-22T17:00"),
@@ -258,8 +258,16 @@ class AndroidCalendarGatewayTest {
         assertNull(gateway.findEvent(Long.MAX_VALUE))
         assertFalse(
             gateway.updateEvent(
-                expectedCalendarId = calendarId,
-                eventId = Long.MAX_VALUE,
+                expected = CalendarEventMutationSnapshot(
+                    eventId = Long.MAX_VALUE,
+                    calendarId = calendarId,
+                    title = "없음",
+                    startEpochMillis = at("2026-08-22T14:00"),
+                    endEpochMillis = at("2026-08-22T15:00"),
+                    allDay = false,
+                    recurring = false,
+                    location = null,
+                ),
                 patch = CalendarEventPatch(title = "없음"),
             ),
         )
@@ -280,6 +288,7 @@ class AndroidCalendarGatewayTest {
                 ),
             ),
         )
+        val expected = requireNotNull(gateway.findEvent(eventId)).mutationSnapshot()
         val moved = context.contentResolver.update(
             ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
             ContentValues().apply {
@@ -291,8 +300,7 @@ class AndroidCalendarGatewayTest {
         assertEquals(1, moved)
 
         val updated = gateway.updateEvent(
-            expectedCalendarId = calendarId,
-            eventId = eventId,
+            expected = expected,
             patch = CalendarEventPatch(title = "범위 밖 수정"),
         )
 
@@ -300,6 +308,46 @@ class AndroidCalendarGatewayTest {
         val found = requireNotNull(gateway.findEvent(eventId))
         assertEquals(otherCalendarId, found.calendarId)
         assertEquals("이동 전 제목", found.title)
+    }
+
+    @Test
+    fun compareAndSetRefusesTitleAndNullableLocationChangesAfterRead() = runBlocking {
+        val eventId = requireNotNull(
+            gateway.insertEvent(
+                CalendarEventDraft(
+                    calendarId = calendarId,
+                    title = "확인한 제목",
+                    startEpochMillis = at("2026-08-22T14:00"),
+                    endEpochMillis = at("2026-08-22T15:00"),
+                    location = null,
+                    timeZoneId = zone.id,
+                ),
+            ),
+        )
+        val expected = requireNotNull(gateway.findEvent(eventId)).mutationSnapshot()
+        assertNull(expected.location)
+        assertEquals(
+            1,
+            context.contentResolver.update(
+                ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
+                ContentValues().apply {
+                    put(CalendarContract.Events.TITLE, "동기화된 제목")
+                    put(CalendarContract.Events.EVENT_LOCATION, "동기화된 장소")
+                },
+                null,
+                null,
+            ),
+        )
+
+        val updated = gateway.updateEvent(
+            expected = expected,
+            patch = CalendarEventPatch(title = "승인한 새 제목"),
+        )
+
+        assertFalse(updated)
+        val current = requireNotNull(gateway.findEvent(eventId))
+        assertEquals("동기화된 제목", current.title)
+        assertEquals("동기화된 장소", current.location)
     }
 
     @Test
@@ -315,8 +363,14 @@ class AndroidCalendarGatewayTest {
             ),
         )!!
         // Pinning a different calendar must hide an event that plainly exists.
-        val elsewhere = ScopedCalendarGateway(gateway) { calendarId + 1_000 }
-        val pinned = ScopedCalendarGateway(gateway) { calendarId }
+        val elsewhere = ScopedCalendarGateway(
+            delegate = gateway,
+            pinnedCalendarId = { calendarId + 1_000 },
+        )
+        val pinned = ScopedCalendarGateway(
+            delegate = gateway,
+            pinnedCalendarId = { calendarId },
+        )
 
         assertNull(elsewhere.findEvent(eventId))
         assertTrue(elsewhere.writableCalendars().isEmpty())

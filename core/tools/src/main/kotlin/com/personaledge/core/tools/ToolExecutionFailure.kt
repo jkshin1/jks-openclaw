@@ -1,0 +1,82 @@
+package com.personaledge.core.tools
+
+/**
+ * App-authored, content-free reasons why a Tool could not complete.
+ *
+ * Provider messages, request URLs, query text, and credentials must never be carried in this
+ * enum. Higher layers may safely use only this closed value to select user-facing copy and
+ * diagnostic metadata.
+ */
+enum class ToolFailureCode {
+    CREDENTIALS_MISSING,
+    AUTHENTICATION_FAILED,
+    PERMISSION_DENIED,
+    API_DISABLED_OR_QUOTA_EXCEEDED,
+    RATE_LIMITED,
+    INVALID_REQUEST,
+    REMINDER_INVALID_TITLE,
+    REMINDER_INVALID_TIME_ZONE,
+    REMINDER_INVALID_DATE_TIME,
+    REMINDER_INVALID_DATE_TIME_FORMAT,
+    REMINDER_INVALID_DATE_TIME_OFFSET_CONFLICT,
+    REMINDER_INVALID_DATE_TIME_NON_ZERO_SECONDS,
+    REMINDER_INVALID_DATE_TIME_DATE_ONLY,
+    REMINDER_INVALID_DATE_TIME_NATURAL_LANGUAGE,
+    REMINDER_INVALID_DATE_TIME_OTHER_FORMAT,
+    REMINDER_INVALID_DATE_TIME_EMPTY,
+    REMINDER_INVALID_DATE_TIME_PLACEHOLDER,
+    REMINDER_INVALID_DATE_TIME_ASCII_TEXT,
+    REMINDER_INVALID_DATE_TIME_ASCII_RELATIVE,
+    REMINDER_INVALID_DATE_TIME_ASCII_MONTH_NAME,
+    REMINDER_INVALID_DATE_TIME_ASCII_AM_PM,
+    REMINDER_INVALID_DATE_TIME_ASCII_ZONE_LABEL,
+    REMINDER_INVALID_DATE_TIME_ASCII_NUMERIC,
+    REMINDER_INVALID_DATE_TIME_ASCII_ISO_LIKE,
+    REMINDER_INVALID_DATE_TIME_ASCII_ISO_ALPHA,
+    REMINDER_INVALID_DATE_TIME_ASCII_ISO_NO_COLON,
+    REMINDER_INVALID_DATE_TIME_ASCII_ISO_ONE_COLON,
+    REMINDER_INVALID_DATE_TIME_ASCII_ISO_ONE_COLON_SUFFIX_SYMBOLS,
+    REMINDER_INVALID_DATE_TIME_ASCII_ISO_ONE_COLON_EXTRA_DIGITS,
+    REMINDER_INVALID_DATE_TIME_ASCII_ISO_ONE_COLON_OTHER,
+    REMINDER_INVALID_DATE_TIME_ASCII_ISO_MULTI_COLON,
+    REMINDER_INVALID_DATE_TIME_ASCII_OTHER,
+    REMINDER_INVALID_DATE_TIME_NON_HANGUL_UNICODE,
+    REMINDER_INVALID_DATE_TIME_VALUE,
+    REMINDER_INVALID_DATE_TIME_DST,
+    REMINDER_INVALID_DATE_TIME_RANGE,
+    REMINDER_INVALID_RECURRENCE,
+    REMINDER_INVALID_PRECISION,
+    REMINDER_INVALID_LEAD_TIME,
+    REMINDER_INVALID_ESCALATION,
+    REMINDER_INVALID_IDENTITY,
+    REMINDER_INVALID_QUERY_LIMIT,
+    PLACE_NOT_FOUND,
+    SAME_LOCATION,
+    POINT_NOT_NEAR_ROAD,
+    NO_DRIVING_ROUTE,
+    ROUTE_TOO_LONG,
+    ENDPOINT_NOT_FOUND,
+    REQUEST_TOO_LARGE,
+    NETWORK_FAILURE,
+    PROVIDER_TIMEOUT,
+    PROVIDER_UNAVAILABLE,
+    MALFORMED_RESPONSE,
+    CLIENT_POLICY_FAILURE,
+    OTHER_PROVIDER_ERROR,
+}
+
+/** A Tool failure whose only trusted detail is [failureCode]. */
+open class ToolExecutionException(
+    val failureCode: ToolFailureCode,
+    message: String,
+    cause: Throwable? = null,
+) : Exception(message, cause)
+
+/**
+ * Content-free proof that the resolved Tool's own [AgentTool.execute] boundary raised a classified
+ * failure. The constructor is internal so an interlock, confirmation gate, ledger, or higher layer
+ * cannot manufacture a provider failure by throwing the broader [ToolExecutionException] type.
+ */
+class ToolInvocationFailureException internal constructor(
+    val failureCode: ToolFailureCode,
+) : Exception(null, null, false, false)

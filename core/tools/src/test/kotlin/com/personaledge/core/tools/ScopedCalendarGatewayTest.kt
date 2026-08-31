@@ -30,7 +30,12 @@ class ScopedCalendarGatewayTest {
     private fun scoped(
         delegate: FakeCalendarGateway,
         pinned: Long? = naverId,
-    ) = ScopedCalendarGateway(delegate) { pinned }
+        readable: Set<Long> = pinned?.let(::setOf).orEmpty(),
+    ) = ScopedCalendarGateway(
+        delegate = delegate,
+        pinnedCalendarId = { pinned },
+        readCalendarIds = { readable },
+    )
 
     @Test
     fun `only the pinned calendar is listed as writable`() = runBlocking {
@@ -54,6 +59,47 @@ class ScopedCalendarGatewayTest {
     }
 
     @Test
+    fun `selected calendars are merged for reads while the default calendar owns writes`() = runBlocking {
+        val delegate = FakeCalendarGateway(
+            calendars = listOf(FakeCalendarGateway.NAVER_CALENDAR, FakeCalendarGateway.WORK_CALENDAR),
+            events = listOf(
+                event(1, naverId).copy(startEpochMillis = 3_000),
+                event(2, workId).copy(startEpochMillis = 1_000),
+            ),
+        )
+        val gateway = scoped(delegate, pinned = naverId, readable = setOf(naverId, workId))
+
+        assertEquals(
+            listOf(2L, 1L),
+            gateway.queryEvents(0, 10_000, limit = 10).map(CalendarEvent::eventId),
+        )
+        assertEquals(setOf(naverId, workId), delegate.queriedCalendarIds.toSet())
+        assertEquals(listOf(naverId), gateway.writableCalendars().map(CalendarAccount::id))
+
+        val workDraft = CalendarEventDraft(
+            calendarId = workId,
+            title = "회사 일정",
+            startEpochMillis = 4_000,
+            endEpochMillis = 5_000,
+            location = null,
+            timeZoneId = "Asia/Seoul",
+        )
+        assertNull(gateway.insertEvent(workDraft))
+        assertTrue(delegate.inserted.isEmpty())
+    }
+
+    @Test
+    fun `read access does not require a default write calendar`() = runBlocking {
+        val delegate = FakeCalendarGateway(events = listOf(event(2, workId)))
+        val gateway = scoped(delegate, pinned = null, readable = setOf(workId))
+
+        assertEquals(listOf(2L), gateway.queryEvents(0, 10_000, limit = 10).map(CalendarEvent::eventId))
+        assertEquals(event(2, workId), gateway.findEvent(2))
+        assertTrue(gateway.writableCalendars().isEmpty())
+        assertFalse(gateway.updateEvent(2, CalendarEventPatch(title = "수정 불가")))
+    }
+
+    @Test
     fun `an event id from another calendar cannot be read or updated`() = runBlocking {
         val delegate = FakeCalendarGateway(events = listOf(event(2, workId)))
         val gateway = scoped(delegate)
@@ -69,7 +115,11 @@ class ScopedCalendarGatewayTest {
             onProviderUpdate = { current -> current.copy(calendarId = workId) }
         }
 
-        val updated = scoped(delegate).updateEvent(1, CalendarEventPatch(title = "수정 시도"))
+        val expected = requireNotNull(delegate.findEvent(1)).mutationSnapshot()
+        val updated = scoped(delegate).updateEvent(
+            expected,
+            CalendarEventPatch(title = "수정 시도"),
+        )
 
         assertFalse(updated)
         assertEquals(workId, delegate.stored.getValue(1).calendarId)

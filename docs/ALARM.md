@@ -32,8 +32,15 @@ scheduled. Both were settled by instrumentation on the API 37 ARM64 AVD:
   creates both a one-shot and a repeating alarm, and the next-alarm read confirms the time and the
   weekday the clock app actually chose.
 
-Alarm creation cannot be undone through any API, so the tests that create one clear the clock
-app's data afterwards and are skipped on anything but an emulator. Never run them on the Fold8.
+The ordinary tests that create alarms clear clock data afterwards and remain emulator-only. The
+separate `AlarmSetLiveAcceptanceTest` is physical-only, requires an owner-chosen time and a real
+tap on the production confirmation sheet, never clears clock data, and requires manual removal of
+its one labeled alarm.
+
+On 2026-08-23 the owner chose 15:10. Real Gemma selected `alarm_set`, the production sheet received
+a real `실행` tap, and `getNextAlarmClock()` matched 15:10 (PASS 1/1). The `Personal Edge 검증`
+alarm was then removed in Samsung Clock; the public next-alarm value returned to the owner's
+Monday 04:55 alarm. This is one bounded creation receipt, not list/edit/delete support.
 
 ## Why creating an alarm requires confirmation
 

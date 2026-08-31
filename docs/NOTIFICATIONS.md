@@ -1,85 +1,97 @@
-# KakaoTalk notification capture
+# KakaoTalk notification capture, share, and reply
 
-## What this is, and what it is not
+## Product boundary
 
-KakaoTalk exposes no API to this app. The only thing available is the notification stream, so the
-feature is exactly that: a **local cache of notifications that arrived while capture was on**.
+KakaoTalk exposes no chat-history or arbitrary-friend send API to this app. Capture is a local cache
+of allowlisted notifications that arrive while capture is enabled. It cannot see older messages,
+muted/suppressed posts, messages read elsewhere before notification, or bodies KakaoTalk hides.
+An empty search therefore means only that no matching cached notification was found.
 
-It is not chat history. It cannot see:
+## Confirmation-gated communication
 
-- messages that arrived before the feature was enabled,
-- rooms the user muted, or notifications suppressed by Do Not Disturb,
-- anything already read on another device before a notification posted,
-- message bodies KakaoTalk chose to hide (for example under "미리보기 숨김").
+`kakao_share_message` opens Android `ACTION_SEND` scoped to `com.kakao.talk` only after the exact
+message preview is confirmed. An optional recipient is a preview hint; the app cannot select a
+friend/room, press KakaoTalk's send button, or prove delivery. Its typed result reports only that
+the picker opened and keeps `message_sent=false`.
 
-The tool description states this, so the model does not report an empty result as "you have no
-messages". Sending a KakaoTalk message is out of scope entirely — there is no write path.
+`kakao_notification_reply` uses `RemoteInput` only for an exact currently active KakaoTalk
+notification. It has an independent default-off setting, requires notification-listener access,
+matches a visible label, requires exactly one free-form action, binds confirmation to an opaque
+notification-key digest, and re-resolves the target immediately before execution. A successful
+`PendingIntent.send` means only `reply_requested=true`, never delivery or read.
 
-## The two gates
+Both Tools are `COMMUNICATION`, require explicit confirmation and the Action Ledger, and re-check
+their execution interlocks. Kotlin renders completed/refused write terminal answers directly from
+the trusted receipt; it does not ask the model to restate the outcome. Unknown outcomes remain
+owner-verification obligations and are never automatically retried. Automated tests do not send a
+real message.
 
-Notification access is one of Android's broadest grants: once given, this app sees **every**
-notification on the device, from every app. Two separate gates narrow that down, and both are
-re-checked by the execution interlock immediately before any read:
+## Capture gates and disable-race contract
 
-1. **System grant** — the user enables notification access in system settings. Revoking it stops
-   the listener entirely.
-2. **App setting** — `notificationCaptureEnabled`, off by default. The listener re-reads it on
-   every post, because the system grant can stay in place long after the user turns capture off.
+Notification access is a broad Android grant, so both gates are required:
 
-The search tool refuses when either gate is closed. That matters for the second one in particular:
-without it, turning capture off would still leave the previously captured store readable.
+1. the system notification-listener grant; and
+2. the app's default-off `notificationCaptureEnabled` setting.
 
-## What is stored
+Package allowlisting and the app setting are checked at write and read time. The search Tool refuses
+when either gate is closed, so disabling capture also makes previously captured rows unreadable.
 
-Only packages on the allowlist (`com.kakao.talk`), and only message-bearing posts:
+Disabling is deliberately stronger than an asynchronous DataStore update:
 
-| Dropped | Why |
+- `requestCaptureEnabled(false)` closes an atomic process gate synchronously before launching the
+  persistence coroutine;
+- listener writes enter `withCaptureBoundary`, which checks that gate before and after acquiring the
+  shared mutex;
+- setting changes and explicit erasure use the same mutex, so a capture write cannot cross them;
+- enable becomes visible only after the latest request is durably stored; and
+- a failed disable leaves the process gate closed until an explicit retry or process restart.
+
+This closes the race where a new notification could otherwise be stored after the owner switched
+capture off but before DataStore finished. Stale enable/disable request tokens cannot overwrite the
+latest request.
+
+## Stored rows
+
+Only `com.kakao.talk` message-bearing posts are eligible. The following are dropped:
+
+| Dropped | Reason |
 |---|---|
-| Any other package | The allowlist is the boundary, applied at capture *and* at read time |
-| Group summaries (`FLAG_GROUP_SUMMARY`) | "새 메시지 3개" carries no message, and would overwrite one |
-| Ongoing/foreground posts | Service state, not conversation |
-| Posts with no usable text | Nothing to store |
+| Any other package | The allowlist is enforced on capture and search |
+| Group summary | Aggregate text is not a message and could overwrite one |
+| Ongoing/foreground post | Service state, not conversation content |
+| Post without usable text | Nothing safe to store |
 
-A sender is recorded **only** when the notification used `MessagingStyle`, where the platform
-states it. KakaoTalk puts the room name in the title for group chats and the sender's name for
-one-to-one chats; guessing between them would attribute messages to the wrong person, so the
-sender is simply left absent instead.
+A sender is stored only when `MessagingStyle` supplies it. The app does not guess whether a title
+is a room or person. Rows use the platform notification key, so updates replace rather than append.
 
-Each row is keyed by the platform notification key, so an updated post replaces its earlier row
-rather than accumulating duplicates.
-
-## Text is treated as hostile
-
-Notification text is written by third parties and later enters a Gemma prompt and a confirmation
-preview. Before storage it has Gemma control-token delimiters replaced with spaces, and ISO
-control characters plus invisible formatting — bidi overrides, line/paragraph separators — removed
-outright. Text that renders differently from what it contains is exactly what a preview must never
-show.
-
-Delimiters become a space rather than being deleted, because deleting them could join two
-fragments into a token that was not in the original.
+Third-party text is hostile input. Before storage, Gemma control-token delimiters are replaced with
+spaces and control/invisible formatting characters are removed. Sanitized content alone may enter
+a prompt or confirmation preview.
 
 ## Bounds and erasure
 
-- Retention in days, from settings (default 14, 1–180).
-- A hard cap of 5,000 rows regardless of age.
-- Capture-triggered maintenance runs at most hourly. Retention is also applied inside every search
-  and when the settings screen resumes to calculate its stored count, so rows that expire while
-  the listener is idle are no longer readable indefinitely.
-- "수집 기록 삭제" erases every captured row without touching the grant, so capture continues.
+- Retention is configurable from 1–180 days, default 14.
+- A hard cap limits the store to 5,000 rows.
+- Capture-triggered pruning is throttled; search and settings counts prune again at their read
+  boundary.
+- **Delete captured records** erases rows under the mutation mutex without changing the listener
+  grant or capture setting.
+- All rows live in `noBackupFilesDir` and are excluded from Android backup and encrypted transfer.
 
-Everything lives in `noBackupFilesDir` and is excluded from cloud backup and device transfer.
+## Commitment proposals
 
-## Verified on API 37
+Notification capture and commitment detection are separate default-off controls. The deterministic
+detector sees only bounded sanitized KakaoTalk text and emits a review-only proposal with a source
+hash. It never creates a calendar event or reminder. Promotion requires the existing owner review,
+time selection, confirmation, execution interlock, and Action Ledger. Original notification text is
+not copied into user-data export. The listener rechecks effective proposal consent at the use
+boundary, so a pending/failed disable cannot create a proposal from an older settings snapshot.
 
-- The service binds: `exported="true"` with the system-only `BIND_NOTIFICATION_LISTENER_SERVICE`
-  permission is what lets `NotificationManagerService` bind it, and nothing else can.
-- A notification posted by another package (`com.android.shell`) with access granted and the
-  service bound was **not** stored.
-- `NotificationPostReaderTest` covers the `MessagingStyle` bundle parsing against real `Bundle`
-  objects, including a wrongly typed `EXTRA_MESSAGES` and entries with no body.
-- `NotificationCaptureSinkTest` covers the settings gate, the allowlist, replacement by key,
-  search including `%`/`_` wildcard escaping, the time window, retention, and erasure.
+## Evidence boundary
 
-The accept path for `com.kakao.talk` itself is covered by the sink tests, not end to end: a test
-cannot post a notification as another package. Real KakaoTalk capture remains a Fold8 check.
+Source tests cover parsing, allowlisting, settings/read gates, replacement, escaped search, bounds,
+retention, erasure, synchronous disable, stale request invalidation, proposal rechecks, and mutex
+serialization. The current rc11 host `releaseGate` passed, and the scoped API 37 AVD suite completed
+without failures. The tree was not installed or tested on a physical device, and no live KakaoTalk
+capture/share/reply run is claimed for it. System permission, listener lifecycle, process
+recreation, and real active-notification behavior remain separately approved acceptance work.

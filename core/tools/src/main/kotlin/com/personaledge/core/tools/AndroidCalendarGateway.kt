@@ -12,9 +12,8 @@ import kotlinx.coroutines.withContext
 /**
  * `CalendarContract` view of whatever calendars are synced onto the device.
  *
- * This adapter operates on calendars already published into the system provider. It does not
- * establish that NAVER Calendar can be published on Android; that provider integration is a
- * separate qualification gate. The app pins the account it may touch through
+ * This adapter operates on calendars already published into the system provider. Provider
+ * identity must be qualified separately; the app pins the one account it may touch through
  * [ScopedCalendarGateway].
  */
 class AndroidCalendarGateway(
@@ -96,7 +95,9 @@ class AndroidCalendarGateway(
                 // form represents a series master that must not be edited as one occurrence.
                 recurring = cursor.getStringOrNull(EVENT_RRULE) != null ||
                     cursor.getStringOrNull(EVENT_RDATE) != null,
-                location = cursor.getStringOrNull(EVENT_LOCATION),
+                // Preserve empty versus SQL NULL so the subsequent provider compare-and-set can
+                // bind the exact nullable column rather than broadening its selection.
+                location = cursor.getRawStringOrNull(EVENT_LOCATION),
             )
         }.firstOrNull()
     }
@@ -122,11 +123,17 @@ class AndroidCalendarGateway(
     }
 
     override suspend fun updateEvent(
-        expectedCalendarId: Long,
-        eventId: Long,
+        expected: CalendarEventMutationSnapshot,
         patch: CalendarEventPatch,
     ): Boolean = withContext(ioDispatcher) {
-        if (patch.isEmpty) return@withContext false
+        if (
+            patch.isEmpty ||
+            expected.eventId <= 0L ||
+            expected.calendarId <= 0L ||
+            expected.recurring
+        ) {
+            return@withContext false
+        }
 
         val values = ContentValues().apply {
             patch.title?.let { value -> put(CalendarContract.Events.TITLE, value) }
@@ -135,13 +142,13 @@ class AndroidCalendarGateway(
             patch.location?.let { value -> put(CalendarContract.Events.EVENT_LOCATION, value) }
         }
 
+        val selection = buildEventCompareAndSetSelection(expected)
         val updated = try {
             contentResolver.update(
                 CalendarContract.Events.CONTENT_URI,
                 values,
-                "${CalendarContract.Events._ID} = ? AND " +
-                    "${CalendarContract.Events.CALENDAR_ID} = ?",
-                arrayOf(eventId.toString(), expectedCalendarId.toString()),
+                selection.clause,
+                selection.arguments.toTypedArray(),
             )
         } catch (failure: SecurityException) {
             throw CalendarAccessException("캘린더 쓰기 권한이 없습니다.", failure)
@@ -149,6 +156,45 @@ class AndroidCalendarGateway(
             throw CalendarAccessException("캘린더가 수정을 거부했습니다.", failure)
         }
         updated == 1
+    }
+
+    private fun buildEventCompareAndSetSelection(
+        expected: CalendarEventMutationSnapshot,
+    ): EventCompareAndSetSelection {
+        val clauses = mutableListOf(
+            "${CalendarContract.Events._ID} = ?",
+            "${CalendarContract.Events.CALENDAR_ID} = ?",
+            "${CalendarContract.Events.DELETED} = 0",
+            "${CalendarContract.Events.DTSTART} = ?",
+            "${CalendarContract.Events.DTEND} = ?",
+            "${CalendarContract.Events.ALL_DAY} = ?",
+            "(${CalendarContract.Events.RRULE} IS NULL OR ${CalendarContract.Events.RRULE} = '')",
+            "(${CalendarContract.Events.RDATE} IS NULL OR ${CalendarContract.Events.RDATE} = '')",
+        )
+        val arguments = mutableListOf(
+            expected.eventId.toString(),
+            expected.calendarId.toString(),
+            expected.startEpochMillis.toString(),
+            expected.endEpochMillis.toString(),
+            if (expected.allDay) "1" else "0",
+        )
+        if (expected.title.isEmpty()) {
+            clauses += "(${CalendarContract.Events.TITLE} = ? OR ${CalendarContract.Events.TITLE} IS NULL)"
+            arguments += ""
+        } else {
+            clauses += "${CalendarContract.Events.TITLE} = ?"
+            arguments += expected.title
+        }
+        if (expected.location == null) {
+            clauses += "${CalendarContract.Events.EVENT_LOCATION} IS NULL"
+        } else {
+            clauses += "${CalendarContract.Events.EVENT_LOCATION} = ?"
+            arguments += expected.location
+        }
+        return EventCompareAndSetSelection(
+            clause = clauses.joinToString(" AND "),
+            arguments = arguments,
+        )
     }
 
     private fun readCalendars(writableOnly: Boolean): List<CalendarAccount> {
@@ -210,6 +256,9 @@ class AndroidCalendarGateway(
     private fun Cursor.getStringOrNull(index: Int): String? =
         if (isNull(index)) null else getString(index)?.takeIf(String::isNotBlank)
 
+    private fun Cursor.getRawStringOrNull(index: Int): String? =
+        if (isNull(index)) null else getString(index)
+
     private fun Cursor.getStringOrEmpty(index: Int): String = getStringOrNull(index).orEmpty()
 
     private companion object {
@@ -269,3 +318,8 @@ class AndroidCalendarGateway(
         const val EVENT_RDATE = 8
     }
 }
+
+private data class EventCompareAndSetSelection(
+    val clause: String,
+    val arguments: List<String>,
+)

@@ -24,3 +24,17 @@ source ./scripts/android-env.sh
 
 Record physical-device CPU/GPU benchmark receipts separately before promoting a backend
 or a replacement model revision.
+
+`model-manifest-qwen3-8b.json` is a separate candidate trust root for the instrumentation-only
+`qwen8bLab` build. It must never replace `model-manifest.json` or share the production model store.
+The candidate binary remains ignored and excluded from every APK; its exact size and SHA-256 must
+be verified independently before a named lab instrumentation run. Current API 37 CPU evidence
+proves text generation and cancellation recovery but fails structured Tool calling, so this
+manifest is reproducibility metadata rather than promotion approval.
+
+Before comparing E4B, an MTP E4B artifact, E2B, or another candidate, validate the fixed synthetic
+Korean corpus and score content-minimal receipts as described in
+[`../docs/MODEL_EVALUATION.md`](../docs/MODEL_EVALUATION.md). The current runtime keeps the 4,096
+context ceiling and selects a 256, 384, or 1,024 native output ceiling per top-level prompt. Do not
+raise context length or replace the pinned artifact from host scores alone; PSS, thermal, battery,
+fold transitions, and cancellation recovery require the physical Fold8.

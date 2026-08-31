@@ -1,0 +1,639 @@
+{
+  "schemaVersion": 1,
+  "capturedOn": "2026-08-30",
+  "purpose": "Reproducible host-only rejection screen for four official around-8B follow-up artifacts",
+  "scope": {
+    "coveredCandidateCount": 4,
+    "coveredCandidates": [
+      "qwen2.5-7b-instruct-q4km",
+      "hermes-3-llama-3.1-8b-q4km",
+      "granite-3.3-8b-instruct-q4km",
+      "exaone-3.5-7.8b-instruct-q4km"
+    ],
+    "priorScreenCandidateCount": 6,
+    "priorScreenNote": "The original six-candidate table remains in docs/MODEL_EVALUATION.md. Only its repeat prediction digests are summarized below; this manifest's full artifact and run objects cover the four follow-up artifacts.",
+    "caseCount": 26,
+    "categoryCount": 23,
+    "evaluationToolSubsetCount": 14,
+    "shippedToolCount": 17,
+    "toolsOutsideThisScreen": [
+      "weather_current",
+      "kakao_share_message",
+      "kakao_notification_reply"
+    ],
+    "automaticToolCalling": false,
+    "deviceTelemetryCoverage": 0,
+    "evidenceBoundary": [
+      "host-only",
+      "GGUF and llama.cpp unless explicitly stated otherwise",
+      "no LiteRT conversion evidence",
+      "no Android execution evidence",
+      "no Fold8 execution evidence",
+      "no model proposal executed a platform Tool"
+    ]
+  },
+  "runtime": {
+    "executable": "/opt/homebrew/bin/llama-server",
+    "executableSha256": "07c17ec087076d582147208beadba5cbe534ae6e5015658e6f4c96d9457232f6",
+    "version": "0.3.0",
+    "build": 10621,
+    "commit": "c1d0e7a00",
+    "architecture": "arm64",
+    "backend": "Metal",
+    "contextTokens": 8192,
+    "parallelSlots": 1,
+    "networkBoundary": "127.0.0.1 only"
+  },
+  "sampling": {
+    "seed": 42,
+    "temperature": 0.1,
+    "topK": 50,
+    "repeatPenalty": 1.1,
+    "maxOutputTokens": 1024,
+    "thinking": "off"
+  },
+  "contract": {
+    "corpusPath": "models/eval/korean-tool-use-v1.jsonl",
+    "corpusFileSha256": "528a2fafc3e995f9ff473ca541c183da105a3c0e7c946fa9f6502f1e19a3c3d9",
+    "corpusCanonicalSha256": "dfd27d52125e956b67579d9a1ea0131dd5ba4e83845382c60b8889e9c9d4fbd4",
+    "generationHarnessPath": "scripts/run-model-eval-harness.py",
+    "generationHarnessCurrentSha256": "c659dc77eb8d999a931d132dcf601d26ab4b06d8643f7497e03a28d519198a9d",
+    "generationHarnessPreAllCallsSha256": "469d827a5ab45bffcb1bd14f8a58074a6cd02137da8b4b59926e164d69c491d0",
+    "preAllCallsPredictions": [
+      "hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42",
+      "hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42-repeat",
+      "qwen2.5-7b-instruct-q4km-8k-native-seed42",
+      "qwen2.5-7b-instruct-q4km-8k-native-seed42-repeat"
+    ],
+    "preAllCallsNote": "These predictions predate the tool_calls prediction field. Their matching audits were supplied to the current scorer so all parsed calls, not only the primary call, contribute to safety metrics.",
+    "scorerPath": "scripts/score-model-eval.py",
+    "scorerSha256": "392f680414fa1bcd825830c631d998be2267a20dc935ac15e8e460e870696305",
+    "scoreReceiptSchemaVersion": 2,
+    "promotionEvidenceNote": "Schema v2 rejects unknown or malformed calls, duplicate expected writes, unreviewed heuristic rows, missing visible-language evidence, disjoint core turn telemetry, and unbound device telemetry.",
+    "gatePath": "scripts/gate-model-eval.py",
+    "gateSha256": "670501a4a06d601b92eef4c6836a7de874c1ddd8ed05f9e788bcfcc701e07f28",
+    "harnessTestPath": "scripts/test-model-eval-harness.sh",
+    "harnessTestSha256": "4954d9b7c11dbaa945b43a163f1df12b34c55774b2d468d5aeb190197dfefb53",
+    "gateTestPath": "scripts/test-model-eval-gate.sh",
+    "gateTestSha256": "460ccb4aa19385e5db6f3fb4e8b72b53c4b355dd8ebfe4b618b7c5e6649c556b",
+    "validatorPath": "scripts/validate-model-eval-corpus.py",
+    "validatorSha256": "f5ca8412c58eee5dd6c40c79a7605aa59193cfdeea432d473a591da987b56853",
+    "policyPath": "core/llm/src/main/kotlin/com/personaledge/core/llm/LiteRtConversationPolicy.kt",
+    "policySha256": "a2c288e597e14a1460d57a7fc95aa2cb73d6e667289cc89da496c241839468d4",
+    "registryPath": "core/agent/src/main/kotlin/com/personaledge/core/agent/ManualToolRegistry.kt",
+    "registrySha256": "56f9ae76329539c356edb524c260dcce5a79af96df659df8cdb67ed5660c4707",
+    "turnScopePolicyPath": "core/agent/src/main/kotlin/com/personaledge/core/agent/ManualToolAgentController.kt",
+    "turnScopePolicySha256": "77afc86cf970a65d9fa2a94d166a5b219e15686e59188e114dc5f302f956d3a3",
+    "turnScopePolicyTestPath": "core/agent/src/test/kotlin/com/personaledge/core/agent/TurnToolScopePolicyTest.kt",
+    "turnScopePolicyTestSha256": "c258c16c9fed50078a781b13c0fe2389719f8b73eb66321bd52428a1bc576d69"
+  },
+  "priorScreenRepeatObservations": {
+    "boundary": "Prediction JSONL digest observations only. Temporary repeat files are not durable run artifacts; audit timing files are intentionally excluded.",
+    "items": [
+      {
+        "id": "qwen3-8b-q4km-8k-seed42",
+        "firstPath": "reports/eval/qwen3-8b-q4km-8k-seed42.jsonl",
+        "firstSha256": "ecdcf96d323dba73546e1742cdb5f094cb1930c3c25377ced49415563276b2df",
+        "repeatPathAtObservation": "/private/tmp/qwen3-8b-q4km-8k-seed42-repeat.jsonl",
+        "repeatSha256": "ecdcf96d323dba73546e1742cdb5f094cb1930c3c25377ced49415563276b2df",
+        "predictionByteIdentical": true
+      },
+      {
+        "id": "qwen3.5-9b-q4km-8k-seed42",
+        "firstPath": "reports/eval/qwen3.5-9b-q4km-8k-seed42.jsonl",
+        "firstSha256": "51758c3e91cb7b69367814ec20a2fced44ff51ddbbc0a586c4c99d4f6f5e26bf",
+        "repeatPathAtObservation": "/private/tmp/qwen3.5-9b-q4km-8k-seed42-repeat.jsonl",
+        "repeatSha256": "51758c3e91cb7b69367814ec20a2fced44ff51ddbbc0a586c4c99d4f6f5e26bf",
+        "predictionByteIdentical": true
+      },
+      {
+        "id": "ministral-3-8b-instruct-2512-q4km-8k-seed42",
+        "firstPath": "reports/eval/ministral-3-8b-instruct-2512-q4km-8k-seed42.jsonl",
+        "firstSha256": "54fa61c3a142ac21f4983fd8d4803ac58d0e2a11223eb4b2b984c06d9584d233",
+        "repeatPathAtObservation": "/private/tmp/ministral-3-8b-instruct-2512-q4km-8k-seed42-repeat.jsonl",
+        "repeatSha256": "54fa61c3a142ac21f4983fd8d4803ac58d0e2a11223eb4b2b984c06d9584d233",
+        "predictionByteIdentical": true
+      },
+      {
+        "id": "granite-4.2-8b-q4km-8k-seed42",
+        "firstPath": "reports/eval/granite-4.2-8b-q4km-8k-seed42.jsonl",
+        "firstSha256": "786516320931dc100a3c61e0dc8552e331afba6883ef0f2ebe94faba71d42582",
+        "repeatPathAtObservation": "reports/eval/granite-4.2-8b-q4km-8k-seed42-repeat.jsonl",
+        "repeatSha256": "786516320931dc100a3c61e0dc8552e331afba6883ef0f2ebe94faba71d42582",
+        "predictionByteIdentical": true
+      },
+      {
+        "id": "kanana-1.5-8b-instruct-q4km-8k-seed42",
+        "firstPath": "reports/eval/kanana-1.5-8b-instruct-q4km-8k-seed42.jsonl",
+        "firstSha256": "989148f315eefd48c60b79efedfaa2afc6ed6384f4a7e67404cfe7056e77160d",
+        "firstRepeatPathAtObservation": "/private/tmp/kanana-1.5-8b-instruct-q4km-8k-seed42-repeat.jsonl",
+        "firstRepeatSha256": "ae316010cbada9688753683e9ec38665b7abbf411af21901a881089aaa9d1baf",
+        "firstRepeatPredictionByteIdentical": false,
+        "secondRepeatPathAtObservation": "/private/tmp/kanana-1.5-8b-instruct-q4km-8k-seed42-repeat2.jsonl",
+        "secondRepeatSha256": "989148f315eefd48c60b79efedfaa2afc6ed6384f4a7e67404cfe7056e77160d",
+        "secondRepeatPredictionByteIdentical": true
+      },
+      {
+        "id": "lfm2.5-8b-a1b-q4km-8k-seed42",
+        "firstPath": "reports/eval/lfm2.5-8b-a1b-q4km-8k-seed42.jsonl",
+        "firstSha256": "6b62fffd2075985df01110788e7f2cf204a6a624e05992dde0488780ab42f5c3",
+        "repeatPathAtObservation": "/private/tmp/lfm2.5-8b-a1b-q4km-8k-seed42-repeat.jsonl",
+        "repeatSha256": "648d6a9167c6aa82e8d46e1f7e083add1d0e44578afba86c302e3890ecf66d8b",
+        "predictionByteIdentical": false
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "id": "qwen2.5-7b-instruct-q4km",
+      "artifact": {
+        "repository": "Qwen/Qwen2.5-7B-Instruct-GGUF",
+        "repositoryUrl": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF",
+        "revision": "bb5d59e06d9551d752d08b292a50eb208b07ab1f",
+        "upstreamFiles": [
+          {
+            "name": "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf",
+            "sizeBytes": 3993201344,
+            "sha256": "dfce12e3862a5283ccfb88221b48480e58745165de856439950d0f22590580db"
+          },
+          {
+            "name": "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf",
+            "sizeBytes": 689872288,
+            "sha256": "539cf93f78e887edea1c04e2d7d8cdaca9d01dae9c9025bcb8accbe29df3d72a"
+          }
+        ],
+        "derivedFile": {
+          "path": "models/candidates/qwen2.5-7b-instruct-q4_k_m.gguf",
+          "sizeBytes": 4683073536,
+          "sha256": "1875fb29e8c91c86615c00e92d8b4114e56bc24359adb5a8db8b36452fae4a49"
+        },
+        "derivation": {
+          "tool": "llama-gguf-split",
+          "version": "0.3.0",
+          "build": 10621,
+          "commit": "c1d0e7a00",
+          "command": "llama-gguf-split --merge models/candidates/qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf models/candidates/qwen2.5-7b-instruct-q4_k_m.gguf",
+          "inputOrder": [
+            "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf",
+            "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf"
+          ]
+        },
+        "license": "Apache-2.0"
+      },
+      "template": {
+        "mode": "official embedded GGUF Jinja",
+        "serverReportedSupportsTools": true,
+        "serverReportedSupportsToolCalls": true,
+        "serverReportedSupportsParallelToolCalls": true
+      },
+      "serverCommand": "/opt/homebrew/bin/llama-server --model models/candidates/qwen2.5-7b-instruct-q4_k_m.gguf --host 127.0.0.1 --port 8094 --ctx-size 8192 --gpu-layers all --jinja --reasoning off --parallel 1 --no-webui",
+      "authoritativeRun": {
+        "modelLabel": "qwen2.5-7b-instruct-q4km-8k-native-seed42",
+        "toolFormat": "native",
+        "generationHarnessSha256": "469d827a5ab45bffcb1bd14f8a58074a6cd02137da8b4b59926e164d69c491d0",
+        "parsedCallRows": 19,
+        "quality": {
+          "toolSelectionAccuracy": 0.846154,
+          "argumentExactMatch": 0.411765,
+          "dateTimeExactMatch": 0.375,
+          "clarificationAccuracy": 0.923077,
+          "finalStateAccuracy": 0.730769,
+          "responseLanguageAccuracy": 0.444444,
+          "unnecessaryToolCallRate": 0.333333,
+          "stateChangingToolMiscalledRate": 0.076923
+        },
+        "qualityGate": {
+          "passed": false,
+          "violationCount": 10
+        },
+        "toolCallCoverage": {
+          "source": "audit-all-calls",
+          "caseCount": 26,
+          "multiToolCaseCount": 0,
+          "rejectedToolCallCount": 0
+        },
+        "reviewCoverage": {
+          "source": "audit-unreviewed",
+          "requiredCaseCount": 25,
+          "reviewedCaseCount": 0
+        },
+        "languageEvidence": {
+          "eligibleCaseCount": 9,
+          "observedCaseCount": 6
+        },
+        "outputs": {
+          "predictions": {
+            "path": "reports/eval/qwen2.5-7b-instruct-q4km-8k-native-seed42.jsonl",
+            "sha256": "286220ca1fb4afd7e7f4f2f36d1fbbae21f9a5baca0bca44c8fe94d6bb5f092d"
+          },
+          "audit": {
+            "path": "reports/eval/qwen2.5-7b-instruct-q4km-8k-native-seed42.audit.jsonl",
+            "sha256": "4e962264ebe7a09cb0aacd871e1f5785b2a503d47d14bfb53128310f74883828"
+          },
+          "score": {
+            "path": "reports/eval/qwen2.5-7b-instruct-q4km-8k-native-seed42.score.json",
+            "sha256": "5d358f238d42db3da17c8b0a0542420647eb69750879ef472fd7736f1f4fbfeb"
+          },
+          "gate": {
+            "path": "reports/eval/qwen2.5-7b-instruct-q4km-8k-native-seed42.gate.json",
+            "sha256": "665fb299f91f2dc4da425d57d3f088c5ee2ab9439856baf6673fb11c37295335"
+          }
+        },
+        "repeat": {
+          "modelLabel": "qwen2.5-7b-instruct-q4km-8k-native-seed42-repeat",
+          "predictionByteIdentical": true,
+          "outputs": {
+            "predictions": {
+              "path": "reports/eval/qwen2.5-7b-instruct-q4km-8k-native-seed42-repeat.jsonl",
+              "sha256": "286220ca1fb4afd7e7f4f2f36d1fbbae21f9a5baca0bca44c8fe94d6bb5f092d"
+            },
+            "audit": {
+              "path": "reports/eval/qwen2.5-7b-instruct-q4km-8k-native-seed42-repeat.audit.jsonl",
+              "sha256": "ee932928e78ac7751f989bfc857072f46f613e358e458f81c2243f1d583d62c9"
+            },
+            "score": {
+              "path": "reports/eval/qwen2.5-7b-instruct-q4km-8k-native-seed42-repeat.score.json",
+              "sha256": "943a544ce2b4e782d2d4a41f2d1b20957ee866c7c2f503fb4dbbc7f980e19207"
+            },
+            "gate": {
+              "path": "reports/eval/qwen2.5-7b-instruct-q4km-8k-native-seed42-repeat.gate.json",
+              "sha256": "665fb299f91f2dc4da425d57d3f088c5ee2ab9439856baf6673fb11c37295335"
+            }
+          }
+        },
+        "disqualifyingCases": [
+          "memory-secret-01",
+          "memory-temporary-01"
+        ]
+      }
+    },
+    {
+      "id": "hermes-3-llama-3.1-8b-q4km",
+      "artifact": {
+        "repository": "NousResearch/Hermes-3-Llama-3.1-8B-GGUF",
+        "repositoryUrl": "https://huggingface.co/NousResearch/Hermes-3-Llama-3.1-8B-GGUF",
+        "revision": "307a5dfb59aa38d88b6cfd32f44b8ad7c1da9fb8",
+        "file": {
+          "path": "models/candidates/Hermes-3-Llama-3.1-8B.Q4_K_M.gguf",
+          "sizeBytes": 4920733824,
+          "sha256": "d4403ce5a6e930f4c2509456388c20d633a15ff08dd52ef3b142ff1810ec3553"
+        },
+        "license": "Llama 3.1 Community License"
+      },
+      "template": {
+        "mode": "pinned external llama.cpp Jinja",
+        "sourceUrl": "https://raw.githubusercontent.com/ggml-org/llama.cpp/c1d0e7a00/models/templates/NousResearch-Hermes-3-Llama-3.1-8B-tool_use.jinja",
+        "sourceRevision": "c1d0e7a00",
+        "sizeBytes": 5004,
+        "sha256": "7ce09d55d3690e06c70b5c07228cc7e8c99c43a23cdc027762be4011efcdea6c",
+        "serverReportedSupportsTools": true,
+        "serverReportedSupportsToolCalls": true
+      },
+      "serverCommand": "/opt/homebrew/bin/llama-server --model models/candidates/Hermes-3-Llama-3.1-8B.Q4_K_M.gguf --host 127.0.0.1 --port 8093 --ctx-size 8192 --gpu-layers all --jinja --chat-template-file /private/tmp/NousResearch-Hermes-3-Llama-3.1-8B-tool_use.jinja --reasoning off --parallel 1 --no-webui",
+      "authoritativeRun": {
+        "modelLabel": "hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42",
+        "toolFormat": "native",
+        "generationHarnessSha256": "469d827a5ab45bffcb1bd14f8a58074a6cd02137da8b4b59926e164d69c491d0",
+        "parsedCallRows": 22,
+        "quality": {
+          "toolSelectionAccuracy": 0.692308,
+          "argumentExactMatch": 0.411765,
+          "dateTimeExactMatch": 0.25,
+          "clarificationAccuracy": 0.961538,
+          "finalStateAccuracy": 0.730769,
+          "responseLanguageAccuracy": 0.222222,
+          "unnecessaryToolCallRate": 0.666667,
+          "stateChangingToolMiscalledRate": 0.192308
+        },
+        "qualityGate": {
+          "passed": false,
+          "violationCount": 9
+        },
+        "toolCallCoverage": {
+          "source": "audit-all-calls",
+          "caseCount": 26,
+          "multiToolCaseCount": 1,
+          "rejectedToolCallCount": 0
+        },
+        "reviewCoverage": {
+          "source": "audit-unreviewed",
+          "requiredCaseCount": 26,
+          "reviewedCaseCount": 0
+        },
+        "languageEvidence": {
+          "eligibleCaseCount": 9,
+          "observedCaseCount": 3
+        },
+        "outputs": {
+          "predictions": {
+            "path": "reports/eval/hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42.jsonl",
+            "sha256": "9e5623ad7d33e675e4163da2a3a90a93dbc01f4a2edb6595650ec7dbd28f55b0"
+          },
+          "audit": {
+            "path": "reports/eval/hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42.audit.jsonl",
+            "sha256": "fdefbc891418d9651622232d312063e4a08ee2a2d0fc5b0fead947b225b1ed62"
+          },
+          "score": {
+            "path": "reports/eval/hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42-score.json",
+            "sha256": "de76e4c97348adbd0bf419fa740fed37bddf5a2fe93b81a4d9cc32c893a94207"
+          },
+          "gate": {
+            "path": "reports/eval/hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42-gate.json",
+            "sha256": "58912f7cb4d6ed0f90f4c172fa8b8797e669aaff05a69788e09a6d84a63ce0e4"
+          }
+        },
+        "repeat": {
+          "modelLabel": "hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42-repeat",
+          "predictionByteIdentical": true,
+          "outputs": {
+            "predictions": {
+              "path": "reports/eval/hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42-repeat.jsonl",
+              "sha256": "9e5623ad7d33e675e4163da2a3a90a93dbc01f4a2edb6595650ec7dbd28f55b0"
+            },
+            "audit": {
+              "path": "reports/eval/hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42-repeat.audit.jsonl",
+              "sha256": "b6d5256620e3c291a52c5ac24eb77c3a75fa5084f326e4750c2dff97b4b6d3ee"
+            },
+            "score": {
+              "path": "reports/eval/hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42-repeat-score.json",
+              "sha256": "ae800d69708e84093e6ffdbb3f3728205754e76ca1b8646eab4ae135e9cabfb7"
+            },
+            "gate": {
+              "path": "reports/eval/hermes-3-llama-3.1-8b-q4km-8k-llamacpp-tool-use-native-seed42-repeat-gate.json",
+              "sha256": "58912f7cb4d6ed0f90f4c172fa8b8797e669aaff05a69788e09a6d84a63ce0e4"
+            }
+          }
+        },
+        "disqualifyingCases": [
+          "calendar-ambiguous-01",
+          "alarm-date-guard-01",
+          "memory-secret-01",
+          "memory-temporary-01",
+          "confirmation-refused-01"
+        ],
+        "discardedCompatibilityDiagnostics": [
+          "The embedded GGUF template ignored the OpenAI tools field and produced zero valid calls.",
+          "A manual Hermes-style system adapter did not produce strict tagged calls.",
+          "Only the pinned llama.cpp tool-use Jinja native run is authoritative."
+        ]
+      }
+    },
+    {
+      "id": "granite-3.3-8b-instruct-q4km",
+      "artifact": {
+        "repository": "ibm-granite/granite-3.3-8b-instruct-GGUF",
+        "repositoryUrl": "https://huggingface.co/ibm-granite/granite-3.3-8b-instruct-GGUF",
+        "revision": "e40e9dd739c7be00fa965c16ce167088190ce114",
+        "file": {
+          "path": "models/candidates/granite-3.3-8b-instruct-Q4_K_M.gguf",
+          "sizeBytes": 4942873344,
+          "sha256": "77bcee066a76dcdd10d0d123c87e32c8ec2c74e31b6ffd87ebee49c9ac215dca"
+        },
+        "license": "Apache-2.0"
+      },
+      "template": {
+        "mode": "official embedded GGUF Jinja",
+        "serverReportedSupportsTools": true,
+        "serverReportedSupportsToolCalls": false,
+        "serverReportedSupportsParallelToolCalls": false,
+        "serverReportedChatFormat": "Content-only"
+      },
+      "serverCommand": "/opt/homebrew/bin/llama-server --model models/candidates/granite-3.3-8b-instruct-Q4_K_M.gguf --host 127.0.0.1 --port 8095 --ctx-size 8192 --gpu-layers all --jinja --reasoning off --parallel 1 --no-webui",
+      "compatibilityRun": {
+        "modelLabel": "granite-3.3-8b-instruct-q4km-8k-native-seed42",
+        "toolFormat": "native",
+        "generationHarnessSha256": "0ad451bbbf0dd52e598ff5eafa117cc4c5fadc521ebfcba7d2f3a6224d881ff2",
+        "validParsedCallRows": 0,
+        "bareJsonArrayAnswerRows": 4,
+        "quality": {
+          "toolSelectionAccuracy": 0.346154,
+          "argumentExactMatch": 0.0,
+          "dateTimeExactMatch": 0.0,
+          "clarificationAccuracy": 0.923077,
+          "finalStateAccuracy": 0.461538,
+          "responseLanguageAccuracy": 0.888889,
+          "unnecessaryToolCallRate": 0.0,
+          "stateChangingToolMiscalledRate": 0.0
+        },
+        "qualityGate": {
+          "passed": false,
+          "violationCount": 7
+        },
+        "toolCallCoverage": {
+          "source": "audit-all-calls",
+          "caseCount": 26,
+          "multiToolCaseCount": 0,
+          "rejectedToolCallCount": 0
+        },
+        "reviewCoverage": {
+          "source": "audit-unreviewed",
+          "requiredCaseCount": 26,
+          "reviewedCaseCount": 0
+        },
+        "languageEvidence": {
+          "eligibleCaseCount": 9,
+          "observedCaseCount": 9
+        },
+        "outputs": {
+          "predictions": {
+            "path": "reports/eval/granite-3.3-8b-instruct-q4km-8k-native-seed42.jsonl",
+            "sha256": "4addef4d3c2b715730b6b32f672d37fe3878d82d1d102bc89bf57a863c0a5b78"
+          },
+          "audit": {
+            "path": "reports/eval/granite-3.3-8b-instruct-q4km-8k-native-seed42.audit.jsonl",
+            "sha256": "2778275ba9fb6013157615746f76e5590f139adfb88c502d14f56eced391756a"
+          },
+          "score": {
+            "path": "reports/eval/granite-3.3-8b-instruct-q4km-8k-native-seed42.score.json",
+            "sha256": "366381132001603e44343a9828a8bcf7cbf04b469fc5b118fdec7213df1ae659"
+          },
+          "gate": {
+            "path": "reports/eval/granite-3.3-8b-instruct-q4km-8k-native-seed42.gate.json",
+            "sha256": "45e4ef310c934b29db89f0f1b701a1eca27705d25e78004ee59cb294e145ad31"
+          }
+        },
+        "repeat": {
+          "modelLabel": "granite-3.3-8b-instruct-q4km-8k-native-seed42-repeat",
+          "predictionByteIdentical": true,
+          "outputs": {
+            "predictions": {
+              "path": "reports/eval/granite-3.3-8b-instruct-q4km-8k-native-seed42-repeat.jsonl",
+              "sha256": "4addef4d3c2b715730b6b32f672d37fe3878d82d1d102bc89bf57a863c0a5b78"
+            },
+            "audit": {
+              "path": "reports/eval/granite-3.3-8b-instruct-q4km-8k-native-seed42-repeat.audit.jsonl",
+              "sha256": "422fe1b6f973ad72d4d7f3474536b47e8f15cc992c09a3fa66194ffa478d0b39"
+            },
+            "score": {
+              "path": "reports/eval/granite-3.3-8b-instruct-q4km-8k-native-seed42-repeat.score.json",
+              "sha256": "3cd10562938b486a4b133dc905e3d2984fb9ae8146c0fb221834770a80f1f781"
+            },
+            "gate": {
+              "path": "reports/eval/granite-3.3-8b-instruct-q4km-8k-native-seed42-repeat.gate.json",
+              "sha256": "45e4ef310c934b29db89f0f1b701a1eca27705d25e78004ee59cb294e145ad31"
+            }
+          }
+        },
+        "interpretation": "Current llama.cpp path is not compatible with the app's strict structured Tool boundary. Zero parsed writes is not safety evidence."
+      }
+    },
+    {
+      "id": "exaone-3.5-7.8b-instruct-q4km",
+      "artifact": {
+        "repository": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-GGUF",
+        "repositoryUrl": "https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-GGUF",
+        "revision": "c618bf67338171760c72c3f109f2900cb7d79855",
+        "file": {
+          "path": "models/candidates/EXAONE-3.5-7.8B-Instruct-Q4_K_M.gguf",
+          "sizeBytes": 4770649728,
+          "sha256": "2f4aff8d555b82500d4de2723810586e83e358003388fdd08bd52e6091e6ddd1"
+        },
+        "license": "EXAONE AI Model License Agreement 1.1 - NC",
+        "commercialUse": false
+      },
+      "template": {
+        "mode": "official embedded GGUF Jinja",
+        "serverReportedSupportsTools": false,
+        "serverReportedSupportsToolCalls": false
+      },
+      "serverCommand": "/opt/homebrew/bin/llama-server --model models/candidates/EXAONE-3.5-7.8B-Instruct-Q4_K_M.gguf --host 127.0.0.1 --port 8096 --ctx-size 8192 --gpu-layers all --jinja --reasoning off --parallel 1 --no-webui",
+      "defaultCompatibilityRun": {
+        "modelLabel": "exaone-3.5-7.8b-q4km-8k-native-seed42",
+        "toolFormat": "native",
+        "generationHarnessSha256": "0ad451bbbf0dd52e598ff5eafa117cc4c5fadc521ebfcba7d2f3a6224d881ff2",
+        "validParsedCallRows": 0,
+        "quality": {
+          "toolSelectionAccuracy": 0.346154,
+          "argumentExactMatch": 0.0,
+          "dateTimeExactMatch": 0.0,
+          "clarificationAccuracy": 0.807692,
+          "finalStateAccuracy": 0.307692,
+          "responseLanguageAccuracy": 0.888889,
+          "unnecessaryToolCallRate": 0.0,
+          "stateChangingToolMiscalledRate": 0.0
+        },
+        "qualityGate": {
+          "passed": false,
+          "violationCount": 7
+        },
+        "toolCallCoverage": {
+          "source": "audit-all-calls",
+          "caseCount": 26,
+          "multiToolCaseCount": 0,
+          "rejectedToolCallCount": 0
+        },
+        "reviewCoverage": {
+          "source": "audit-unreviewed",
+          "requiredCaseCount": 26,
+          "reviewedCaseCount": 0
+        },
+        "languageEvidence": {
+          "eligibleCaseCount": 9,
+          "observedCaseCount": 9
+        },
+        "outputs": {
+          "predictions": {
+            "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-native-seed42.jsonl",
+            "sha256": "21f17eabda8a87e31560d8ce38c4a43f9f44b84a756f3eba7fb967ed80380114"
+          },
+          "audit": {
+            "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-native-seed42.audit.jsonl",
+            "sha256": "a7a033306f80df1f8f7e1bdf0c841888a1e85e38f1a155eeeafd52f40637555f"
+          },
+          "score": {
+            "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-native-seed42.score.json",
+            "sha256": "a89592f15f1cd5f0adc3a895687ad9513d89c21db06d7f130968bec3a551b9f0"
+          },
+          "gate": {
+            "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-native-seed42.gate.json",
+            "sha256": "0a0a6dc7f5fd7cef40f67196bd8cc168c763ca576893edf8d5fe35992995bf3b"
+          }
+        }
+      },
+      "manualDiagnosticRun": {
+        "modelLabel": "exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42",
+        "toolFormat": "hermes",
+        "generationHarnessSha256": "0ad451bbbf0dd52e598ff5eafa117cc4c5fadc521ebfcba7d2f3a6224d881ff2",
+        "validParsedCallRows": 0,
+        "malformedTaggedCallRows": 1,
+        "quality": {
+          "toolSelectionAccuracy": 0.346154,
+          "argumentExactMatch": 0.0,
+          "dateTimeExactMatch": 0.0,
+          "clarificationAccuracy": 0.961538,
+          "finalStateAccuracy": 0.461538,
+          "responseLanguageAccuracy": 0.777778,
+          "unnecessaryToolCallRate": 0.0,
+          "stateChangingToolMiscalledRate": 0.0
+        },
+        "qualityGate": {
+          "passed": false,
+          "violationCount": 7
+        },
+        "toolCallCoverage": {
+          "source": "audit-all-calls",
+          "caseCount": 26,
+          "multiToolCaseCount": 0,
+          "rejectedToolCallCount": 1
+        },
+        "reviewCoverage": {
+          "source": "audit-unreviewed",
+          "requiredCaseCount": 26,
+          "reviewedCaseCount": 0
+        },
+        "languageEvidence": {
+          "eligibleCaseCount": 9,
+          "observedCaseCount": 9
+        },
+        "outputs": {
+          "predictions": {
+            "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42.jsonl",
+            "sha256": "d22741d6f43be667181b15a66662e8df3215ed4785c0b6285d3c281b43af22e8"
+          },
+          "audit": {
+            "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42.audit.jsonl",
+            "sha256": "b48add5e970483ed5f4c14784073bf465d15072deb30653ee5db020591c91f1a"
+          },
+          "score": {
+            "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42.score.json",
+            "sha256": "2fb1778b1527f8ef594c73d93269eb709f1c33c6b9734155e189d54cda352419"
+          },
+          "gate": {
+            "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42.gate.json",
+            "sha256": "7ba9959bab85afca6afce6141389cb2fce359917f707ff66603ba760a7c75ea2"
+          }
+        },
+        "repeat": {
+          "modelLabel": "exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42-repeat",
+          "predictionByteIdentical": true,
+          "outputs": {
+            "predictions": {
+              "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42-repeat.jsonl",
+              "sha256": "d22741d6f43be667181b15a66662e8df3215ed4785c0b6285d3c281b43af22e8"
+            },
+            "audit": {
+              "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42-repeat.audit.jsonl",
+              "sha256": "44ef4b8d5b8613c0fe1b9cd6717d8af1f45fa1d89d652057b01e69634b1eb36b"
+            },
+            "score": {
+              "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42-repeat.score.json",
+              "sha256": "a14e3e525de0996c185c18038b89d3be52c35c136677527f6a7404fa34321666"
+            },
+            "gate": {
+              "path": "reports/eval/exaone-3.5-7.8b-q4km-8k-manual-hermes-adapter-seed42-repeat.gate.json",
+              "sha256": "7ba9959bab85afca6afce6141389cb2fce359917f707ff66603ba760a7c75ea2"
+            }
+          }
+        },
+        "interpretation": "Diagnostic only. It does not establish native compatibility and zero parsed writes is not safety evidence."
+      }
+    }
+  ],
+  "notEvaluated": [
+    {
+      "id": "c4ai-command-r7b-12-2024",
+      "repositoryUrl": "https://huggingface.co/CohereLabs/c4ai-command-r7b-12-2024",
+      "reason": "Official artifact is access-gated and licensed for noncommercial use; it was not downloaded or scored."
+    }
+  ]
+}

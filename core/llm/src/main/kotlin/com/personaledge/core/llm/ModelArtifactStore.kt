@@ -13,6 +13,7 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.nio.channels.OverlappingFileLockException
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -219,7 +220,7 @@ class ModelArtifactStore private constructor(
     constructor(context: Context) : this(
         context = context,
         manifest = PinnedModelManifest.value,
-        rootName = PRODUCTION_ROOT,
+        rootName = BuildConfig.MODEL_STORE_ROOT,
     )
 
     private val appContext = context.applicationContext
@@ -871,7 +872,7 @@ class ModelArtifactStore private constructor(
     private fun expectedPointer(): String = "${manifest.revision}\n${manifest.sha256}\n"
 
     private fun ByteArray.toHex(): String = joinToString(separator = "") { byte ->
-        "%02x".format(byte)
+        "%02x".format(Locale.ROOT, byte)
     }
 
     private fun safeUnlink(file: File) {
@@ -891,7 +892,6 @@ class ModelArtifactStore private constructor(
     }
 
     companion object {
-        private const val PRODUCTION_ROOT = "personal-edge-models-v1"
         private const val CURRENT_POINTER = "current"
         private const val INSTALLER_LOCK = ".install.lock"
         private const val COPY_BUFFER_SIZE = 1024 * 1024

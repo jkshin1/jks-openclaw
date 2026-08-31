@@ -42,6 +42,36 @@ data class CalendarEventPatch(
         get() = title == null && startEpochMillis == null && endEpochMillis == null && location == null
 }
 
+/**
+ * Effect-bearing provider state that must still match when an approved update is applied.
+ *
+ * [calendarLabel] is deliberately absent because it is display metadata from the calendar table,
+ * not part of the event row being changed. Recurrence is represented as the closed boolean the
+ * tool already validates; the write path only accepts a non-recurring snapshot.
+ */
+data class CalendarEventMutationSnapshot(
+    val eventId: Long,
+    val calendarId: Long,
+    val title: String,
+    val startEpochMillis: Long,
+    val endEpochMillis: Long,
+    val allDay: Boolean,
+    val recurring: Boolean,
+    val location: String?,
+)
+
+fun CalendarEvent.mutationSnapshot(): CalendarEventMutationSnapshot =
+    CalendarEventMutationSnapshot(
+        eventId = eventId,
+        calendarId = calendarId,
+        title = title,
+        startEpochMillis = startEpochMillis,
+        endEpochMillis = endEpochMillis,
+        allDay = allDay,
+        recurring = recurring,
+        location = location,
+    )
+
 /** Common provider operations shared by the scoped Tool view and the raw Android adapter. */
 interface CalendarOperations {
     /** Calendars this app may actually write to. An empty list means creation must be refused. */
@@ -66,7 +96,13 @@ interface CalendarGateway : CalendarOperations {
         limit: Int,
     ): List<CalendarEvent>
 
-    suspend fun updateEvent(eventId: Long, patch: CalendarEventPatch): Boolean
+    /** Legacy entry point is fail-closed; confirmed writes must provide the full expected row. */
+    suspend fun updateEvent(eventId: Long, patch: CalendarEventPatch): Boolean = false
+
+    suspend fun updateEvent(
+        expected: CalendarEventMutationSnapshot,
+        patch: CalendarEventPatch,
+    ): Boolean = false
 }
 
 /**
@@ -83,12 +119,18 @@ interface CalendarProviderGateway : CalendarOperations {
         limit: Int,
     ): List<CalendarEvent>
 
-    /** The provider must enforce both ids in one atomic update selection. */
+    /** Legacy entry point is fail-closed; provider writes require an effect-bearing snapshot. */
     suspend fun updateEvent(
         expectedCalendarId: Long,
         eventId: Long,
         patch: CalendarEventPatch,
-    ): Boolean
+    ): Boolean = false
+
+    /** The provider must compare every expected field in the same selection as the update. */
+    suspend fun updateEvent(
+        expected: CalendarEventMutationSnapshot,
+        patch: CalendarEventPatch,
+    ): Boolean = false
 }
 
 class CalendarAccessException(message: String, cause: Throwable? = null) : Exception(message, cause)

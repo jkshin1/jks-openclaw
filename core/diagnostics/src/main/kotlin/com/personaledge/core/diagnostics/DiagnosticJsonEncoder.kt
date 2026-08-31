@@ -93,6 +93,10 @@ internal object DiagnosticJsonEncoder {
                     .enum("error_code", event.errorCode)
                     .failure(event.failure)
             }
+            is DiagnosticEvent.ContextUnavailable -> {
+                json.string("event", "context_unavailable")
+                    .enum("component", event.component)
+            }
             is DiagnosticEvent.ToolPhase -> {
                 if (!isValidToolChronology(event.stage, event.confirmationOutcome)) return null
                 json.string("event", "tool_phase")

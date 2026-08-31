@@ -26,14 +26,38 @@ class NetworkToolsTest {
     private class FakeSearchGateway(
         var hasCredentials: Boolean = true,
         var hits: List<WebSearchHit> = emptyList(),
+        var provider: WebSearchProvider = WebSearchProvider.YOU_COM,
     ) : WebSearchGateway {
         val queries = mutableListOf<Pair<String, Int>>()
 
         override suspend fun credentialsPresent(): Boolean = hasCredentials
 
-        override suspend fun search(query: String, limit: Int): List<WebSearchHit> {
+        override suspend fun search(query: String, limit: Int): WebSearchResponse {
             queries += query to limit
-            return hits
+            return WebSearchResponse(provider = provider, hits = hits)
+        }
+    }
+
+    private class FakeWeatherGateway : WeatherGateway {
+        val locations = mutableListOf<String>()
+
+        override suspend fun currentAndToday(location: String): WeatherResult {
+            locations += location
+            return WeatherResult(
+                location = location,
+                currentAt = "2026-08-25T14:15",
+                condition = "맑음",
+                temperatureCelsius = "28.0",
+                apparentTemperatureCelsius = "29.0",
+                relativeHumidityPercent = 50,
+                precipitationMillimetres = "0.0",
+                windSpeedKilometresPerHour = "5.0",
+                todayMinimumCelsius = "20.0",
+                todayMaximumCelsius = "30.0",
+                todayPrecipitationProbabilityPercent = 10,
+                sourceName = "Open-Meteo",
+                sourceUrl = "https://open-meteo.com/",
+            )
         }
     }
 
@@ -84,13 +108,15 @@ class NetworkToolsTest {
     fun `a missing map key is reported before any request`() = runBlocking {
         val gateway = FakeRouteGateway(hasCredentials = false)
         val tool = RouteEstimateTool(gateway) { "우리집" }
+        val validation = tool.validateAndCanonicalize(
+            RouteEstimateParams(origin = null, destination = "강남역"),
+        ) as ValidationResult.Invalid
 
         assertEquals(
             "설정에서 네이버 지도 키를 먼저 입력하세요.",
-            tool.validateAndCanonicalize(
-                RouteEstimateParams(origin = null, destination = "강남역"),
-            ).invalidReason(),
+            validation.reason,
         )
+        assertEquals(ToolFailureCode.CREDENTIALS_MISSING, validation.failureCode)
         assertTrue(gateway.calls.isEmpty())
     }
 
@@ -180,55 +206,68 @@ class NetworkToolsTest {
     }
 
     @Test
-    fun `both network tools stay read-only but require confirmation before disclosure`() {
+    fun `owner-enabled read-only network tools do not require per-request confirmation`() {
         listOf(
             RouteEstimateTool(FakeRouteGateway()) { null }.descriptor,
             WebSearchTool(FakeSearchGateway()).descriptor,
+            WeatherTool(FakeWeatherGateway()).descriptor,
         ).forEach { descriptor ->
             assertEquals(descriptor.name, ToolRisk.READ_ONLY, descriptor.risk)
             assertEquals(descriptor.name, setOf(ToolCapability.NETWORK), descriptor.requiredCapabilities)
             assertEquals(
                 descriptor.name,
-                ConfirmationRequirement.UserConfirmation,
+                ConfirmationRequirement.NotRequired,
                 ConfirmationPolicy().evaluate(descriptor.risk, descriptor.minimumConfirmation),
             )
         }
     }
 
     @Test
-    fun `denied route confirmation prevents any NAVER request`() = runBlocking {
+    fun `route lookup executes without invoking the confirmation gate`() = runBlocking {
         val gateway = FakeRouteGateway()
         val tool = RouteEstimateTool(gateway) { null }
-        val orchestrator = denyingNetworkOrchestrator()
+        val orchestrator = confirmationRejectingNetworkOrchestrator()
         val prepared = orchestrator.prepare(
             tool = tool,
             params = RouteEstimateParams(origin = "시청", destination = "강남역"),
             requestId = "route-request",
         ) as PreparationResult.Ready
 
-        assertEquals(ConfirmationRequirement.UserConfirmation, prepared.action.confirmation)
-        assertThrows(IllegalStateException::class.java) {
-            runBlocking { orchestrator.execute(prepared.action) }
-        }
-        assertTrue(gateway.calls.isEmpty())
+        assertEquals(ConfirmationRequirement.NotRequired, prepared.action.confirmation)
+        orchestrator.execute(prepared.action)
+        assertEquals(listOf("시청" to "강남역"), gateway.calls)
     }
 
     @Test
-    fun `denied search confirmation prevents any NAVER request`() = runBlocking {
+    fun `web search executes without invoking the confirmation gate`() = runBlocking {
         val gateway = FakeSearchGateway()
         val tool = WebSearchTool(gateway)
-        val orchestrator = denyingNetworkOrchestrator()
+        val orchestrator = confirmationRejectingNetworkOrchestrator()
         val prepared = orchestrator.prepare(
             tool = tool,
             params = WebSearchParams("치과 추천"),
             requestId = "search-request",
         ) as PreparationResult.Ready
 
-        assertEquals(ConfirmationRequirement.UserConfirmation, prepared.action.confirmation)
-        assertThrows(IllegalStateException::class.java) {
-            runBlocking { orchestrator.execute(prepared.action) }
-        }
-        assertTrue(gateway.queries.isEmpty())
+        assertEquals(ConfirmationRequirement.NotRequired, prepared.action.confirmation)
+        orchestrator.execute(prepared.action)
+        assertEquals(listOf("치과 추천" to WebSearchTool.MAX_HITS), gateway.queries)
+    }
+
+    @Test
+    fun `weather executes without invoking the confirmation gate`() = runBlocking {
+        val gateway = FakeWeatherGateway()
+        val tool = WeatherTool(gateway)
+        val orchestrator = confirmationRejectingNetworkOrchestrator()
+        val prepared = orchestrator.prepare(
+            tool = tool,
+            params = WeatherParams(location = "동탄"),
+            requestId = "weather-request",
+        ) as PreparationResult.Ready
+
+        assertEquals(ConfirmationRequirement.NotRequired, prepared.action.confirmation)
+        orchestrator.execute(prepared.action)
+        assertEquals(listOf("동탄"), gateway.locations)
     }
 
     @Test
@@ -243,13 +282,16 @@ class NetworkToolsTest {
     }
 
     @Test
-    fun `a missing search key is reported before any request`() = runBlocking {
+    fun `no available search provider is reported before any request`() = runBlocking {
         val gateway = FakeSearchGateway(hasCredentials = false)
+        val validation = WebSearchTool(gateway)
+            .validateAndCanonicalize(WebSearchParams("치과")) as ValidationResult.Invalid
 
         assertEquals(
-            "설정에서 네이버 검색 키를 먼저 입력하세요.",
-            WebSearchTool(gateway).validateAndCanonicalize(WebSearchParams("치과")).invalidReason(),
+            "사용 가능한 웹 검색 제공자가 없습니다.",
+            validation.reason,
         )
+        assertEquals(ToolFailureCode.CREDENTIALS_MISSING, validation.failureCode)
         assertTrue(gateway.queries.isEmpty())
     }
 
@@ -278,12 +320,27 @@ class NetworkToolsTest {
         val result = tool.execute(input, ExecutionPermit("action"))
 
         assertEquals(1, result.hits.size)
+        assertEquals(WebSearchProvider.YOU_COM, result.provider)
         assertEquals("https://example.com/a", result.hits.single().link)
     }
 
-    private fun denyingNetworkOrchestrator(): ToolOrchestrator = ToolOrchestrator(
+    @Test
+    fun `search preview discloses primary and possible fallback provider`() = runBlocking {
+        val tool = WebSearchTool(FakeSearchGateway())
+        val input = tool.validateAndCanonicalize(WebSearchParams("치과")).valid()
+
+        val preview = tool.preview(input)
+
+        assertTrue(preview.summary.contains("You.com"))
+        assertTrue(preview.summary.contains("Tavily"))
+        assertTrue(preview.summary.contains("필요하면"))
+    }
+
+    private fun confirmationRejectingNetworkOrchestrator(): ToolOrchestrator = ToolOrchestrator(
         actionLedger = ActionLedger { true },
-        userConfirmationGate = UserConfirmationGate { false },
+        userConfirmationGate = UserConfirmationGate {
+            error("Read-only network tools must not open the confirmation gate.")
+        },
         executionInterlock = ExecutionInterlock { InterlockDecision.Allow },
         clock = { 1_000L },
     )

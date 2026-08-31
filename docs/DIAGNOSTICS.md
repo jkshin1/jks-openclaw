@@ -27,14 +27,39 @@ The allowlisted records include:
 - process/session start and the previous process exit classification;
 - model inspect/import result, duration, expected artifact size, and typed failure code;
 - requested/active inference backend and initialization duration;
-- prompt byte count, time-to-first-token, turn duration, and output chunk/byte counts;
-- closed-allowlist Tool confirmation stage/outcome and risk classification for all eight shipped
+- prompt byte count, time-to-first-displayed-token, turn duration, and final-answer chunk/byte
+  counts; a displayed thought token may establish TTFT, but thought text and its byte count remain
+  outside diagnostics;
+- closed-allowlist Tool confirmation stage/outcome and risk classification for all seventeen working-tree
   device Tools;
+- closed, content-free provider/transport failure codes for network Tools, such as authentication,
+  permission, quota/API-selection, rate, no-result, timeout, and malformed-response categories;
 - PSS, Java heap usage, and Android thermal status;
 - typed thermal status transitions, pre-turn rejection, and cancellation-request timing.
 
 Exceptions are reduced to the exception class and a SHA-256 stack fingerprint. Exception
-messages and stack text are not stored.
+messages and stack text are not stored. Network failure codes likewise never retain the provider
+body/message, request URL, address, search query, or credential value.
+
+`web_search` carries a closed trusted `YOU_COM` or `TAVILY` provider tag in its Tool result so the
+model can attribute the returned hits. That Tool result is not a diagnostics event. Diagnostics
+retain only the registered `web_search` name, confirmation/execution outcome, and any closed
+failure code; they do not store provider-returned titles, snippets, URLs, query text, Tavily key,
+raw response, or the in-memory You.com circuit state. A provider-specific live receipt therefore
+also needs the explicitly opted-in acceptance assertion described in `NETWORK.md`; a generic
+`executed_success` alone does not identify which provider returned the result.
+
+`weather_current` follows the same content-free boundary. Diagnostics record only the closed Tool
+name, READ_ONLY risk, stage/outcome, timing, and a closed failure code. The requested place,
+geocoded label or coordinates, current/daily values, Open-Meteo response, and source URL are never
+diagnostic fields. The complete app-owned weather answer is built from the validated typed result;
+model-authored weather prose is suppressed, and the rendered answer is not logged.
+
+The 2026-08-23 cover-display acceptance demonstrates the intended pairing. Separate direct tests
+asserted the closed `YOU_COM` and `TAVILY` identities against their live gateways. The full
+real-model approval then recorded only `web_search` requested → approved → `executed_success` →
+completed; the real UI denial recorded requested → denied → `tool_not_executed` and no execution
+stage. Neither sequence stored the fixed public query, returned hits, provider body, URL, or key.
 
 The following values are intentionally absent from the schema:
 
@@ -43,11 +68,16 @@ The following values are intentionally absent from the schema:
 - model path, document URI, device serial, account data, tokens, or credentials;
 - screenshots, microphone/audio, notification contents, calendar contents, or contacts.
 
+Live Kakao acceptance follows the same boundary: the state probe emits only access/capture
+booleans, a total row count, and an all-rows-allowlisted boolean. The real-model search uses an
+impossible-match sentinel, and diagnostics retain only the Tool name, stage, risk, outcome, timing,
+resource, and thermal fields—not the query or any notification field.
+
 There is no diagnostic upload path. The app does request `INTERNET` for the separately gated NAVER
-route/search Tools, but the recorder and exporter never use it. Diagnostics leave app-private
-storage only when the user explicitly chooses a document through Android's Storage Access
-Framework. These files are engineering evidence, not an authorization or tamper-proof security
-audit log; code already executing as the app UID may alter app-private files.
+Maps route and You.com/Tavily search Tools, but the recorder and exporter never use it. Diagnostics
+leave app-private storage only when the user explicitly chooses a document through Android's
+Storage Access Framework. These files are engineering evidence, not an authorization or
+tamper-proof security audit log; code already executing as the app UID may alter app-private files.
 
 ## In-app export, including signed release
 
@@ -63,6 +93,12 @@ It does not itself prove release acceptance: run it on the installed signed APK 
 selected document before claiming that gate. Once saved to a user-selected provider, the exported
 copy is no longer protected by the app's `noBackupFilesDir`; the owner controls its retention and
 sharing. A destination failure may leave a partial document and is reported as a failed export.
+
+On 2026-08-23 the Fold8 signed release exported 74 records / 10,499 bytes after all eight shipped
+Tools completed. Every line parsed, all fields stayed in the closed flat schema, and fixed prompts,
+write labels, addresses, the notification sentinel, and URLs were absent. The retained copy
+SHA-256 is `75097be848a92df4ca2a045e9fb60aeeb81345cf7e06854ac371c7bd7fd9e741`
+beside system receipt `reports/fold8-20260823T100002Z-8daac8ade96e.eT5iBP/manifest.json`.
 
 ## Runtime thermal guard
 
@@ -87,6 +123,13 @@ only the typed status and one of `status_observed`, `runtime_initialization_reje
 `immediate_abort_requested`; it never contains the prompt, output, turn ID, or device temperature.
 The following `turn_cancelled` includes the typed cause and thermal status and is the terminal
 proof that cancellation completed.
+
+The 2026-08-23 Fold8 acceptance reached natural `CRITICAL` with `IsStatusOverride: false`.
+Diagnostics recorded one `cooperative_cancel_requested` followed by one
+`turn_cancelled(cause=thermal, thermal_status=critical)`; no prompt/output content was needed to
+establish the branch. A later cooled active-background run completed at `SEVERE` in 67.615 seconds
+with TTFT 2.076 seconds and a 4.442 GB resource snapshot. Do not force another `CRITICAL` event just
+to reproduce this receipt.
 
 LiteRT-LM 0.16.1 exposes no interruptible engine-initialization API. If the status rises while
 `Engine.initialize()` is inside native code, the owning job is cancelled immediately but native
@@ -141,6 +184,9 @@ other apps and the wider device. None is collected by default. System-authored L
 instead taken from exit history and package dumps. Private JSONL extraction with `run-as` is
 available for a debuggable build; Android normally denies it for a release build. That denial is
 not evidence that release diagnostics are absent; use the in-app export for their private JSONL.
+The collector retains that `run-as` denial as `run-as.txt` and marks the four app-private JSONL
+commands `not_applicable_release` instead of turning the otherwise valid release receipt into a
+false failure.
 A missing diagnostic file is recorded as `not_present`, while an unsafe, oversized, or
 inaccessible output makes the host collection a partial failure.
 
@@ -162,3 +208,9 @@ or deletes device files.
 `adb install -r` with the same application ID and signing key normally preserves the private model
 and diagnostic files. Uninstalling the app or running `pm clear com.personaledge.agent` deletes
 both; neither action belongs in the evidence-collection workflow.
+
+Before a physical release update, run the separate read-only
+`./scripts/preflight-fold8-release-update.sh --serial DEVICE_SERIAL`. It binds the exact local
+release app/test APK identities and signing certificate to the installed `base.apk` before any
+install command is allowed into the procedure. Its PASS is a compatibility precondition, not an
+acceptance result; content-free snapshots are still required before and after the update.

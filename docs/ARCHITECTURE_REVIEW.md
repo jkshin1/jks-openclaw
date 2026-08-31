@@ -1,141 +1,190 @@
 # Architecture review
 
-Reviewed on 2026-08-22 against the current implementation and official Android/LiteRT-LM
-documentation.
+Reconciled on 2026-08-26 against the current `1.0.0-rc11` working tree.
 
 ## Outcome
 
-The core boundary is sound:
-
 ```text
-LLM = judgment
-Kotlin runtime = control
-Tool = execution
+LLM = bounded proposal and language generation
+Kotlin = authority, validation, orchestration, rendering, and persistence
+Tool = typed execution behind current interlocks
 ```
 
-The project began with one secure vertical slice: Compose text input, on-device inference, a fake
-typed tool, Kotlin validation, confirmation, execution, and result reinjection. The shipped closed
-registry now carries eight device Tools across calendar, alarm, notification search, route, and web
-search behind the same durable ledger and execution-time interlock.
+The closed production registry contains seventeen device Tools across calendar, alarms, local
+reminders, notification search/reply, KakaoTalk picker sharing, route, public search, weather,
+approved memory, and review-only proposals. Model output never invokes Android/provider APIs
+directly, and `automaticToolCalling=false` remains mandatory.
 
-## Decisions encoded in this scaffold
+This is a source review. The current rc11 working-tree host `releaseGate` passed on 2026-08-26,
+and scoped API 37 AVD suites completed without failures. The tree has not been installed or tested
+on a physical device. No Fold8, provider-live, migration-preservation, or thermal acceptance is
+inferred from older receipts; provenance truthfully records the working tree as dirty.
 
-1. LiteRT-LM is pinned to `0.16.1`; dynamic dependency versions are not allowed.
-2. `ConversationConfig.automaticToolCalling` is always `false`. Model output is
-   untrusted input and cannot execute tools directly.
-3. Tool contracts are typed and separate validation from execution.
-4. Communication, vehicle control, high-risk actions, and data writes require a
-   confirmation policy. Read-only network Tools also require confirmation because their canonical
-   inputs leave the phone. Confirmation is requested inside the orchestrator and is bound
-   to an immutable canonical input, its digest, preview, and expiry. Execution uses that
-   same snapshot, and expiry is checked again after the confirmation UI returns.
-5. Model files are not committed or bundled in the base APK. They require revision,
-   size, and SHA-256 verification plus resumable/atomic installation.
-6. Accessibility automation is outside the Play-safe MVP. Kakao new-message and Samsung
-   Clock UI automation belong in an explicit sideload-only experimental variant.
-7. The maximum output is 1,024 tokens, not 4,000. The fake-only loop started with two model
-   steps, one Tool call, and a 60-second budget; real calendar work needs a read followed by a
-   write, so the loop now allows two Tool calls across four steps within 120 seconds. Revisit
-   with physical-device latency receipts, not by feel.
-8. Raw model thinking is neither displayed nor persisted.
-9. Side-effecting tools are rejected unless the orchestrator holds the module-owned
-   `PersistentActionLedger` capability. `SqliteActionLedger` now provides it: a dedicated
-   no-backup database, one IMMEDIATE transaction per claim, `synchronous=FULL` so a claim is
-   durable before the side effect, and fail-closed behavior on every fault. Retention and
-   capacity are bounded, and a full ledger refuses rather than evicting a live key. The
-   resulting guarantee is at-most-once.
-10. The trusted Kotlin workflow, never model output, owns the per-turn request ID used to derive
-    idempotency keys. The durable ledger blocks replay of that key across cancellation and process
-    restart. A later user turn has a new request ID and is a new action; the app does not claim
-    semantic deduplication across separately submitted requests.
-11. `LlmRuntime` accepts an opaque `VerifiedInstalledModel`, not a raw path. Model events,
-    Tool calls, cancellation, and Tool responses are typed and bound to one turn ID.
-12. The demonstration Tool is truthfully `READ_ONLY` because it performs no side effect, but its
-    `minimumConfirmation` raises the effective policy to explicit user confirmation. It remains a
-    test fixture and is not registered in the shipped device registry. The latter explicitly maps
-    exactly eight Tools; a ninth model-invented name cannot resolve.
-13. The model package can support up to 32K context, but the first Android runtime budget
-    is 4,096 total input/output tokens. A 32K CPU session reached 10GB RSS and was killed
-    by LMK on the 12GB API 37 test AVD during first decode. Larger 8K/16K/32K budgets stay
-    disabled until peak-memory, latency, and sustained-decode checks pass on the Fold8.
-14. Each top-level request gets a fresh native Conversation. The Tool call and its response remain
-    in that Conversation, with a native token-count guard reserving room for final output.
-    Cross-turn continuity comes from bounded Room state: a sanitized, explicitly quoted summary
-    and newest recent messages share a 2 KiB request envelope with trusted device context.
-15. LiteRT-LM exposes native Tool arguments as a parsed Map, not raw JSON. Exact field,
-    type, nesting, and post-serialization size checks remain enforced, but duplicate-key
-    evidence is already lost at that SDK boundary. Raw duplicate rejection therefore
-    remains an upstream API/qualification gate rather than a production claim.
-16. The fake Tool's trusted result is the minimal `{"simulated":true}` receipt. It never
-    echoes model-controlled arguments into the Gemma Tool-response template, and pinned
-    model control-token delimiters are rejected before confirmation or execution.
-17. Gradle dependencies are locked per module and checksum verified. The LiteRT-LM group
-    resolves only from the dedicated Google repository declaration.
-18. Physical-device diagnostics use a fixed typed schema and bounded private rotation. Prompts,
-    outputs, Tool arguments, confirmation material, paths, URIs, and raw serials cannot enter that
-    schema. A validated chronological SAF export gives signed releases a content-free path without
-    `run-as`. Raw app logcat and bugreports remain explicit sensitive opt-ins rather than default
-    evidence.
-19. An `ExecutionInterlock` is evaluated twice: before the confirmation dialog, so the user is
-    never asked for an impossible action, and again immediately before the durable claim. It
-    re-checks runtime permissions, thermal state, and the pinned calendar, because all three can
-    change while a dialog is on screen. Blocking happens before the claim, so a blocked action
-    stays retryable instead of spending its idempotency key.
-20. Conversations, messages, captured notifications, settings, and third-party credentials live in
-    `core:data` under `noBackupFilesDir` — Room with exported schemas, a Preferences DataStore,
-    and an AndroidKeyStore AES-GCM vault. The action ledger is a separate database, so clearing
-    history can never reopen a replay window.
-21. Calendar tools reach only the one calendar pinned in settings. NAVER Calendar's Open API is
-    create-only, while NAVER officially marks Android CalDAV unsupported. The generic
-    `CalendarContract` adapter is implemented and scoped, but actual NAVER publication and sync
-    are not qualified. Settings expose provider account type and row ID so an email-shaped account
-    name cannot masquerade as provider identity. Recurring-series updates are refused until the
-    confirmation contract can express series-versus-occurrence scope.
-22. Route and web search each have two independent privacy gates: a default-off persistent opt-in
-    re-checked by the interlock, and a per-request confirmation bound to the canonical outbound
-    strings. Credentials are masked, device-bound secrets; the optional default origin is returned
-    to UI as presence only.
-23. Notification retention is a read boundary, not just maintenance. Expired rows are pruned during
-    capture and again before search/settings counts, so an idle listener cannot leave stale content
-    readable beyond the selected window.
+## Control and execution decisions
 
-## Resolved product decisions
+1. Tool names, risks, parameters, preparation, confirmation requirements, and result encoders are
+   typed Kotlin contracts. Unknown names and malformed arguments fail closed.
+2. Every model turn receives `LlmTurnToolScope` derived by `TurnToolScopePolicy`. The scope contains
+   only the minimum domain/intent-specific names. Unclassified prose receives none; ambiguous
+   multi-domain write intent receives no write schema.
+3. A recovery turn receives only its exact ordered read contract, never the broad registry.
+4. Read-only Tools require current consent/permission/interlock but not a per-request confirmation
+   sheet. State-changing and communication Tools require explicit confirmation plus the durable
+   Action Ledger.
+5. Confirmation binds immutable canonical input, digest, exact preview, expiry, Tool/risk,
+   capabilities, request/action/replay identity, and legacy ledger key. Authorization and the final
+   interlock are rechecked immediately before claim.
+6. The action ledger is a separate no-backup SQLite database with an `IMMEDIATE` claim transaction
+   and `synchronous=FULL`. Live claims are not evicted; failure to claim is an execution veto.
+7. Tool and turn IDs are Kotlin-owned. A later user submission is a new action; the app claims
+   at-most-once execution for an identity, not semantic deduplication across separate submissions.
 
-- Distribution: private sideload only, signed with one fixed personal key
-  (see [`RELEASE_AND_BACKUP.md`](RELEASE_AND_BACKUP.md)).
-- Calendar adapter: device `CalendarContract`; whether the official NAVER Calendar is exposed there
-  was checked on the Fold8 and no NAVER-published row was found (see
-  [`CALENDAR.md`](CALENDAR.md)).
-- External providers: NAVER Cloud Maps for route estimates and NAVER Developers for web search,
-  with user-entered Keystore credentials, persistent opt-in, and per-request confirmation.
-- Sensitive stores: no Android backup; explicit local erasure; content-free diagnostics export
-  only. Conversation and notification content has no general export path.
+## Multi-read AgentPlan path
 
-## Remaining acceptance decisions
+The typed `AgentPlan` path is active in the production model loop for completed messages containing
+multiple Tool calls.
 
-- Whether a compatible non-NAVER `CalendarContract` calendar is acceptable, or a new documented
-  NAVER-specific transport should be scoped.
-- Whether and when the owner will enter live NAVER credentials and accept the providers' current
-  handling/retention terms.
-- Offline backup of the existing release key and timing of the destructive debug-to-release
-  migration.
-- Promotion of any larger model context only after CPU/GPU memory, thermal, and latency evidence.
+- A batch contains two to four independent, renderable `READ_ONLY` calls.
+- The bridge resolves only trusted read bindings from the shipped registry.
+- Raw arguments stay turn-ephemeral and are excluded from checkpoints/diagnostics.
+- Kotlin strictly parses each call and preflights the entire batch before any dispatch.
+- The verified plan binds Tool identity, resolved risk/resources, canonical argument digest,
+  objective digest, expiry, and step ordering.
+- Execution is limited to two concurrent reads even when the batch contains four.
+- The execution boundary prepares every step again and requires the same digests, so changed
+  permission, setting, interlock, or Tool behavior fails the whole batch before dispatch.
+- Completion callbacks may arrive out of order; receipts and grounded evidence are ordered by the
+  original step ordinal before UI/persistence.
+- Kotlin renders one bounded grounded answer from typed evidence and closes the pending native
+  model turn without a second decode.
 
-## MVP boundary
+Writes, communication Tools, notification-content search, and any read without a Kotlin evidence
+renderer cannot bind to this multi-read path.
 
-Implemented after the secure vertical slice: web search, route estimate, generic
-`CalendarContract`, standard Android alarm intents, and Kakao notification capture/search. Their
-provider and physical evidence remains separately graded in `PROJECT_STATUS.md`.
+## Grounded and terminal answers
 
-Excluded: Kakao reply/send, Accessibility-driven Kakao send, full Samsung Clock editing,
-Polestar control, always-on voice, multimodal input, and autonomous background workflows.
+Weather, web, calendar, alarm, route, and reminder reads produce Kotlin-owned grounded evidence.
+Freshness requests cannot finish from model prose when no required trusted read completed.
 
-## Acceptance metrics to add
+A trusted completed or definitively refused write receipt is also terminal truth. Kotlin emits the
+Tool-specific completion/refusal answer and does not ask the model to restate it. This prevents a
+second decode from contradicting whether a calendar/reminder/memory/proposal change happened or
+whether KakaoTalk/Clock merely accepted a request. Exceptions that cannot prove the write outcome
+remain unknown and require owner verification.
 
-- cold/warm model load, time to first token, decode tokens/sec;
-- peak resident/GPU memory, thermal state, and battery drain;
-- tool-selection accuracy and valid-argument rate in Korean;
-- zero confirmation bypasses and zero duplicate side effects;
-- the execution-time thermal/permission/account interlock holds on the physical device;
-- cancellation, timeout, process-death, and interrupted-download recovery;
-- folded/unfolded, rotation, multi-window, and background/foreground behavior.
+## Room schema 10 recovery and persistence
+
+The current app database is Room schema 10:
+
+- `turn_outcomes` stores the content-free turn state;
+- `turn_read_executions` stores up to four exact ordered Tool names;
+- `agent_plan_checkpoints` and step rows store only IDs, digests, closed states, ordinals,
+  revisions, and timestamps; and
+- `unresolved_side_effects` stores owner-verification obligations independently of transcript and
+  turn foreign keys.
+
+`turn_outcomes.recovery_source_user_message_ordinal` is a nullable, content-free pointer used only
+for bounded contextual public-search follow-ups. It keeps the follow-up's own unique outcome row
+while recovery resolves the earlier authenticated USER question; schema 9→10 preserves all existing
+rows with a null pointer.
+
+The exact ordered read list, including duplicate Tool names, is copied atomically to a recovery
+successor. Reservation order must match exactly; parallel completion is order-independent only after
+reservation. Recovery always re-runs current consent, parse, preflight, interlock, Tool, and thermal
+checks and never reuses old provider content.
+
+Every side effect is durably armed after authorization/interlock and before ledger claim/execution.
+It is never replayed after an uncertain outcome, and a second side effect is refused while the turn
+already owns one unresolved target. `unresolved_side_effects` has no expiry/FK, so transcript
+deletion or turn TTL cannot erase it. Only a matching definitive refusal or explicit owner check can
+clear it.
+
+One Room transaction commits assistant phase + app Tool receipt + typed Tool outcome. Another
+atomic/idempotent transaction commits the final assistant phase + terminal turn transition.
+Partial transcript/outcome visibility is therefore rejected.
+
+The Tool transaction's durable marker binds turn ID, trusted ordinal, Tool risk, closed outcome,
+Tool name, and exact app receipt text. Exact redelivery is a successful no-op; any conflicting reuse
+of that ordinal fails closed. The ViewModel also admits only an exact Tool/outcome duplicate after
+the durable/UI transition. Derived memory/proposal refresh cannot turn a committed Tool event into
+a replay. The Action Ledger, not this receipt marker, remains the side-effect execution authority.
+
+## UI and lifecycle concurrency
+
+`ConversationMutationGate` is a process-local lease that linearizes restore, new conversation,
+switch, delete, delete-all, recovery resolution, and synchronous turn start. An active-conversation
+mutation cannot race another across UI and Room ownership.
+
+Notification capture uses a separate `NotificationCaptureInterlock`. A disable request closes a
+synchronous atomic gate before DataStore persistence begins. Capture, setting mutation, and erasure
+share a mutex; enable is visible only after durable persistence, and failed disable stays closed.
+
+Route, web/weather, memory, commitment proposals, proactive route planning, and daily brief share a
+general `OwnerConsentInterlock`. Effective consent is always durable state intersected with the
+process gate. Every uncommitted toggle closes that feature immediately; app-scope, per-feature
+serialization lets only the latest request open it after a successful durable enable. Older,
+failed, or cancelled mutations cannot reopen it, and stale coordinator refreshes cannot overwrite
+the effective UI state. Route/search/weather recheck at their high-level gateway and before every
+GET/POST, so a multi-hop call cannot start its next request after consent closes. This does not
+claim cancellation of bytes already sent by an in-flight socket.
+
+WindowManager posture plus usable bounds drive Book/Tabletop/cover/two-pane decisions. Undersized
+windows and invalid/edge/oversized hinges fall back to cover. Confirmation actions remain fixed
+outside the scrolling body, semantics expose roles/live typing/single switch actions, and streaming
+scroll/link work is bounded. Plain-text drop merges with a newline and rejects unsafe or oversized
+content without changing prompt/focus.
+
+## Data, privacy, and provider boundaries
+
+- Conversation content, selected memories/reminders/proposals, notification cache, settings, and
+  credentials live under `noBackupFilesDir`; credentials use Android Keystore AES-GCM.
+- Credential health is fail closed: only a missing encrypted path is `ABSENT`; a present empty,
+  oversized, malformed, permission-untrusted, or undecryptable path is `UNREADABLE` and requires
+  explicit owner repair/re-entry.
+- The Action Ledger remains separate from transcript deletion and encrypted transfer.
+- Encrypted transfer excludes credentials, ledger, notification rows, ordered recovery/checkpoint
+  state, unresolved side effects, provider IDs, model, diagnostics, permission, and consent.
+- Calendar reads use explicitly selected calendars and writes one pinned writable row. An account
+  label is not provider identity.
+- Route/search/weather use default-off consent, closed hosts/methods, bounded deadlines, normalized
+  typed responses, and current execution-time interlocks.
+- `LlmToolCall`, `TrustedToolResponse`, `ModelEvent`, `RuntimeTurnInput`, `RuntimeChunk`, and
+  `AgentEvent` expose redacted metadata-only string representations; incidental logging cannot
+  serialize prompts, streamed deltas, Tool arguments, or provider payloads.
+- Notification capture is a default-off allowlisted local cache, not KakaoTalk history. Sharing and
+  active-notification reply cannot claim delivery/read.
+- Automatic episodic memory, embeddings, autonomous proposal promotion, accessibility automation,
+  arbitrary Kakao recipient automation, visual/audio intake, and always-on workflows remain out of
+  scope.
+
+## Model, thermal, and release limits
+
+LiteRT-LM is pinned and accepts only `VerifiedInstalledModel`. The production context remains 4K;
+8K/16K/32K require memory, thermal, and sustained-decode evidence. Output ceilings are deterministic
+128/256/384/1,024 tokens; an explicit long-form request wins over operational wording without
+loosening Tool, step, deadline, or argument limits.
+
+Thermal headroom remains sampled, but the current owner-requested foreground and background model
+lanes do not shrink a request-derived ceiling or otherwise restrict work through SEVERE. CRITICAL
+cancellation, higher-state aborts, and the fail-closed unknown state remain authoritative. No
+performance improvement is claimed without the exact Fold8 run.
+
+Release source generates a deterministic CycloneDX SBOM and privacy-safe provenance containing
+version, Git/source-state digest, Room schema 10, model/runtime pins, lock digest, SBOM digest, and
+public signing certificate identity. Each exported Room schema filename must be a positive integer
+equal to that file's JSON-internal database version, and the latest validated export must equal the
+`PERSONAL_EDGE_DATABASE_VERSION` compile constant. Missing, malformed, or disagreeing inputs fail
+closed instead of trusting an unvalidated maximum value. `releaseGate` is the required
+host-eligibility gate; it is not an installation or provider receipt.
+
+## Verification and pending acceptance
+
+The source as reviewed passed doctor, 19/19 host-script checks, 587 JVM cases, all module lint tasks,
+signed/minified assembly, and packaged SBOM/provenance/signer verification through root
+`releaseGate`. The scoped app AVD receipt has 112 cases, zero failures, and 26 owner/live skips;
+the Room/data AVD suite passed 82/82. The two owner-approval Samsung Calendar classes were excluded
+from the scoped app run rather than weakening their gates.
+
+Clean-source promotion, owner-approved install/preservation, Fold8 fold/DeX/accessibility/thermal
+checks, provider-live tests, and owner-controlled permission acceptance remain pending. No physical
+device action was performed during this documentation update.

@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-08-30",
+  "claimBoundary": "Isolated API 37 ARM64 emulator CPU evidence only; no physical Fold8 was connected or inspected.",
+  "sourceStateBoundary": "Artifact-bound by the recorded model and APK SHA-256 values; the exact source-tree state is unknown and must not be inferred.",
+  "artifact": {
+    "repository": "litert-community/Qwen3-8B",
+    "revision": "71ff705588319d52d374977eff3da4eee0c0d26e",
+    "fileName": "qwen3_8b_mixed_int4.litertlm",
+    "sizeBytes": 4887412736,
+    "sha256": "cb4e6d0de4bbf6656d177812cf0c6a983967dedd17e7f88e84b901c3a9862a42",
+    "contextTokens": 2048
+  },
+  "runtime": {
+    "litertLmVersion": "0.16.1",
+    "backend": "cpu",
+    "automaticToolCalling": false,
+    "appMaxOutputTokens": 1024
+  },
+  "environment": {
+    "avd": "personal_edge_api37_model",
+    "apiLevel": 37,
+    "abi": "arm64-v8a",
+    "qemu": true,
+    "applicationId": "com.personaledge.agent.qwen3eval",
+    "debugApkSha256": "1bf1d54971d9720c4958123f3d2c53988f49d4e23725fb99c1625e49f9d35da6",
+    "testApkSha256": "b11b03df49ec8b59cf02c148b9cec599dd18e8ecdd95c848eb19285ac758e696"
+  },
+  "runs": [
+    {
+      "id": "korean-calendar-write",
+      "result": "failed_no_confirmable_tool_call",
+      "modelInspectMs": 3566,
+      "runtimeInitMs": 2542,
+      "turnMs": 49054,
+      "deltaCount": 0,
+      "readyPssBytes": 1268812800,
+      "endPssBytes": 9456019456,
+      "diagnosticError": "tool_not_executed",
+      "writeOccurred": false
+    },
+    {
+      "id": "tool-free-1",
+      "result": "completed_nonempty",
+      "modelInspectMs": 5475,
+      "runtimeInitMs": 3215,
+      "turnMs": 22234,
+      "deltaCount": 1,
+      "deltaBytes": 6,
+      "readyPssBytes": 1274928128,
+      "endPssBytes": 8860776448
+    },
+    {
+      "id": "tool-free-2",
+      "result": "completed_exact_mismatch",
+      "modelInspectMs": 4733,
+      "runtimeInitMs": 2548,
+      "turnMs": 22160,
+      "deltaCount": 1,
+      "deltaBytes": 6,
+      "readyPssBytes": 1272470528,
+      "endPssBytes": 8862967808,
+      "expected": "READY",
+      "actual": "Ready."
+    }
+  ],
+  "cache": {
+    "type": "LiteRT XNN CPU cache",
+    "sizeBytes": 4269490248
+  },
+  "excludedSetupRuns": {
+    "count": 2,
+    "reason": "The temporary manifest initially declared maxOutputTokens=256 while the agent requested 1024. Both invalid_prompt failures were corrected before the recorded model runs and are not model-quality evidence."
+  },
+  "cleanup": {
+    "candidatePackages": [
+      "com.personaledge.agent.qwen3eval",
+      "com.personaledge.agent.qwen3eval.test"
+    ],
+    "candidatePackagesRemoved": true,
+    "dataFreeKilobytesBeforeRemoval": 2023508,
+    "dataFreeKilobytesAfterRemoval": 11030984,
+    "hostArtifactRetained": true,
+    "pinnedE4bPackageUntouched": true,
+    "pinnedE4bArtifactSha256AfterRemoval": "0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0"
+  }
+}

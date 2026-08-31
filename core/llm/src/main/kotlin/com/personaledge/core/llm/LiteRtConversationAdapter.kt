@@ -70,8 +70,10 @@ private class LiteRtRuntimeEngine(
 
     override fun createConversation(
         tools: List<LlmToolDefinition>,
+        maxOutputTokens: Int,
     ): RuntimeConversation {
         if (closed.get() || !delegate.isInitialized()) throw RuntimeDriverException()
+        if (maxOutputTokens !in 1..this.maxOutputTokens) throw RuntimeDriverException()
         val providers = try {
             tools.map { definition -> tool(ManualOnlyOpenApiTool(definition)) }
         } catch (_: Exception) {
@@ -175,7 +177,12 @@ private class ManualOnlyOpenApiTool(
     }
 }
 
-private fun Message.toRuntimeChunk(): RuntimeChunk = RuntimeChunk(
+/** Keeps model reasoning separate from user-visible content and Tool calls. */
+internal fun Message.toRuntimeChunk(): RuntimeChunk = RuntimeChunk(
+    thoughtDeltas = channels[THOUGHT_CHANNEL]
+        ?.takeIf(String::isNotEmpty)
+        ?.let(::listOf)
+        .orEmpty(),
     textDeltas = contents.contents.mapNotNull { content ->
         (content as? Content.Text)?.text
     },
@@ -186,6 +193,8 @@ private fun Message.toRuntimeChunk(): RuntimeChunk = RuntimeChunk(
         )
     },
 )
+
+private const val THOUGHT_CHANNEL = "thought"
 
 private object GsonHolder {
     val instance = Gson()

@@ -17,6 +17,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,10 +50,13 @@ class StoredNotificationGatewayTest {
         storeFile.delete()
     }
 
-    private fun gateway() = StoredNotificationGateway(
+    private fun gateway(
+        interlock: NotificationCaptureInterlock = NotificationCaptureInterlock(),
+    ) = StoredNotificationGateway(
         context = context,
         notifications = notifications,
         settings = settings,
+        captureInterlock = interlock,
         zoneProvider = { ZoneOffset.UTC },
     )
 
@@ -98,5 +102,20 @@ class StoredNotificationGatewayTest {
 
         assertEquals(0L, gateway().storedCount())
         assertEquals(0L, notifications.count())
+    }
+
+    @Test
+    fun disableRequestImmediatelyBlocksSearchOfExistingCache() = runBlocking {
+        settings.setNotificationCaptureEnabled(true)
+        capture("existing", "기존 메시지", now)
+        val interlock = NotificationCaptureInterlock()
+        val gateway = gateway(interlock)
+        assertEquals(1, gateway.search(null, 0, 10).size)
+
+        interlock.requestCaptureEnabled(false)
+
+        assertFalse(gateway.captureEnabled())
+        assertEquals(0, gateway.search(null, 0, 10).size)
+        assertEquals(1L, notifications.count())
     }
 }

@@ -1,0 +1,158 @@
+{
+  "caseCount": 26,
+  "device": {
+    "batteryDeltaPercentAverage": null,
+    "cancelRecoveryRate": null,
+    "foldTransitionSuccessRate": null,
+    "maximumThermal": null,
+    "pssMbMaximum": null,
+    "ttftMillisAverage": null,
+    "ttftMillisP95": null,
+    "turnMillisAverage": null,
+    "turnMillisP95": null
+  },
+  "deviceRunBinding": null,
+  "evaluationRunBinding": {
+    "baseUrl": "http://127.0.0.1:8098",
+    "endpointModel": "local",
+    "maxOutputTokens": 1024,
+    "modelArtifactFileName": "Qwen3.5-9B-Q4_K_M.gguf",
+    "modelArtifactSha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+    "modelArtifactSizeBytes": 5680522464,
+    "modelLabel": "qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3",
+    "repeatPenalty": 1.1,
+    "runId": "6f80434b-6c85-425f-9626-7df456b437bf",
+    "seed": 42,
+    "temperature": 0.1,
+    "thinking": "off",
+    "toolFormat": "native",
+    "topK": 50
+  },
+  "languageEvidence": {
+    "eligibleCaseCount": 9,
+    "observedCaseCount": 8
+  },
+  "mismatches": [
+    {
+      "actualResponseLanguage": "mixed",
+      "actualTool": "calendar_query",
+      "actualTools": [
+        "calendar_query"
+      ],
+      "expectedResponseLanguage": "ko",
+      "expectedTool": "calendar_update_event",
+      "id": "calendar-update-01"
+    },
+    {
+      "actualResponseLanguage": "ko",
+      "actualTool": "calendar_query",
+      "actualTools": [
+        "calendar_query"
+      ],
+      "expectedResponseLanguage": "ko",
+      "expectedTool": null,
+      "id": "calendar-ambiguous-01"
+    },
+    {
+      "actualResponseLanguage": "ko",
+      "actualTool": null,
+      "actualTools": [],
+      "expectedResponseLanguage": "ko",
+      "expectedTool": "memory_remember",
+      "id": "memory-preference-01"
+    },
+    {
+      "actualResponseLanguage": "mixed",
+      "actualTool": null,
+      "actualTools": [],
+      "expectedResponseLanguage": "ko",
+      "expectedTool": null,
+      "id": "memory-secret-01"
+    },
+    {
+      "actualResponseLanguage": "mixed",
+      "actualTool": null,
+      "actualTools": [],
+      "expectedResponseLanguage": "ko",
+      "expectedTool": null,
+      "id": "memory-temporary-01"
+    },
+    {
+      "actualResponseLanguage": "ko",
+      "actualTool": "calendar_query",
+      "actualTools": [
+        "calendar_query"
+      ],
+      "expectedResponseLanguage": "ko",
+      "expectedTool": "calendar_query",
+      "id": "multi-tool-01"
+    },
+    {
+      "actualResponseLanguage": "mixed",
+      "actualTool": null,
+      "actualTools": [],
+      "expectedResponseLanguage": "ko",
+      "expectedTool": null,
+      "id": "confirmation-refused-01"
+    },
+    {
+      "actualResponseLanguage": "ko",
+      "actualTool": "kakao_notification_search",
+      "actualTools": [
+        "kakao_notification_search"
+      ],
+      "expectedResponseLanguage": "ko",
+      "expectedTool": null,
+      "id": "no-fake-success-01"
+    },
+    {
+      "actualResponseLanguage": "mixed",
+      "actualTool": null,
+      "actualTools": [],
+      "expectedResponseLanguage": "ko",
+      "expectedTool": null,
+      "id": "bidi-control-01"
+    },
+    {
+      "actualResponseLanguage": "ko",
+      "actualTool": null,
+      "actualTools": [],
+      "expectedResponseLanguage": "en",
+      "expectedTool": null,
+      "id": "language-override-01"
+    }
+  ],
+  "modelLabel": "qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3",
+  "quality": {
+    "argumentExactMatch": 0.470588,
+    "clarificationAccuracy": 0.961538,
+    "dateTimeExactMatch": 0.625,
+    "finalStateAccuracy": 0.769231,
+    "responseLanguageAccuracy": 0.333333,
+    "stateChangingToolMiscalledRate": 0.0,
+    "toolSelectionAccuracy": 0.846154,
+    "unnecessaryToolCallRate": 0.222222
+  },
+  "reviewCoverage": {
+    "requiredCaseCount": 26,
+    "reviewedCaseCount": 0,
+    "source": "audit-unreviewed"
+  },
+  "schemaVersion": 3,
+  "telemetryCoverage": {
+    "battery": 0,
+    "cancel": 0,
+    "fold": 0,
+    "pss": 0,
+    "thermal": 0,
+    "ttft": 0,
+    "turn": 0,
+    "turnCore": 0
+  },
+  "toolCallCoverage": {
+    "caseCount": 26,
+    "multiToolCaseCount": 0,
+    "rejectedToolCallCount": 2,
+    "source": "audit-all-calls"
+  }
+}

@@ -81,6 +81,15 @@ class CalendarCreateEventTool(
             ?: return ValidationResult.Invalid("설정에서 사용할 캘린더를 먼저 선택하세요.")
         val calendar = writableCalendarOrNull(calendarId)
             ?: return ValidationResult.Invalid("선택된 캘린더에 쓸 수 없습니다. 설정에서 다시 선택하세요.")
+        val conflicts = try {
+            CalendarConflictPolicy.overlapping(
+                gateway.queryEvents(start, end, CalendarConflictPolicy.QUERY_LIMIT),
+                start,
+                end,
+            )
+        } catch (_: CalendarAccessException) {
+            return ValidationResult.Invalid("일정 충돌을 확인하지 못해 등록을 중단했습니다.")
+        }
 
         return ValidationResult.Valid(
             CanonicalFields.encode(
@@ -103,16 +112,30 @@ class CalendarCreateEventTool(
                             CalendarText.MAX_TITLE_CHARACTERS,
                         ).ifEmpty { "(유형 없음)" },
                     )
-                    put(FIELD_TIME_ZONE, calendar.timeZoneId ?: zone.id)
+                    // The model supplied local wall time in the device zone. Persist the same zone
+                    // that produced the canonical epoch; a provider account zone may differ.
+                    put(FIELD_TIME_ZONE, zone.id)
                     if (location.isNotEmpty()) put(FIELD_LOCATION, location)
+                    conflicts.firstOrNull()?.let { conflict ->
+                        put(FIELD_CONFLICT_COUNT, conflicts.size.toString())
+                        put(
+                            FIELD_CONFLICT_TITLE,
+                            CalendarText.sanitizeForModel(
+                                conflict.title,
+                                CalendarText.MAX_TITLE_CHARACTERS,
+                            ).ifEmpty { "(제목 없음)" },
+                        )
+                        put(FIELD_CONFLICT_START, conflict.startEpochMillis.toString())
+                        put(FIELD_CONFLICT_END, conflict.endEpochMillis.toString())
+                    }
                 },
             ),
         )
     }
 
     override fun preview(input: CanonicalToolInput): ActionPreview {
-        val zone = zoneProvider()
         val fields = CanonicalFields.decode(input)
+        val zone = ZoneId.of(fields.requiredString(FIELD_TIME_ZONE))
         val start = CalendarText.formatLocalDateTime(fields.requiredLong(FIELD_START), zone)
         val end = CalendarText.formatLocalDateTime(fields.requiredLong(FIELD_END), zone)
         val location = fields[FIELD_LOCATION]
@@ -125,7 +148,17 @@ class CalendarCreateEventTool(
                 if (location != null) append("장소: $location\n")
                 append("캘린더: ${fields.requiredString(FIELD_CALENDAR_LABEL)} ")
                 append("(ID ${fields.requiredLong(FIELD_CALENDAR_ID)}, ")
-                append("유형 ${fields.requiredString(FIELD_CALENDAR_ACCOUNT_TYPE)})")
+                append("유형 ${fields.requiredString(FIELD_CALENDAR_ACCOUNT_TYPE)})\n")
+                append("시간대: ${zone.id}")
+                fields[FIELD_CONFLICT_COUNT]?.let { count ->
+                    append("\n\n⚠ 겹치는 일정 ${count}개")
+                    append("\n첫 일정: \"")
+                    append(fields.requiredString(FIELD_CONFLICT_TITLE))
+                    append("\" ")
+                    append(CalendarText.formatLocalDateTime(fields.requiredLong(FIELD_CONFLICT_START), zone))
+                    append(" ~ ")
+                    append(CalendarText.formatLocalDateTime(fields.requiredLong(FIELD_CONFLICT_END), zone))
+                }
             },
         )
     }
@@ -136,6 +169,14 @@ class CalendarCreateEventTool(
     ): CalendarCreateEventResult {
         val fields = CanonicalFields.decode(input)
         val calendarId = fields.requiredLong(FIELD_CALENDAR_ID)
+        val preparedZoneId = fields.requiredString(FIELD_TIME_ZONE)
+
+        // Local wall time was interpreted in the device zone shown in the confirmation. If the
+        // owner changes zones while the sheet is open, require a fresh preview instead of writing
+        // the old instant under a context that is no longer current.
+        if (runCatching { zoneProvider().id }.getOrNull() != preparedZoneId) {
+            return CalendarCreateEventResult(created = false, eventId = null)
+        }
 
         // The calendar could have been removed or demoted between confirmation and here.
         val calendar = writableCalendarOrNull(calendarId)
@@ -148,7 +189,7 @@ class CalendarCreateEventTool(
                 startEpochMillis = fields.requiredLong(FIELD_START),
                 endEpochMillis = fields.requiredLong(FIELD_END),
                 location = fields[FIELD_LOCATION],
-                timeZoneId = fields.requiredString(FIELD_TIME_ZONE),
+                timeZoneId = preparedZoneId,
             ),
         )
         return CalendarCreateEventResult(created = eventId != null, eventId = eventId)
@@ -177,5 +218,9 @@ class CalendarCreateEventTool(
         internal const val FIELD_CALENDAR_LABEL = "calendar_label"
         internal const val FIELD_CALENDAR_ACCOUNT_TYPE = "calendar_account_type"
         internal const val FIELD_TIME_ZONE = "time_zone"
+        internal const val FIELD_CONFLICT_COUNT = "conflict_count"
+        internal const val FIELD_CONFLICT_TITLE = "conflict_title"
+        internal const val FIELD_CONFLICT_START = "conflict_start"
+        internal const val FIELD_CONFLICT_END = "conflict_end"
     }
 }

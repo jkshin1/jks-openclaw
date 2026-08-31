@@ -12,7 +12,11 @@ enum class ToolCapability {
     SCHEDULE_ALARM,
     READ_NOTIFICATIONS,
     POST_NOTIFICATIONS,
+    OPEN_KAKAO_SHARE,
+    REPLY_KAKAO_NOTIFICATION,
     NETWORK,
+    WRITE_MEMORY,
+    WRITE_PROPOSALS,
 }
 
 enum class InterlockPhase {

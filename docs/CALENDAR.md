@@ -1,20 +1,28 @@
-# CalendarContract scope and NAVER qualification
+# Samsung Calendar scope and NAVER boundary
 
-## Why the device calendar, not the NAVER API
+## Product choice
 
-NAVER Calendar is the intended calendar. The implemented adapter uses Android
-`CalendarContract`, not NAVER's Open API, because the Open API cannot cover the full requirement:
+On 2026-08-23 the owner chose the standard Samsung Account calendar as the product calendar. The
+app uses Android `CalendarContract`, which covers the required 조회·등록·수정 operations and keeps
+every Tool scoped to one explicitly selected writable row.
+
+The Fold8 exposed two Samsung-backed rows and marked both primary. The accepted choice is the
+single `com.osp.app.signin` Samsung Account row; the separate
+`com.samsung.android.mobileservice` row belongs to Samsung's sharing/Experience service and was
+not selected. The app stores the selected row id and rechecks it immediately before every write.
+
+The NAVER Open API was considered and rejected for this product because it cannot cover the full
+requirement:
 
 > [NAVER Calendar Open API](https://developers.naver.com/docs/login/calendar-api/calendar-api.md)
 > documents exactly one endpoint, `POST https://openapi.naver.com/calendar/createSchedule.json`,
 > described as "캘린더 일정 추가". There is no endpoint for reading, updating, or deleting a
 > schedule.
 
-Create-only covers only one part of 조회·등록·수정 and still needs OAuth and network access.
-The `CalendarContract` tools can perform all three operations on a compatible writable calendar,
-but a supported way to publish a NAVER calendar there has **not** been established. NAVER's
+Create-only covers only one part of 조회·등록·수정 and still needs OAuth and network access. A
+supported way to publish a NAVER calendar through Android has **not** been established. NAVER's
 [official CalDAV help](https://help.naver.com/service/5620/contents/2426?lang=ko) explicitly says
-Android is unsupported. Current emulator tests use a local calendar, not a NAVER account.
+Android is unsupported.
 
 ## What the Fold8 provider check established
 
@@ -25,12 +33,19 @@ Samsung calendars for an owner who used a NAVER address as a Samsung ID. Account
 provider identity, and a write there is not NAVER sync evidence.
 
 The settings UI therefore shows display name, account name, account type, and calendar ID together.
-The supported product claim is generic `CalendarContract` access to the row the owner selected.
-NAVER publication and remote synchronization remain unqualified unless a new documented transport
-is designed and independently accepted.
+The supported product claim is scoped access to the selected Samsung Account calendar, not NAVER
+publication or sync.
+
+On final debug APK `3ed8f782…`, an opt-in Fold8 acceptance first confirmed that the one Samsung
+Account row remained pinned without reading events. A second live round trip created one uniquely
+named test event, found it through the scoped query, updated it, and deleted only the exact
+id/calendar/title tuple it had created. Both cases passed 1/1, and the cleanup assertion confirmed
+the row was gone. An earlier cleanup-URI mistake left
+event id 757 temporarily; a separately gated recovery check re-established its owned title prefix
+and selected calendar before deleting that exact row. No owner event was deleted.
 
 Until a writable calendar is pinned, the calendar tools refuse to run. That is the interlock
-working, not a bug. Pinning alone proves only CalendarContract access, not NAVER identity or sync.
+working, not a bug.
 
 ## The scope boundary
 
@@ -57,7 +72,9 @@ or modify anything outside the calendar the user pinned.
 
 Times are local wall clock (`2026-08-21T14:30`), never an offset the model invented. The device
 zone is applied during validation, and the resulting instant is what the confirmation dialog shows
-and what the write uses. Each turn is prefixed with a trusted line carrying today's date, the
+and what the write uses. The canonical snapshot also binds that zone ID; if the device zone changes
+while a confirmation is open, create/update refuses and requires a fresh preview. Each turn is
+prefixed with a trusted line carrying today's date, the
 device time zone, and the pinned calendar name, so "내일 오후 3시" resolves against the real clock.
 
 Event ids cross the model boundary as decimal strings, both in the tool result and in the update

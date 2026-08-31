@@ -36,16 +36,10 @@ class ConfirmationPolicyTest {
     }
 
     @Test
-    fun `local writes require confirmation by default and can be explicitly relaxed`() {
+    fun `local writes always require confirmation`() {
         assertEquals(
             ConfirmationRequirement.UserConfirmation,
             policy.evaluate(ToolRisk.LOCAL_WRITE),
-        )
-
-        val relaxedPolicy = ConfirmationPolicy(ConfirmationSettings(confirmLocalWrites = false))
-        assertEquals(
-            ConfirmationRequirement.NotRequired,
-            relaxedPolicy.evaluate(ToolRisk.LOCAL_WRITE),
         )
     }
 

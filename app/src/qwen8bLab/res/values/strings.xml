@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Personal Edge Agent · Qwen3 8B Lab</string>
+    <string name="model_display_name">Qwen3 8B · isolated lab</string>
+</resources>

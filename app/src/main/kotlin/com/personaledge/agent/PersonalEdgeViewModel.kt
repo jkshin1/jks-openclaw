@@ -11,12 +11,31 @@ import androidx.lifecycle.viewModelScope
 import com.personaledge.core.agent.AgentEvent
 import com.personaledge.core.agent.AgentFailureCode
 import com.personaledge.core.agent.AgentLoopLimits
+import com.personaledge.core.agent.AgentPlanExecutionBridge
+import com.personaledge.core.agent.DeterministicReadRouter
 import com.personaledge.core.agent.ManualToolAgentController
 import com.personaledge.core.agent.ManualToolRegistry
+import com.personaledge.core.agent.ReminderDateTimeHint
+import com.personaledge.core.agent.SideEffectTurnGate
+import com.personaledge.core.agent.ToolFailureDetail
+import com.personaledge.core.agent.TurnExecutionContract
 import com.personaledge.core.data.AgentSettings
+import com.personaledge.core.data.MemoryCategory
+import com.personaledge.core.data.MemoryEntity
 import com.personaledge.core.data.MessageRole
+import com.personaledge.core.data.TurnOutcomeFailureCode
+import com.personaledge.core.data.TurnRecoverability
+import com.personaledge.core.data.TurnToolCommitOutcome
+import com.personaledge.core.data.EncryptedUserDataArchive
+import com.personaledge.core.data.UserDataArchiveFailure
+import com.personaledge.core.data.UserDataArchiveReadResult
+import com.personaledge.core.data.UserDataImportResult
+import com.personaledge.core.data.UserDataSelection
+import com.personaledge.core.data.UserDataTransferPreview
+import com.personaledge.core.data.takeCodePoints
 import com.personaledge.core.diagnostics.DiagnosticBackend
 import com.personaledge.core.diagnostics.DiagnosticConfirmationOutcome
+import com.personaledge.core.diagnostics.DiagnosticContextComponent
 import com.personaledge.core.diagnostics.DiagnosticErrorCode
 import com.personaledge.core.diagnostics.DiagnosticEvent
 import com.personaledge.core.diagnostics.DiagnosticExportResult
@@ -29,8 +48,10 @@ import com.personaledge.core.diagnostics.DiagnosticTurnCancellationCause
 import com.personaledge.core.llm.InferenceBackend
 import com.personaledge.core.llm.InstalledModelState
 import com.personaledge.core.llm.LiteRtLlmRuntime
+import com.personaledge.core.llm.LlmFailureCode
 import com.personaledge.core.llm.LlmRuntimeException
 import com.personaledge.core.llm.LlmState
+import com.personaledge.core.llm.LlmTurnToolScope
 import com.personaledge.core.llm.MAX_USER_PROMPT_BYTES
 import com.personaledge.core.llm.ModelArtifactStore
 import com.personaledge.core.llm.ModelStoreException
@@ -43,9 +64,18 @@ import com.personaledge.core.tools.CalendarAccount
 import com.personaledge.core.tools.CalendarCreateEventTool
 import com.personaledge.core.tools.CalendarQueryTool
 import com.personaledge.core.tools.CalendarUpdateEventTool
+import com.personaledge.core.tools.CommitmentProposalTool
 import com.personaledge.core.tools.NotificationSearchTool
+import com.personaledge.core.tools.KakaoNotificationReplyTool
+import com.personaledge.core.tools.KakaoShareMessageTool
+import com.personaledge.core.tools.MemoryRememberTool
 import com.personaledge.core.tools.RouteEstimateTool
+import com.personaledge.core.tools.ReminderCancelTool
+import com.personaledge.core.tools.ReminderCreateTool
+import com.personaledge.core.tools.ReminderQueryTool
+import com.personaledge.core.tools.ReminderUpdateTool
 import com.personaledge.core.tools.WebSearchTool
+import com.personaledge.core.tools.WeatherTool
 import com.personaledge.core.tools.ToolOrchestrator
 import com.personaledge.core.tools.ToolExecutionOutcome
 import java.time.Instant
@@ -56,6 +86,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -86,7 +117,69 @@ data class ChatEntry(
     val id: String,
     val role: ChatRole,
     val text: String,
+    val recoveryAction: ChatRecoveryAction? = null,
 )
+
+/**
+ * Live model reasoning for the assistant placeholder that is currently decoding.
+ *
+ * This value exists only in the ViewModel state flow. It is deliberately separate from
+ * [ChatEntry], so it cannot enter Room history, recovery capsules, conversation summaries, or
+ * content-free diagnostics.
+ */
+data class ActiveReasoningUiState(
+    val turnId: TurnId,
+    val assistantEntryId: String,
+    val text: String = "",
+) {
+    override fun toString(): String =
+        "ActiveReasoningUiState(turnId=$turnId, assistantEntryId=<redacted>, text=<redacted>)"
+}
+
+internal object ActiveReasoningUiPolicy {
+    fun start(turnId: TurnId, assistantEntryId: String): ActiveReasoningUiState =
+        ActiveReasoningUiState(turnId = turnId, assistantEntryId = assistantEntryId)
+
+    fun append(
+        current: ActiveReasoningUiState?,
+        activeTurnId: TurnId?,
+        turnId: TurnId,
+        assistantEntryId: String,
+        delta: String,
+    ): ActiveReasoningUiState? = if (
+        delta.isNotEmpty() &&
+        activeTurnId == turnId &&
+        current?.turnId == turnId &&
+        current.assistantEntryId == assistantEntryId
+    ) {
+        current.copy(text = current.text + delta)
+    } else {
+        current
+    }
+
+    fun clear(
+        current: ActiveReasoningUiState?,
+        turnId: TurnId,
+        assistantEntryId: String,
+    ): ActiveReasoningUiState? = if (
+        current?.turnId == turnId && current.assistantEntryId == assistantEntryId
+    ) {
+        null
+    } else {
+        current
+    }
+
+    fun advance(
+        current: ActiveReasoningUiState?,
+        activeTurnId: TurnId?,
+        turnId: TurnId,
+        nextAssistantEntryId: String,
+    ): ActiveReasoningUiState? = if (activeTurnId == turnId) {
+        start(turnId, nextAssistantEntryId)
+    } else {
+        current
+    }
+}
 
 data class CalendarOption(
     val id: Long,
@@ -100,8 +193,8 @@ data class CalendarOption(
  * Which calendar the agent may touch.
  *
  * The list shows calendars published through `CalendarContract`; the user pins one and nothing
- * outside it is read or written. Actual NAVER Calendar publication on Android is a separate,
- * currently unresolved physical-device qualification gate.
+ * outside it is read or written. The Fold8 product selection is the standard Samsung Account
+ * row; provider identity comes from account type, never from an email-shaped account name.
  */
 data class CalendarSetupState(
     val permissionGranted: Boolean = false,
@@ -109,6 +202,7 @@ data class CalendarSetupState(
     val calendars: List<CalendarOption> = emptyList(),
     val pinnedCalendarId: Long? = null,
     val pinnedCalendarLabel: String? = null,
+    val readCalendarIds: Set<Long> = emptySet(),
     val error: String? = null,
 ) {
     val isReady: Boolean
@@ -125,6 +219,7 @@ data class CalendarSetupState(
 data class NotificationSetupState(
     val accessGranted: Boolean = false,
     val captureEnabled: Boolean = false,
+    val replyEnabled: Boolean = false,
     val storedCount: Long = 0,
     val retentionDays: Int = AgentSettings.DEFAULT_NOTIFICATION_RETENTION_DAYS,
 )
@@ -138,19 +233,33 @@ data class CredentialsState(
     val error: String? = null,
 )
 
-/** Presence and consent only; the stored home label itself is never exposed back to UI state. */
-data class NetworkSetupState(
-    val routeLookupEnabled: Boolean = false,
-    val webSearchEnabled: Boolean = false,
-    val defaultOriginConfigured: Boolean = false,
-    val error: String? = null,
-)
-
 data class DiagnosticExportState(
     val inProgress: Boolean = false,
     val message: String? = null,
     val succeeded: Boolean = false,
 )
+
+data class UserDataTransferState(
+    val inProgress: Boolean = false,
+    val exportPreview: UserDataTransferPreview? = null,
+    val importFileSelected: Boolean = false,
+    val importPreview: UserDataTransferPreview? = null,
+    val message: String? = null,
+    val succeeded: Boolean = false,
+)
+
+private sealed interface TrustedTurnContextResult {
+    data class Ready(
+        val text: String,
+        val unavailableComponents: Set<DiagnosticContextComponent>,
+        val recalledMemoryNotices: List<String>,
+    ) : TrustedTurnContextResult
+
+    data class Unavailable(
+        val component: DiagnosticContextComponent,
+        val userMessage: String,
+    ) : TrustedTurnContextResult
+}
 
 data class PersonalEdgeUiState(
     val modelStatus: ModelUiStatus = ModelUiStatus.CHECKING,
@@ -158,8 +267,10 @@ data class PersonalEdgeUiState(
     val statusText: String = "고정 모델을 확인하는 중입니다.",
     val activeBackend: InferenceBackend? = null,
     val prompt: String = "",
+    val promptInputWarning: String? = null,
     val messages: List<ChatEntry> = emptyList(),
     val activeTurnId: TurnId? = null,
+    val activeReasoning: ActiveReasoningUiState? = null,
     val thermalStatus: DiagnosticThermalStatus = DiagnosticThermalStatus.UNKNOWN,
 ) {
     val isBusy: Boolean
@@ -167,8 +278,16 @@ data class PersonalEdgeUiState(
             modelStatus == ModelUiStatus.INITIALIZING || activeTurnId != null
 
     val canSend: Boolean
-        get() = modelStatus == ModelUiStatus.READY && activeTurnId == null && prompt.isNotBlank() &&
-            ThermalTurnPolicy.canStart(thermalStatus)
+        get() {
+            val modelAvailable = modelStatus == ModelUiStatus.READY
+            val deterministicReadAvailable = modelStatus != ModelUiStatus.CHECKING &&
+                modelStatus != ModelUiStatus.IMPORTING &&
+                modelStatus != ModelUiStatus.INITIALIZING &&
+                DeterministicReadRouter.canRunWithoutModel(prompt)
+            return (modelAvailable || deterministicReadAvailable) && activeTurnId == null &&
+                prompt.isNotBlank() && PromptInputPolicy.isAccepted(prompt) &&
+                ThermalTurnPolicy.canStart(thermalStatus)
+        }
 }
 
 class PersonalEdgeViewModel(
@@ -182,6 +301,8 @@ class PersonalEdgeViewModel(
         cpuThreadCount = Runtime.getRuntime().availableProcessors().coerceIn(1, 4),
     )
     private val container = application.appContainer()
+    private val reminderCoordinator = ReminderCoordinator(application, container, viewModelScope)
+    val reminderSetup: StateFlow<ReminderSetupState> = reminderCoordinator.state
     private val registry = ManualToolRegistry.forDeviceTools(
         queryTool = CalendarQueryTool(container.scopedCalendar),
         createEventTool = CalendarCreateEventTool(
@@ -197,6 +318,15 @@ class PersonalEdgeViewModel(
             defaultOrigin = container::defaultOriginLabel,
         ),
         webSearchTool = WebSearchTool(container.webSearch),
+        weatherTool = WeatherTool(container.weather),
+        kakaoShareMessageTool = KakaoShareMessageTool(container.kakaoShareGateway),
+        kakaoNotificationReplyTool = KakaoNotificationReplyTool(container.kakaoReplyGateway),
+        memoryRememberTool = MemoryRememberTool(container.memoryGateway),
+        commitmentProposalTool = CommitmentProposalTool(container.commitmentProposalGateway),
+        reminderCreateTool = ReminderCreateTool(container.reminderGateway),
+        reminderUpdateTool = ReminderUpdateTool(container.reminderGateway),
+        reminderCancelTool = ReminderCancelTool(container.reminderGateway),
+        reminderQueryTool = ReminderQueryTool(container.reminderGateway),
     )
     val confirmationCoordinator = ConfirmationCoordinator(
         diagnostics = diagnostics,
@@ -214,14 +344,63 @@ class PersonalEdgeViewModel(
             alarmGateway = container.alarms,
             notificationGateway = container.notificationGateway,
             networkConsent = { toolName ->
-                NetworkToolConsent.isEnabled(toolName, container.settings.current())
+                NetworkToolConsent.isAllowed(
+                    toolName = toolName,
+                    settings = container.settings.current(),
+                    interlock = container.ownerConsentInterlock,
+                )
             },
+            memoryConsent = {
+                val settings = container.settings.current()
+                container.ownerConsentInterlock.allowed(
+                    OwnerConsentFeature.MEMORY,
+                    settings.memoryEnabled,
+                )
+            },
+            proposalConsent = {
+                val settings = container.settings.current()
+                container.ownerConsentInterlock.allowed(
+                    OwnerConsentFeature.COMMITMENT_PROPOSALS,
+                    settings.commitmentProposalsEnabled,
+                )
+            },
+            kakaoShareAvailable = container.kakaoShareGateway::kakaoTalkAvailable,
+            kakaoReplyEnabled = {
+                container.notificationCaptureInterlock.replyAllowed(
+                    container.settings.current().kakaoNotificationReplyEnabled,
+                )
+            },
+            kakaoReplyAvailable = KakaoNotificationReplyBridge::available,
+            readCalendarIds = container::readCalendarIds,
+            sideEffectingToolsEnabled = BuildConfig.SIDE_EFFECTING_TOOLS_ENABLED,
         ),
+    )
+    private val agentPlanBridge = AgentPlanExecutionBridge(
+        registry = registry,
+        orchestrator = orchestrator,
+        checkpointSink = container.agentPlanCheckpointSink,
+        reconcileInterruptedPlans = {
+            container.agentPlanCheckpoints.closeInterruptedPlans()
+        },
     )
     private val controller = ManualToolAgentController(
         runtime = runtime,
         registry = registry,
         orchestrator = orchestrator,
+        agentPlanBridge = agentPlanBridge,
+        limits = AgentLoopLimits(
+            maxOutputTokens = PinnedModelManifest.value.maxOutputTokens,
+        ),
+        forceExplicitToolScope = BuildConfig.CANDIDATE_MODEL_LAB,
+        sideEffectTurnGate = SideEffectTurnGate { turnId, toolName, trustedRisk ->
+            val recoveryRisk = TurnRecoveryPolicy.validatedToolRisk(toolName, trustedRisk)
+                ?: return@SideEffectTurnGate false
+            container.turnOutcomes.armSideEffect(
+                turnId = turnId.value,
+                toolName = toolName,
+                risk = recoveryRisk,
+            )
+        },
     )
 
     private val _uiState = MutableStateFlow(
@@ -229,7 +408,7 @@ class PersonalEdgeViewModel(
     )
     val uiState: StateFlow<PersonalEdgeUiState> = _uiState.asStateFlow()
 
-    private val history = ChatHistoryCoordinator(container.conversations)
+    private val history = ChatHistoryCoordinator(container.conversations, container.turnOutcomes)
     private val summarizer = ConversationSummarizer(container.conversations)
     private val _chatHistory = MutableStateFlow(ChatHistoryState())
     val chatHistory: StateFlow<ChatHistoryState> = _chatHistory.asStateFlow()
@@ -238,9 +417,11 @@ class PersonalEdgeViewModel(
     private var modelJob: Job? = null
     private var turnJob: Job? = null
     private var summaryJob: Job? = null
+    private val conversationMutationGate = ConversationMutationGate()
     private val unresolvedActionWarningGate = UnresolvedActionWarningGate()
     private val activeThermalInitialization = AtomicReference<ActiveThermalInitialization?>(null)
     private val activeThermalTurn = AtomicReference<ActiveThermalTurn?>(null)
+    private val activeRecoveryResolution = AtomicReference<String?>(null)
     private val thermalDirectiveSubscription: AutoCloseable
 
     init {
@@ -250,6 +431,9 @@ class PersonalEdgeViewModel(
             var lastRecordedStatus: DiagnosticThermalStatus? = null
             fun applyObservation(observation: ThermalObservation) {
                 _uiState.update { it.copy(thermalStatus = observation.status) }
+                if (!PredictiveThermalPolicy.allowBackgroundSummary(observation)) {
+                    BackgroundSummaryPriority.cancelForThermalPolicy(summaryJob)
+                }
                 if (lastRecordedStatus != observation.status) {
                     diagnostics.recordSafely(
                         DiagnosticEvent.ThermalGuard(
@@ -267,10 +451,60 @@ class PersonalEdgeViewModel(
     }
 
     fun updatePrompt(value: String) {
-        if (value.toByteArray(Charsets.UTF_8).size <= MAX_PROMPT_BYTES) {
-            _uiState.update { it.copy(prompt = value) }
+        _uiState.update { state ->
+            val update = PromptInputPolicy.apply(state.prompt, value)
+            state.copy(
+                prompt = update.prompt,
+                promptInputWarning = update.warning,
+            )
         }
     }
+
+    fun refreshReminders() {
+        // Returning from notification or exact-alarm system settings has no ActivityResult
+        // callback. A unique reconciliation request makes the newly granted capability effective
+        // immediately while Room remains the source of truth.
+        container.reminderScheduler.requestReconcile()
+        reminderCoordinator.refresh()
+    }
+
+    fun onReminderNotificationPermissionResult() = reminderCoordinator.onNotificationPermissionResult()
+
+    fun createReminder(
+        title: String,
+        triggerAt: String,
+        exact: Boolean,
+        recurrenceRule: String?,
+        untilCompleted: Boolean,
+    ) = reminderCoordinator.create(title, triggerAt, exact, recurrenceRule, untilCompleted)
+
+    fun completeReminder(id: String, version: Long) = reminderCoordinator.complete(id, version)
+
+    fun snoozeReminder(id: String, version: Long, minutes: Int) =
+        reminderCoordinator.snooze(id, version, minutes)
+
+    fun cancelReminder(id: String, version: Long) = reminderCoordinator.cancel(id, version)
+
+    fun setDailyBriefEnabled(enabled: Boolean) = reminderCoordinator.setDailyBriefEnabled(enabled)
+
+    fun setDailyBriefTime(value: String) = reminderCoordinator.setDailyBriefTime(value)
+
+    fun setProactiveRoutePlanningEnabled(enabled: Boolean) =
+        reminderCoordinator.setProactiveRoutePlanningEnabled(enabled)
+
+    fun setQuietHoursEnabled(enabled: Boolean) = reminderCoordinator.setQuietHoursEnabled(enabled)
+
+    fun setWeekendBriefEnabled(enabled: Boolean) = reminderCoordinator.setWeekendBriefEnabled(enabled)
+
+    fun setCommitmentProposalsEnabled(enabled: Boolean) =
+        reminderCoordinator.setCommitmentProposalsEnabled(enabled)
+
+    fun dismissCommitmentProposal(id: String) = reminderCoordinator.dismissProposal(id)
+
+    fun captureCommitmentInbox(summary: String) = reminderCoordinator.captureInbox(summary)
+
+    fun promoteCommitmentProposal(id: String, triggerAt: String, exact: Boolean) =
+        reminderCoordinator.promoteProposal(id, triggerAt, exact)
 
     fun inspectInstalledModel() {
         if (modelJob?.isActive == true || turnJob?.isActive == true) return
@@ -543,31 +777,43 @@ class PersonalEdgeViewModel(
      * loss. Only stored roles come back; transient status notices are not persisted.
      */
     private fun restoreConversation() {
-        viewModelScope.launch {
+        val mutationLease = conversationMutationGate.tryAcquire() ?: return
+        // The visible conversation is changing, so the previous request may no longer be
+        // on screen. Drop the follow-up carry-over rather than letting a reply in a
+        // different conversation inherit it.
+        controller.clearFollowUpContext()
+        val job = viewModelScope.launch {
             val restored = history.restoreMostRecent()
+            val globalVerificationEntries = unresolvedSideEffectEntriesOrNull()
             val unresolvedWarning = unresolvedActionWarningGate.load {
                 container.actionLedger.unresolvedActionCheck()
             }
+            if (_uiState.value.activeTurnId != null) return@launch
             _chatHistory.update { state ->
                 state.copy(activeConversationId = restored.conversationId)
             }
-            if (restored.entries.isNotEmpty() || unresolvedWarning != null) {
-                _uiState.update { state ->
-                    state.copy(
-                        messages = restored.entries + listOfNotNull(
-                            unresolvedWarning?.let { warning ->
-                                ChatEntry(
-                                    id = UNRESOLVED_ACTION_WARNING_ID,
-                                    role = ChatRole.STATUS,
-                                    text = warning,
-                                )
-                            },
-                        ),
-                    )
-                }
+            _uiState.update { state ->
+                state.copy(
+                    messages = ConversationRecoveryEntryPolicy.mergeGlobalVerification(
+                        restored.entries,
+                        globalVerificationEntries,
+                    ) + listOfNotNull(
+                        unresolvedWarning?.let { warning ->
+                            ChatEntry(
+                                id = UNRESOLVED_ACTION_WARNING_ID,
+                                role = ChatRole.STATUS,
+                                text = warning,
+                            )
+                        },
+                    ),
+                )
             }
         }
+        mutationLease.closeOnCompletion(job)
     }
+
+    private suspend fun unresolvedSideEffectEntriesOrNull(): List<ChatEntry>? =
+        runCatching { history.unresolvedSideEffectEntries() }.getOrNull()
 
     fun openHistory() {
         viewModelScope.launch {
@@ -583,29 +829,110 @@ class PersonalEdgeViewModel(
 
     /** Leaves the stored thread untouched; the next message creates a new one. */
     fun startNewConversation() {
-        if (_uiState.value.activeTurnId != null) return
-        _chatHistory.update { state -> state.copy(activeConversationId = null, visible = false) }
-        _uiState.update { state -> state.copy(messages = emptyList()) }
+        val mutationLease = conversationMutationGate.tryAcquire() ?: return
+        // The visible conversation is changing, so the previous request may no longer be
+        // on screen. Drop the follow-up carry-over rather than letting a reply in a
+        // different conversation inherit it.
+        controller.clearFollowUpContext()
+        if (_uiState.value.activeTurnId != null) {
+            mutationLease.close()
+            return
+        }
+        val job = viewModelScope.launch {
+            if (_uiState.value.activeTurnId != null) return@launch
+            val globalVerificationEntries = unresolvedSideEffectEntriesOrNull()
+            _chatHistory.update { state -> state.copy(activeConversationId = null, visible = false) }
+            _uiState.update { state ->
+                state.copy(
+                    promptInputWarning = null,
+                    messages = ConversationRecoveryEntryPolicy.verificationOnly(
+                        state.messages,
+                        globalVerificationEntries,
+                    ),
+                )
+            }
+        }
+        mutationLease.closeOnCompletion(job)
     }
 
     fun switchConversation(conversationId: String) {
-        if (_uiState.value.activeTurnId != null) return
-        viewModelScope.launch {
-            val restored = history.switchTo(conversationId)
-            _chatHistory.update { state ->
-                state.copy(activeConversationId = restored.conversationId, visible = false)
-            }
-            _uiState.update { state -> state.copy(messages = restored.entries) }
+        val mutationLease = conversationMutationGate.tryAcquire() ?: return
+        // The visible conversation is changing, so the previous request may no longer be
+        // on screen. Drop the follow-up carry-over rather than letting a reply in a
+        // different conversation inherit it.
+        controller.clearFollowUpContext()
+        if (_uiState.value.activeTurnId != null) {
+            mutationLease.close()
+            return
         }
+        val job = viewModelScope.launch {
+            if (_uiState.value.activeTurnId != null) return@launch
+            when (val result = history.switchTo(conversationId)) {
+                is ConversationSwitchResult.Success -> {
+                    val globalVerificationEntries = unresolvedSideEffectEntriesOrNull()
+                    _chatHistory.update { state ->
+                        state.copy(
+                            activeConversationId = result.restored.conversationId,
+                            visible = false,
+                            error = null,
+                        )
+                    }
+                    _uiState.update { state ->
+                        state.copy(
+                            messages = ConversationRecoveryEntryPolicy.mergeGlobalVerification(
+                                result.restored.entries,
+                                globalVerificationEntries,
+                            ),
+                        )
+                    }
+                }
+                ConversationSwitchResult.NotFound -> {
+                    _chatHistory.update { state ->
+                        state.copy(
+                            conversations = history.listConversations(),
+                            error = "대화를 찾을 수 없습니다. 목록을 새로 불러왔습니다.",
+                        )
+                    }
+                }
+                ConversationSwitchResult.StorageUnavailable -> {
+                    _chatHistory.update { state ->
+                        state.copy(error = "대화 저장소를 읽지 못했습니다. 현재 대화를 유지합니다.")
+                    }
+                }
+            }
+        }
+        mutationLease.closeOnCompletion(job)
     }
 
     fun deleteConversation(conversationId: String) {
-        if (_uiState.value.activeTurnId != null) return
-        viewModelScope.launch {
+        val mutationLease = conversationMutationGate.tryAcquire() ?: return
+        // The visible conversation is changing, so the previous request may no longer be
+        // on screen. Drop the follow-up carry-over rather than letting a reply in a
+        // different conversation inherit it.
+        controller.clearFollowUpContext()
+        if (_uiState.value.activeTurnId != null) {
+            mutationLease.close()
+            return
+        }
+        val job = viewModelScope.launch {
+            if (_uiState.value.activeTurnId != null) return@launch
             val deleted = history.delete(conversationId)
             val clearedActive = deleted && _chatHistory.value.activeConversationId == conversationId
-            if (clearedActive) {
-                _uiState.update { state -> state.copy(messages = emptyList()) }
+            val globalVerificationEntries = unresolvedSideEffectEntriesOrNull()
+            _uiState.update { state ->
+                state.copy(
+                    messages = if (clearedActive) {
+                        ConversationRecoveryEntryPolicy.verificationOnly(
+                            state.messages,
+                            globalVerificationEntries,
+                        )
+                    } else {
+                        ConversationRecoveryEntryPolicy.mergeGlobalVerification(
+                            state.messages,
+                            globalVerificationEntries,
+                        )
+                    },
+                )
             }
             _chatHistory.update { state ->
                 state.copy(
@@ -615,6 +942,7 @@ class PersonalEdgeViewModel(
                 )
             }
         }
+        mutationLease.closeOnCompletion(job)
     }
 
     /**
@@ -622,116 +950,367 @@ class PersonalEdgeViewModel(
      * deliberately untouched, so this cannot re-enable an already-executed side effect.
      */
     fun deleteAllConversations() {
-        if (_uiState.value.activeTurnId != null) return
-        viewModelScope.launch {
+        val mutationLease = conversationMutationGate.tryAcquire() ?: return
+        // The visible conversation is changing, so the previous request may no longer be
+        // on screen. Drop the follow-up carry-over rather than letting a reply in a
+        // different conversation inherit it.
+        controller.clearFollowUpContext()
+        if (_uiState.value.activeTurnId != null) {
+            mutationLease.close()
+            return
+        }
+        val job = viewModelScope.launch {
+            if (_uiState.value.activeTurnId != null) return@launch
             val deleted = history.deleteAll()
-            _uiState.update { state -> state.copy(messages = emptyList()) }
+            val globalVerificationEntries = unresolvedSideEffectEntriesOrNull()
+            _uiState.update { state ->
+                state.copy(
+                    messages = if (deleted) {
+                        ConversationRecoveryEntryPolicy.verificationOnly(
+                            state.messages,
+                            globalVerificationEntries,
+                        )
+                    } else {
+                        ConversationRecoveryEntryPolicy.mergeGlobalVerification(
+                            state.messages,
+                            globalVerificationEntries,
+                        )
+                    },
+                )
+            }
             _chatHistory.update { state ->
                 state.copy(
                     conversations = history.listConversations(),
-                    activeConversationId = null,
+                    activeConversationId = if (deleted) null else state.activeConversationId,
                     error = if (deleted) null else "대화 기록을 모두 삭제하지 못했습니다.",
                 )
             }
         }
+        mutationLease.closeOnCompletion(job)
     }
 
-    private val _credentials = MutableStateFlow(CredentialsState())
-    val credentials: StateFlow<CredentialsState> = _credentials.asStateFlow()
-
-    fun refreshCredentials() {
-        viewModelScope.launch {
-            _credentials.value = CredentialsState(statuses = container.credentials.statuses())
-        }
-    }
-
-    /**
-     * Stores one credential. The value is used here and dropped; nothing retains it, and the
-     * rejection reason never contains what the user typed.
-     */
-    fun storeCredential(slot: CredentialSlot, value: String) {
-        viewModelScope.launch {
-            val error = when (val result = container.credentials.store(slot, value)) {
-                CredentialStoreResult.Stored -> null
-                is CredentialStoreResult.Rejected -> result.reason
-            }
-            _credentials.value = CredentialsState(
-                statuses = container.credentials.statuses(),
-                error = error,
+    /** Resolves a durable recovery capsule exactly once. Reads re-enter the normal turn path. */
+    fun resolveTurnRecovery(action: ChatRecoveryAction) {
+        val mutationLease = conversationMutationGate.tryAcquire() ?: return
+        if (
+            _uiState.value.activeTurnId != null ||
+            !ConversationRecoveryEntryPolicy.canResolve(
+                action,
+                _chatHistory.value.activeConversationId,
             )
+        ) {
+            mutationLease.close()
+            return
         }
-    }
-
-    fun deleteCredential(slot: CredentialSlot) {
-        viewModelScope.launch {
-            val deleted = container.credentials.delete(slot)
-            _credentials.value = CredentialsState(
-                statuses = container.credentials.statuses(),
-                error = if (deleted) null else "키를 삭제하지 못했습니다.",
-            )
+        if (!activeRecoveryResolution.compareAndSet(null, action.turnId)) {
+            mutationLease.close()
+            return
         }
-    }
-
-    private val _networkSetup = MutableStateFlow(NetworkSetupState())
-    val networkSetup: StateFlow<NetworkSetupState> = _networkSetup.asStateFlow()
-
-    /** Re-read because DataStore can fail independently and every failure must look like opt-out. */
-    fun refreshNetworkSetup() {
-        viewModelScope.launch { loadNetworkSetup() }
-    }
-
-    fun setRouteLookupEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            val failure = runCatching { container.settings.setRouteLookupEnabled(enabled) }
-                .exceptionOrNull()
-            loadNetworkSetup(if (failure == null) null else "경로 조회 동의를 저장하지 못했습니다.")
-        }
-    }
-
-    fun setWebSearchEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            val failure = runCatching { container.settings.setWebSearchEnabled(enabled) }
-                .exceptionOrNull()
-            loadNetworkSetup(if (failure == null) null else "웹 검색 동의를 저장하지 못했습니다.")
-        }
-    }
-
-    fun storeDefaultOrigin(raw: String) {
-        when (val validation = SettingsTextPolicy.validateDefaultOrigin(raw)) {
-            is SettingsTextValidation.Invalid -> {
-                _networkSetup.update { state -> state.copy(error = validation.reason) }
+        val job = viewModelScope.launch {
+            try {
+                if (
+                    _uiState.value.activeTurnId != null ||
+                    !ConversationRecoveryEntryPolicy.canResolve(
+                        action,
+                        _chatHistory.value.activeConversationId,
+                    )
+                ) {
+                    return@launch
+                }
+                val recovery = history.recoveryRecord(action)
+                if (recovery == null) {
+                    _uiState.update { state ->
+                        state.copy(
+                            messages = state.messages.filterNot { entry ->
+                                entry.id == actionEntryId(action)
+                            },
+                        )
+                    }
+                    addMessage(ChatRole.STATUS, "이 복구 요청은 이미 처리되었거나 만료되었습니다.")
+                    return@launch
+                }
+                when (recovery.recoverability) {
+                    TurnRecoverability.REQUERY_READ -> {
+                        if (action.type != ChatRecoveryType.REQUERY_READ) {
+                            addMessage(ChatRole.STATUS, "복구 상태가 바뀌어 요청을 시작하지 않았습니다.")
+                            return@launch
+                        }
+                        val original = recovery.userRequest.trim()
+                        if (
+                            original.isEmpty() ||
+                            original.toByteArray(Charsets.UTF_8).size >
+                                PromptInputPolicy.MAX_ACCEPTED_BYTES
+                        ) {
+                            addMessage(
+                                ChatRole.STATUS,
+                                "원래 요청을 안전한 입력 범위로 복원할 수 없어 다시 수행하지 않습니다.",
+                            )
+                            return@launch
+                        }
+                        updatePrompt(original)
+                        val started = startPrompt(
+                            readOnlyRecovery = true,
+                            predecessorRecovery = action,
+                            heldConversationMutationLease = mutationLease,
+                        )
+                        if (started) {
+                            addMessage(
+                                ChatRole.STATUS,
+                                "저장된 결과를 재사용하지 않고 원래 읽기 요청을 지금 새로 수행합니다.",
+                            )
+                        } else {
+                            addMessage(
+                                ChatRole.STATUS,
+                                "원래 읽기 요청을 입력창에 불러왔습니다. 모델과 열 상태를 확인한 뒤 다시 선택하세요.",
+                            )
+                        }
+                    }
+                    TurnRecoverability.VERIFY_EXTERNAL_STATE -> {
+                        if (action.type != ChatRecoveryType.VERIFY_EXTERNAL_STATE) {
+                            addMessage(ChatRole.STATUS, "복구 상태가 바뀌어 요청을 닫지 않았습니다.")
+                            return@launch
+                        }
+                        if (history.dismissRecovery(action)) {
+                            _uiState.update { state ->
+                                state.copy(
+                                    messages = state.messages.filterNot { entry ->
+                                        entry.id == actionEntryId(action)
+                                    },
+                                )
+                            }
+                            addMessage(
+                                ChatRole.STATUS,
+                                "외부 상태 확인 완료를 기록했습니다. 동일 작업은 자동 재실행하지 않았습니다.",
+                            )
+                        } else {
+                            addMessage(ChatRole.STATUS, "외부 상태 확인 기록을 닫지 못했습니다.")
+                        }
+                    }
+                    TurnRecoverability.NONE -> {
+                        addMessage(ChatRole.STATUS, "이 요청은 자동 복구 대상이 아닙니다.")
+                    }
+                }
+            } finally {
+                activeRecoveryResolution.compareAndSet(action.turnId, null)
+                mutationLease.close()
             }
-            is SettingsTextValidation.Valid -> viewModelScope.launch {
-                val failure = runCatching {
-                    container.settings.setDefaultOriginLabel(validation.value)
-                }.exceptionOrNull()
-                loadNetworkSetup(
-                    if (failure == null) null else "기본 출발지를 저장하지 못했습니다.",
+        }
+        job.invokeOnCompletion {
+            activeRecoveryResolution.compareAndSet(action.turnId, null)
+            mutationLease.close()
+        }
+    }
+
+    private val credentialCoordinator = CredentialCoordinator(container, viewModelScope)
+    val credentials: StateFlow<CredentialsState> = credentialCoordinator.state
+
+    fun refreshCredentials() = credentialCoordinator.refresh()
+
+    fun storeCredential(slot: CredentialSlot, value: String) =
+        credentialCoordinator.store(slot, value)
+
+    fun deleteCredential(slot: CredentialSlot) = credentialCoordinator.delete(slot)
+
+    private val networkCoordinator = NetworkCoordinator(container, viewModelScope)
+    val networkSetup: StateFlow<NetworkSetupState> = networkCoordinator.state
+
+    fun refreshNetworkSetup() = networkCoordinator.refresh()
+
+    fun setRouteLookupEnabled(enabled: Boolean) = networkCoordinator.setRouteLookupEnabled(enabled)
+
+    fun setWebSearchEnabled(enabled: Boolean) = networkCoordinator.setWebSearchEnabled(enabled)
+
+    fun storeDefaultOrigin(raw: String) = networkCoordinator.storeDefaultOrigin(raw)
+
+    fun deleteDefaultOrigin() = networkCoordinator.deleteDefaultOrigin()
+
+    private val memoryCoordinator = MemoryCoordinator(container, viewModelScope)
+    val memorySetup: StateFlow<MemorySetupState> = memoryCoordinator.state
+
+    fun refreshMemorySetup() = memoryCoordinator.refresh()
+
+    fun setMemoryEnabled(enabled: Boolean) = memoryCoordinator.setEnabled(enabled)
+
+    fun storeMemory(
+        rawContent: String,
+        category: MemoryCategory = MemoryCategory.FACT,
+        rawValidUntil: String? = null,
+    ) = memoryCoordinator.store(rawContent, category, rawValidUntil)
+
+    fun replaceMemory(
+        memoryId: String,
+        rawContent: String,
+        category: MemoryCategory,
+        rawValidUntil: String? = null,
+    ) = memoryCoordinator.replace(memoryId, rawContent, category, rawValidUntil)
+
+    fun reconfirmMemory(memoryId: String) = memoryCoordinator.reconfirm(memoryId)
+
+    fun deleteMemory(memoryId: String) = memoryCoordinator.delete(memoryId)
+
+    fun deleteAllMemories() = memoryCoordinator.deleteAll()
+
+    private val _diagnosticExport = MutableStateFlow(DiagnosticExportState())
+    val diagnosticExport: StateFlow<DiagnosticExportState> = _diagnosticExport.asStateFlow()
+
+    private val _userDataTransfer = MutableStateFlow(UserDataTransferState())
+    val userDataTransfer: StateFlow<UserDataTransferState> = _userDataTransfer.asStateFlow()
+    private var selectedImportArchive: Uri? = null
+
+    fun prepareUserDataExport(selection: UserDataSelection) {
+        if (selection.isEmpty || _userDataTransfer.value.inProgress) return
+        viewModelScope.launch {
+            _userDataTransfer.value = _userDataTransfer.value.copy(inProgress = true, message = null)
+            val prepared = runCatching { transferSnapshot(selection) }.getOrNull()
+            _userDataTransfer.value = if (prepared == null) {
+                UserDataTransferState(message = "내보낼 로컬 데이터를 읽지 못했습니다.")
+            } else {
+                _userDataTransfer.value.copy(
+                    inProgress = false,
+                    exportPreview = EncryptedUserDataArchive.preview(prepared),
+                    message = "포함 항목을 확인한 뒤 암호화 파일을 저장하세요.",
                 )
             }
         }
     }
 
-    fun deleteDefaultOrigin() {
+    fun exportUserData(destination: Uri, selection: UserDataSelection, passphrase: String) {
+        if (selection.isEmpty || _userDataTransfer.value.inProgress) return
         viewModelScope.launch {
-            val failure = runCatching { container.settings.setDefaultOriginLabel(null) }
-                .exceptionOrNull()
-            loadNetworkSetup(if (failure == null) null else "기본 출발지를 삭제하지 못했습니다.")
+            _userDataTransfer.value = _userDataTransfer.value.copy(inProgress = true, message = null)
+            val result = runCatching {
+                val snapshot = transferSnapshot(selection)
+                val archive = withContext(Dispatchers.Default) {
+                    EncryptedUserDataArchive.encrypt(snapshot, passphrase)
+                }
+                try {
+                    getApplication<Application>().contentResolver
+                        .openOutputStream(destination, "wt")
+                        ?.use { output -> output.write(archive); output.flush() }
+                        ?: error("destination unavailable")
+                    archive.size
+                } finally {
+                    archive.fill(0)
+                }
+            }
+            _userDataTransfer.value = if (result.isSuccess) {
+                UserDataTransferState(
+                    exportPreview = _userDataTransfer.value.exportPreview,
+                    message = "선택한 로컬 데이터를 ${result.getOrThrow()}바이트 암호화 파일로 내보냈습니다.",
+                    succeeded = true,
+                )
+            } else {
+                UserDataTransferState(
+                    exportPreview = _userDataTransfer.value.exportPreview,
+                    message = if (!validTransferPassphrase(passphrase)) {
+                        "암호 문구는 제어문자 없이 12자 이상 128자 이하로 입력하세요."
+                    } else {
+                        "선택한 위치에 암호화 백업을 쓰지 못했습니다."
+                    },
+                )
+            }
         }
     }
 
-    private suspend fun loadNetworkSetup(error: String? = null) {
-        val settings = runCatching { container.settings.current() }.getOrNull()
-        _networkSetup.value = NetworkSetupState(
-            routeLookupEnabled = settings?.routeLookupEnabled ?: false,
-            webSearchEnabled = settings?.webSearchEnabled ?: false,
-            defaultOriginConfigured = settings?.defaultOriginLabel != null,
-            error = error ?: if (settings == null) "네트워크 설정을 읽지 못했습니다." else null,
+    fun selectUserDataImport(uri: Uri) {
+        selectedImportArchive = uri
+        _userDataTransfer.value = UserDataTransferState(
+            importFileSelected = true,
+            message = "암호 문구를 입력해 포맷·스키마·무결성을 먼저 확인하세요.",
         )
     }
 
-    private val _diagnosticExport = MutableStateFlow(DiagnosticExportState())
-    val diagnosticExport: StateFlow<DiagnosticExportState> = _diagnosticExport.asStateFlow()
+    fun previewUserDataImport(passphrase: String) {
+        val source = selectedImportArchive ?: return
+        if (_userDataTransfer.value.inProgress) return
+        viewModelScope.launch {
+            _userDataTransfer.value = _userDataTransfer.value.copy(inProgress = true, message = null)
+            val read = readUserDataArchive(source, passphrase)
+            _userDataTransfer.value = when (read) {
+                is UserDataArchiveReadResult.Ready -> UserDataTransferState(
+                    importFileSelected = true,
+                    importPreview = EncryptedUserDataArchive.preview(read.snapshot),
+                    message = "무결성 검증을 통과했습니다. 가져오기는 기존 데이터를 덮어쓰지 않고 병합합니다.",
+                )
+                is UserDataArchiveReadResult.Failed -> UserDataTransferState(
+                    importFileSelected = true,
+                    message = read.failure.userMessage(),
+                )
+            }
+        }
+    }
+
+    fun importUserData(passphrase: String) {
+        val source = selectedImportArchive ?: return
+        if (_userDataTransfer.value.inProgress || _userDataTransfer.value.importPreview == null) return
+        viewModelScope.launch {
+            _userDataTransfer.value = _userDataTransfer.value.copy(inProgress = true, message = null)
+            val read = readUserDataArchive(source, passphrase)
+            val imported = if (read is UserDataArchiveReadResult.Ready) {
+                runCatching { container.userDataTransfer.import(read.snapshot) }.getOrNull()
+            } else {
+                null
+            }
+            if (imported == null) {
+                _userDataTransfer.value = UserDataTransferState(
+                    importFileSelected = true,
+                    importPreview = _userDataTransfer.value.importPreview,
+                    message = if (read is UserDataArchiveReadResult.Failed) {
+                        read.failure.userMessage()
+                    } else {
+                        "검증된 데이터를 로컬 저장소에 병합하지 못했습니다."
+                    },
+                )
+                return@launch
+            }
+            selectedImportArchive = null
+            container.reminderScheduler.requestReconcile()
+            memoryCoordinator.refresh()
+            reminderCoordinator.refresh()
+            _userDataTransfer.value = UserDataTransferState(
+                message = imported.summaryMessage(),
+                succeeded = true,
+            )
+        }
+    }
+
+    private suspend fun transferSnapshot(selection: UserDataSelection) =
+        container.settings.current().let { settings ->
+            container.userDataTransfer.snapshot(
+                selection = selection,
+                calendarRemapRequired = settings.defaultCalendarId != null ||
+                    settings.readCalendarIds.isNotEmpty(),
+                defaultCalendarLabelHint = settings.defaultCalendarLabel,
+            )
+        }
+
+    private suspend fun readUserDataArchive(
+        source: Uri,
+        passphrase: String,
+    ): UserDataArchiveReadResult = withContext(Dispatchers.IO) {
+        val archive = runCatching {
+            getApplication<Application>().contentResolver.openInputStream(source)?.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1_024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    output.write(buffer, 0, count)
+                    if (output.size() > EncryptedUserDataArchive.MAX_ARCHIVE_BYTES) {
+                        throw IllegalArgumentException("archive too large")
+                    }
+                }
+                output.toByteArray()
+            } ?: error("source unavailable")
+        }.getOrNull() ?: return@withContext UserDataArchiveReadResult.Failed(
+            UserDataArchiveFailure.INVALID_FORMAT,
+        )
+        try {
+            EncryptedUserDataArchive.decrypt(archive, passphrase)
+        } finally {
+            archive.fill(0)
+        }
+    }
 
     /** SAF destination export works in both debug and signed release builds; no run-as required. */
     fun exportDiagnostics(destination: Uri) {
@@ -767,142 +1346,115 @@ class PersonalEdgeViewModel(
         }
     }
 
-    private val _notificationSetup = MutableStateFlow(NotificationSetupState())
-    val notificationSetup: StateFlow<NotificationSetupState> = _notificationSetup.asStateFlow()
+    private val notificationCaptureCoordinator =
+        NotificationCaptureCoordinator(container, viewModelScope)
+    val notificationSetup: StateFlow<NotificationSetupState> = notificationCaptureCoordinator.state
 
-    /** Re-read on resume: notification access is granted outside this app and can be revoked there. */
-    fun refreshNotificationSetup() {
-        viewModelScope.launch {
-            val settings = runCatching { container.settings.current() }.getOrNull()
-            _notificationSetup.value = NotificationSetupState(
-                accessGranted = container.notificationGateway.accessGranted(),
-                captureEnabled = settings?.notificationCaptureEnabled ?: false,
-                storedCount = container.notificationGateway.storedCount(),
-                retentionDays = settings?.notificationRetentionDays
-                    ?: AgentSettings.DEFAULT_NOTIFICATION_RETENTION_DAYS,
-            )
-        }
-    }
+    fun refreshNotificationSetup() = notificationCaptureCoordinator.refresh()
 
-    fun setNotificationCaptureEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            runCatching { container.settings.setNotificationCaptureEnabled(enabled) }
-            refreshNotificationSetup()
-        }
-    }
+    fun setNotificationCaptureEnabled(enabled: Boolean) =
+        notificationCaptureCoordinator.setCaptureEnabled(enabled)
 
-    /** Erases captured messages without touching the grant, so capture can continue afterwards. */
-    fun deleteCapturedNotifications() {
-        viewModelScope.launch {
-            container.notificationGateway.deleteAll()
-            refreshNotificationSetup()
-        }
-    }
+    fun setKakaoNotificationReplyEnabled(enabled: Boolean) =
+        notificationCaptureCoordinator.setReplyEnabled(enabled)
 
-    private val _calendarSetup = MutableStateFlow(CalendarSetupState())
-    val calendarSetup: StateFlow<CalendarSetupState> = _calendarSetup.asStateFlow()
+    fun deleteCapturedNotifications() = notificationCaptureCoordinator.deleteCaptured()
 
-    /**
-     * Re-reads permission state, the synced calendar list, and the pinned choice.
-     *
-     * Called whenever the screen resumes because the user can revoke calendar access or remove a
-     * synced account from outside the app.
-     */
-    fun refreshCalendarSetup() {
-        viewModelScope.launch {
-            val granted = hasCalendarReadPermission()
-            val settings = runCatching { container.settings.current() }.getOrNull()
+    private val calendarCoordinator = CalendarCoordinator(getApplication(), container, viewModelScope)
+    val calendarSetup: StateFlow<CalendarSetupState> = calendarCoordinator.state
 
-            if (!granted) {
-                _calendarSetup.value = CalendarSetupState(
-                    permissionGranted = false,
-                    pinnedCalendarId = settings?.defaultCalendarId,
-                    pinnedCalendarLabel = settings?.defaultCalendarLabel,
-                )
-                return@launch
-            }
+    fun refreshCalendarSetup() = calendarCoordinator.refresh()
 
-            val writableIds = runCatching { container.deviceCalendars.writableCalendars() }
-                .getOrDefault(emptyList())
-                .map(CalendarAccount::id)
-                .toSet()
-            val calendars = runCatching { container.deviceCalendars.syncedCalendars() }
+    fun onCalendarPermissionResult(granted: Boolean, canAskAgain: Boolean) =
+        calendarCoordinator.onPermissionResult(granted, canAskAgain)
 
-            _calendarSetup.value = CalendarSetupState(
-                permissionGranted = true,
-                calendars = calendars.getOrDefault(emptyList()).map { calendar ->
-                    CalendarOption(
-                        id = calendar.id,
-                        label = SettingsTextPolicy.sanitizeProviderLabel(calendar.displayName),
-                        accountName = SettingsTextPolicy.sanitizeProviderLabel(calendar.accountName),
-                        accountType = SettingsTextPolicy.sanitizeProviderLabel(calendar.accountType),
-                        writable = calendar.id in writableIds,
-                    )
-                },
-                pinnedCalendarId = settings?.defaultCalendarId,
-                pinnedCalendarLabel = settings?.defaultCalendarLabel,
-                error = if (calendars.isFailure) "캘린더 목록을 읽지 못했습니다." else null,
-            )
-        }
-    }
+    fun pinCalendar(option: CalendarOption) = calendarCoordinator.pin(option)
 
-    fun onCalendarPermissionResult(granted: Boolean, canAskAgain: Boolean) {
-        _calendarSetup.update { state ->
-            state.copy(permissionPermanentlyDenied = !granted && !canAskAgain)
-        }
-        refreshCalendarSetup()
-    }
+    fun unpinCalendar() = calendarCoordinator.unpin()
 
-    /** Only a writable calendar can be pinned; a read-only one would fail at execution time. */
-    fun pinCalendar(option: CalendarOption) {
-        if (!option.writable) {
-            _calendarSetup.update { state ->
-                state.copy(error = "이 캘린더에는 쓸 수 없습니다. 동기화 설정을 확인하세요.")
-            }
-            return
-        }
-        viewModelScope.launch {
-            runCatching { container.settings.setDefaultCalendar(option.id, option.label) }
-            refreshCalendarSetup()
-        }
-    }
-
-    fun unpinCalendar() {
-        viewModelScope.launch {
-            runCatching { container.settings.setDefaultCalendar(null, null) }
-            refreshCalendarSetup()
-        }
-    }
-
-    private fun hasCalendarReadPermission(): Boolean = ContextCompat.checkSelfPermission(
-        getApplication(),
-        Manifest.permission.READ_CALENDAR,
-    ) == PackageManager.PERMISSION_GRANTED
+    fun setCalendarReadEnabled(calendarId: Long, enabled: Boolean) =
+        calendarCoordinator.setReadEnabled(calendarId, enabled)
 
     /** Adds bounded device state plus explicitly quoted summary/recent-message context. */
-    private suspend fun withTrustedTurnContext(prompt: String): String {
-        return runCatching {
+    private suspend fun withTrustedTurnContext(prompt: String): TrustedTurnContextResult {
+        val temporal = runCatching {
             val zone = ZoneId.systemDefault()
-            val now = Instant.now().atZone(zone)
-            val settings = container.settings.current()
-            val conversation = _chatHistory.value.activeConversationId?.let { conversationId ->
+            zone to Instant.now().atZone(zone)
+        }.getOrElse {
+            return TrustedTurnContextResult.Unavailable(
+                component = DiagnosticContextComponent.DEVICE_TIME,
+                userMessage = "기기의 현재 날짜와 시간대를 확인하지 못해 요청을 시작하지 않았습니다.",
+            )
+        }
+        val (zone, now) = temporal
+        val unavailable = linkedSetOf<DiagnosticContextComponent>()
+
+        val settings = runCatching { container.settings.current() }
+            .onFailure { unavailable += DiagnosticContextComponent.SETTINGS }
+            .getOrNull()
+        val conversation = _chatHistory.value.activeConversationId?.let { conversationId ->
+            runCatching {
                 container.conversations.loadContext(
                     conversationId = conversationId,
-                    recentMessageLimit = settings.recentMessageWindow,
+                    recentMessageLimit = settings?.recentMessageWindow
+                        ?: com.personaledge.core.data.ConversationRepository.DEFAULT_RECENT_MESSAGES,
+                )
+            }.onFailure { unavailable += DiagnosticContextComponent.CONVERSATION }
+                .getOrNull()
+        }
+        val recalledMemories = if (
+            settings?.let { current ->
+                container.ownerConsentInterlock.allowed(
+                    OwnerConsentFeature.MEMORY,
+                    current.memoryEnabled,
+                )
+            } == true
+        ) {
+            val recalled = runCatching {
+                container.memories.relevantTo(
+                    query = prompt,
+                    categories = MemoryRecallPolicy.categoriesFor(prompt),
                 )
             }
-            TurnContextBuilder.build(
-                prompt = prompt,
-                device = TurnDeviceContext(
-                    localTimestamp = now.format(TURN_CONTEXT_FORMAT),
-                    timeZoneId = zone.id,
-                    calendarId = settings.defaultCalendarId,
-                    calendarLabel = settings.defaultCalendarLabel,
-                ),
-                conversation = conversation,
-                maximumBytes = MAX_USER_PROMPT_BYTES,
+                .onFailure { unavailable += DiagnosticContextComponent.MEMORY }
+                .getOrDefault(emptyList())
+            val stillAllowed = runCatching {
+                val current = container.settings.current()
+                container.ownerConsentInterlock.allowed(
+                    OwnerConsentFeature.MEMORY,
+                    current.memoryEnabled,
+                )
+            }.onFailure { unavailable += DiagnosticContextComponent.SETTINGS }
+                .getOrDefault(false)
+            if (stillAllowed) recalled else emptyList()
+        } else {
+            emptyList()
+        }
+        val built = TurnContextBuilder.buildResult(
+            prompt = prompt,
+            device = TurnDeviceContext(
+                localTimestamp = now.format(TURN_CONTEXT_FORMAT),
+                timeZoneId = zone.id,
+                calendarId = settings?.defaultCalendarId,
+                calendarLabel = settings?.defaultCalendarLabel,
+            ),
+            conversation = conversation,
+            memories = recalledMemories.map(MemoryEntity::content),
+            maximumBytes = MAX_USER_PROMPT_BYTES,
+        )
+        if (!built.deviceContextIncluded) {
+            return TrustedTurnContextResult.Unavailable(
+                component = DiagnosticContextComponent.PROMPT_BUDGET,
+                userMessage = "현재 날짜·시간 정보를 함께 전달할 공간이 부족합니다. 요청을 짧게 줄여 주세요.",
             )
-        }.getOrDefault(prompt)
+        }
+        return TrustedTurnContextResult.Ready(
+            text = built.text,
+            unavailableComponents = unavailable,
+            recalledMemoryNotices = recalledMemories
+                .take(built.includedMemoryCount)
+                .map { memory -> memory.recallNotice(zone) },
+        )
     }
 
     /**
@@ -917,20 +1469,31 @@ class PersonalEdgeViewModel(
         if (summaryJob?.isActive == true) return
 
         summaryJob = viewModelScope.launch {
+            if (!PredictiveThermalPolicy.allowBackgroundSummary(thermalMonitor.refresh())) {
+                return@launch
+            }
             val request = summarizer.requestFor(conversationId) ?: return@launch
             if (_uiState.value.modelStatus != ModelUiStatus.READY) return@launch
 
             val summary = StringBuilder()
             var toolAttempted = false
+            var completed = false
             val turnId = TurnId("summary-${UUID.randomUUID()}")
             try {
-                controller.runTurn(turnId, request.prompt, controller.toolFreeLimits)
+                controller.runTurn(
+                    turnId = turnId,
+                    prompt = request.prompt,
+                    turnLimits = controller.toolFreeLimits,
+                    toolScope = LlmTurnToolScope.none(),
+                )
                     .collect { event ->
                         when (event) {
+                            is AgentEvent.ThoughtDelta -> Unit
                             is AgentEvent.TextDelta -> summary.append(event.text)
+                            is AgentEvent.TrustedAnswer -> summary.append(event.text)
                             is AgentEvent.ToolExecuted -> toolAttempted = true
                             is AgentEvent.Failure -> toolAttempted = true
-                            is AgentEvent.Completed -> Unit
+                            is AgentEvent.Completed -> completed = true
                         }
                     }
             } catch (cancelled: CancellationException) {
@@ -939,22 +1502,49 @@ class PersonalEdgeViewModel(
                 return@launch
             }
 
-            if (!toolAttempted) {
+            if (
+                BackgroundSummaryPriority.mayAccept(
+                    completed = completed,
+                    toolAttemptedOrFailed = toolAttempted,
+                    observation = thermalMonitor.refresh(),
+                )
+            ) {
                 summarizer.acceptSummary(request, summary.toString())
             }
         }
     }
 
     fun sendPrompt() {
+        startPrompt(readOnlyRecovery = false, predecessorRecovery = null)
+    }
+
+    private fun startPrompt(
+        readOnlyRecovery: Boolean,
+        predecessorRecovery: ChatRecoveryAction?,
+        heldConversationMutationLease: ConversationMutationGate.Lease? = null,
+    ): Boolean {
+        val acquiredMutationLease = heldConversationMutationLease == null
+        val mutationLease = heldConversationMutationLease
+            ?: conversationMutationGate.tryAcquire()
+            ?: return false
+        try {
+        if (!conversationMutationGate.owns(mutationLease)) return false
         val snapshot = _uiState.value
         val prompt = snapshot.prompt.trim()
+        val deterministicReadAvailable =
+            DeterministicReadRouter.canRunWithoutModel(prompt) &&
+                snapshot.modelStatus != ModelUiStatus.CHECKING &&
+                snapshot.modelStatus != ModelUiStatus.IMPORTING &&
+                snapshot.modelStatus != ModelUiStatus.INITIALIZING &&
+                modelJob?.isActive != true
         if (
-            snapshot.modelStatus != ModelUiStatus.READY ||
+            snapshot.modelStatus != ModelUiStatus.READY && !deterministicReadAvailable ||
             snapshot.activeTurnId != null ||
             prompt.isEmpty() ||
+            !PromptInputPolicy.isAccepted(snapshot.prompt) ||
             turnJob?.isActive == true
         ) {
-            return
+            return false
         }
 
         val startThermalObservation = thermalMonitor.refresh()
@@ -973,7 +1563,7 @@ class PersonalEdgeViewModel(
                     "기기 열 보호 정책이 새 요청을 허용하지 않습니다."
                 },
             )
-            return
+            return false
         }
 
         // A background recap uses the same single-owner controller. User work always wins: cancel
@@ -985,23 +1575,98 @@ class PersonalEdgeViewModel(
             turnId = turnId,
             baselineStopSequence = startThermalObservation.stopSequence,
         )
-        if (!activeThermalTurn.compareAndSet(null, thermalTurn)) return
+        if (!activeThermalTurn.compareAndSet(null, thermalTurn)) return false
         val initialAssistantEntryId = "assistant-${turnId.value}-0"
         _uiState.update {
             it.copy(
                 prompt = "",
+                promptInputWarning = null,
                 activeTurnId = turnId,
-                messages = it.messages + listOf(
-                    ChatEntry("user-${turnId.value}", ChatRole.USER, prompt),
-                    ChatEntry(initialAssistantEntryId, ChatRole.ASSISTANT, ""),
-                ),
+                activeReasoning = ActiveReasoningUiPolicy.start(turnId, initialAssistantEntryId),
+                messages = it.messages + buildList {
+                    add(ChatEntry("user-${turnId.value}", ChatRole.USER, prompt))
+                    add(ChatEntry(initialAssistantEntryId, ChatRole.ASSISTANT, ""))
+                },
             )
         }
 
         turnJob = viewModelScope.launch {
             BackgroundSummaryPriority.awaitRelease(pendingSummary)
             val startedAt = SystemClock.elapsedRealtime()
-            val requestText = withTrustedTurnContext(prompt)
+            val unfinishedReadRequest = history.unfinishedReadRequestForFollowUp(
+                conversationId = _chatHistory.value.activeConversationId,
+                followUp = prompt,
+            )
+            val contextualWebSearchRequest = if (unfinishedReadRequest == null) {
+                history.contextualWebSearchRequestForFollowUp(
+                    conversationId = _chatHistory.value.activeConversationId,
+                    followUp = prompt,
+                )
+            } else {
+                null
+            }
+            val recentWeatherRead = history.hasRecentWeatherRead(
+                _chatHistory.value.activeConversationId,
+            )
+            // A short answer to this app's own question is a selector, not a request. Carrying the
+            // original text keeps the local model from re-deriving the request from one word, and
+            // the trusted line keeps it from asking the same question again.
+            val approvedRequest = if (
+                unfinishedReadRequest == null && contextualWebSearchRequest == null
+            ) {
+                controller.resumedRequestOrNull(prompt)
+            } else {
+                null
+            }
+            val effectivePrompt = unfinishedReadRequest?.let { original ->
+                buildString {
+                    append("이전 읽기 요청은 도구 실행 후 최종 답변이 완료되지 않았습니다. ")
+                    append("아래 원래 요청을 지금 새로 수행하고 결과를 답하세요. ")
+                    append("이전 도구 영수증을 결과로 간주하지 말고 필요한 읽기 도구를 다시 호출하세요.\n")
+                    append("[원래 요청]\n")
+                    append(original.text)
+                }
+            } ?: approvedRequest?.let { original ->
+                buildString {
+                    append("사용자가 아래 원래 요청을 이미 승인했습니다. 확인 질문을 다시 하지 말고 ")
+                    append("지금 필요한 도구를 호출해 실행하세요.\n")
+                    append("[승인된 원래 요청]\n")
+                    append(original)
+                }
+            } ?: prompt
+            if (unfinishedReadRequest != null) {
+                addMessage(ChatRole.STATUS, "이전의 미완료 읽기 요청을 다시 수행합니다.")
+            }
+            val trustedContext = withTrustedTurnContext(effectivePrompt)
+            if (trustedContext is TrustedTurnContextResult.Unavailable) {
+                diagnostics.recordSafely(DiagnosticEvent.ContextUnavailable(trustedContext.component))
+                removeMessageIfBlank(initialAssistantEntryId)
+                addMessage(ChatRole.STATUS, trustedContext.userMessage)
+                activeThermalTurn.compareAndSet(thermalTurn, null)
+                _uiState.update { state ->
+                    if (state.activeTurnId == turnId) {
+                        state.copy(activeTurnId = null, activeReasoning = null)
+                    } else {
+                        state
+                    }
+                }
+                finishDiagnosticPhase()
+                return@launch
+            }
+            trustedContext as TrustedTurnContextResult.Ready
+            trustedContext.unavailableComponents.forEach { component ->
+                diagnostics.recordSafely(DiagnosticEvent.ContextUnavailable(component))
+            }
+            if (trustedContext.unavailableComponents.isNotEmpty()) {
+                addMessage(
+                    ChatRole.STATUS,
+                    "대화 문맥 일부를 불러오지 못했지만 현재 날짜와 시간대는 확인했습니다.",
+                )
+            }
+            trustedContext.recalledMemoryNotices.forEach { notice ->
+                addMessage(ChatRole.STATUS, notice)
+            }
+            val requestText = trustedContext.text
             // The typed prompt is stored, never the derived preamble: the date and calendar in it
             // describe the moment of the turn and would be wrong on restore.
             val conversationId = history.ensureConversation(
@@ -1009,7 +1674,51 @@ class PersonalEdgeViewModel(
                 firstPrompt = prompt,
             )
             _chatHistory.update { state -> state.copy(activeConversationId = conversationId) }
-            history.record(conversationId, MessageRole.USER, prompt)
+            val userMessageOrdinal = history.recordOrdinal(conversationId, MessageRole.USER, prompt)
+            if (userMessageOrdinal == null) {
+                _chatHistory.update { state ->
+                    state.copy(error = "이 대화는 현재 기기에 저장되지 않고 있습니다.")
+                }
+            }
+            val recoveryCapsuleStarted = history.startTurnRecoveryCapsule(
+                turnId = turnId.value,
+                conversationId = conversationId,
+                persistedUserMessageOrdinal = userMessageOrdinal,
+                unfinishedReadRequest = unfinishedReadRequest,
+                contextualWebSearchRequest = contextualWebSearchRequest,
+                predecessorTurnId = predecessorRecovery?.turnId,
+            )
+            if (userMessageOrdinal != null && !recoveryCapsuleStarted) {
+                _chatHistory.update { state ->
+                    state.copy(error = "중단된 요청의 안전 복구 상태를 저장하지 못했습니다.")
+                }
+            }
+            if (predecessorRecovery != null && !recoveryCapsuleStarted) {
+                removeMessageIfBlank(initialAssistantEntryId)
+                addMessage(
+                    ChatRole.STATUS,
+                    "기존 복구 상태를 새 요청으로 안전하게 넘기지 못해 읽기를 시작하지 않았습니다.",
+                )
+                activeThermalTurn.compareAndSet(thermalTurn, null)
+                _uiState.update { state ->
+                    if (state.activeTurnId == turnId) {
+                        state.copy(activeTurnId = null, activeReasoning = null)
+                    } else {
+                        state
+                    }
+                }
+                finishDiagnosticPhase()
+                return@launch
+            }
+            if (predecessorRecovery != null) {
+                _uiState.update { state ->
+                    state.copy(
+                        messages = state.messages.filterNot { entry ->
+                            entry.id == actionEntryId(predecessorRecovery)
+                        },
+                    )
+                }
+            }
             diagnostics.markPhase(DiagnosticPhase.TURN_PROCESSING)
             diagnostics.recordSafely(
                 DiagnosticEvent.TurnStarted(requestText.toByteArray(Charsets.UTF_8).size),
@@ -1020,11 +1729,24 @@ class PersonalEdgeViewModel(
             var deltaCount = 0
             var deltaByteCount = 0L
             var terminalRecorded = false
-            val processedToolOrdinals = mutableSetOf<Int>()
+            var turnCompleted = false
+            var turnFailureCode: TurnOutcomeFailureCode? = null
+            var turnCancelled = false
+            val processedToolExecutions = mutableMapOf<Int, ProcessedToolExecution>()
+            val failedToolReceiptOrdinals = mutableSetOf<Int>()
 
             suspend fun processToolExecution(event: AgentEvent.ToolExecuted): Boolean =
                 ToolReceiptCommitBoundary.commit {
-                    if (event.ordinal in processedToolOrdinals) return@commit false
+                    val execution = ProcessedToolExecution(
+                        toolName = event.toolName,
+                        outcome = event.outcome,
+                    )
+                    processedToolExecutions[event.ordinal]?.let { processed ->
+                        // Controller delivery and retained-outcome reconciliation can race. The
+                        // exact same trusted event is a successful no-op; reusing an ordinal for
+                        // a different closed outcome is a protocol violation and fails closed.
+                        return@commit processed == execution
+                    }
                     diagnostics.recordKnownToolPhase(
                         toolName = event.toolName,
                         stage = DiagnosticToolStage.EXECUTED,
@@ -1037,22 +1759,58 @@ class PersonalEdgeViewModel(
                         },
                     )
                     diagnostics.markPhase(DiagnosticPhase.TURN_PROCESSING)
-                    assistantPhase++
-                    val nextAssistantEntryId = "assistant-${turnId.value}-$assistantPhase"
-                    val finalizedAssistantText = recordToolAndAdvanceAssistant(
+                    val nextAssistantPhase = assistantPhase + 1
+                    val nextAssistantEntryId =
+                        "assistant-${turnId.value}-$nextAssistantPhase"
+                    val finalizedAssistantText = currentMessageText(assistantEntryId)
+                    val toolReceipt = ToolReceiptFormatter.text(event.toolName, event.outcome)
+                    val committed = history.commitToolExecution(
+                        conversationId = conversationId,
+                        turnId = turnId.value,
+                        assistantText = finalizedAssistantText,
+                        toolReceipt = toolReceipt,
+                        toolName = event.toolName,
+                        toolRisk = TurnRecoveryPolicy.toolRisk(event.toolName),
+                        trustedOrdinal = event.ordinal,
+                        outcome = when (event.outcome) {
+                            ToolExecutionOutcome.READ_COMPLETED ->
+                                TurnToolCommitOutcome.READ_COMPLETED
+                            ToolExecutionOutcome.WRITE_COMPLETED ->
+                                TurnToolCommitOutcome.WRITE_COMPLETED
+                            ToolExecutionOutcome.WRITE_REFUSED ->
+                                TurnToolCommitOutcome.WRITE_REFUSED
+                        },
+                    )
+                    if (!committed) {
+                        failedToolReceiptOrdinals += event.ordinal
+                        _chatHistory.update { state ->
+                            state.copy(
+                                error = "도구 영수증과 안전 복구 상태를 함께 저장하지 못했습니다.",
+                            )
+                        }
+                        return@commit false
+                    }
+                    failedToolReceiptOrdinals -= event.ordinal
+                    recordToolAndAdvanceAssistant(
+                        turnId = turnId,
                         toolName = event.toolName,
                         outcome = event.outcome,
                         currentAssistantEntryId = assistantEntryId,
                         nextAssistantEntryId = nextAssistantEntryId,
                     )
-                    history.record(conversationId, MessageRole.ASSISTANT, finalizedAssistantText)
-                    history.record(
-                        conversationId,
-                        MessageRole.TOOL_RECEIPT,
-                        ToolReceiptFormatter.text(event.toolName, event.outcome),
-                    )
+                    assistantPhase = nextAssistantPhase
                     assistantEntryId = nextAssistantEntryId
-                    processedToolOrdinals.add(event.ordinal)
+                    processedToolExecutions[event.ordinal] = execution
+
+                    // These refreshes are derived UI work. A transient refresh failure must not
+                    // turn an already durable Tool outcome into a replay that duplicates its
+                    // receipt or falsely reports Tool persistence failure.
+                    if (event.toolName == MemoryRememberTool.NAME) {
+                        runCatching { memoryCoordinator.refresh() }
+                    }
+                    if (event.toolName == CommitmentProposalTool.NAME) {
+                        runCatching { reminderCoordinator.refresh() }
+                    }
                     true
                 }
 
@@ -1064,7 +1822,7 @@ class PersonalEdgeViewModel(
                 return reconciled
             }
             try {
-                val latestThermalObservation = thermalMonitor.observation.value
+                val latestThermalObservation = thermalMonitor.refresh()
                 if (latestThermalObservation.stopSequence > thermalTurn.baselineStopSequence) {
                     applyThermalTurnDirective(thermalTurn, latestThermalObservation)
                 }
@@ -1073,10 +1831,55 @@ class PersonalEdgeViewModel(
                 ) {
                     throw CancellationException("Thermal policy stopped the turn before registration.")
                 }
-                controller.runTurn(turnId, requestText).collect { event ->
+                controller.runTurn(
+                    turnId,
+                    requestText,
+                    PredictiveThermalPolicy.applyOutputBudget(
+                        limits = PredictiveThermalPolicy.applyOutputBudget(
+                            limits = controller.limitsForPrompt(
+                                unfinishedReadRequest?.text ?: prompt,
+                                inheritLongFormRequest =
+                                    contextualWebSearchRequest?.inheritLongFormRequest == true,
+                            ),
+                            observation = startThermalObservation,
+                        ),
+                        observation = latestThermalObservation,
+                    ),
+                    reminderDateTimeHint = ReminderDateTimeHint.fromCurrentUserPrompt(
+                        unfinishedReadRequest?.text ?: prompt,
+                    ),
+                    currentUserRequest = unfinishedReadRequest?.text ?: prompt,
+                    contextualWebSearchRequest = contextualWebSearchRequest?.trustedRequest,
+                    recentWeatherRead = recentWeatherRead,
+                    readOnlyToolsOnly = readOnlyRecovery || unfinishedReadRequest != null ||
+                        contextualWebSearchRequest != null,
+                    requireReadTool = readOnlyRecovery || unfinishedReadRequest != null ||
+                        contextualWebSearchRequest != null,
+                    executionContract = predecessorRecovery?.let { recovery ->
+                        TurnExecutionContract.exactReads(recovery.expectedReadTools)
+                    },
+                ).collect { event ->
                     when (event) {
+                        is AgentEvent.ThoughtDelta -> {
+                            if (event.text.isNotEmpty()) {
+                                if (!firstTokenRecorded) {
+                                    diagnostics.recordSafely(
+                                        DiagnosticEvent.TurnFirstToken(
+                                            ttftMillis = diagnosticDuration(startedAt),
+                                        ),
+                                    )
+                                    firstTokenRecorded = true
+                                }
+                                appendActiveReasoning(
+                                    turnId = turnId,
+                                    assistantEntryId = assistantEntryId,
+                                    delta = event.text,
+                                )
+                            }
+                        }
                         is AgentEvent.TextDelta -> {
                             if (event.text.isNotEmpty()) {
+                                clearActiveReasoning(turnId, assistantEntryId)
                                 if (!firstTokenRecorded) {
                                     diagnostics.recordSafely(
                                         DiagnosticEvent.TurnFirstToken(
@@ -1093,10 +1896,32 @@ class PersonalEdgeViewModel(
                             }
                             appendToMessage(assistantEntryId, event.text)
                         }
+                        is AgentEvent.TrustedAnswer -> {
+                            clearActiveReasoning(turnId, assistantEntryId)
+                            if (!firstTokenRecorded) {
+                                diagnostics.recordSafely(
+                                    DiagnosticEvent.TurnFirstToken(
+                                        ttftMillis = diagnosticDuration(startedAt),
+                                    ),
+                                )
+                                firstTokenRecorded = true
+                            }
+                            if (deltaCount < Int.MAX_VALUE) deltaCount++
+                            deltaByteCount = saturatedAdd(
+                                deltaByteCount,
+                                event.text.toByteArray(Charsets.UTF_8).size.toLong(),
+                            )
+                            appendToMessage(assistantEntryId, event.text)
+                        }
                         is AgentEvent.ToolExecuted -> {
-                            processToolExecution(event)
+                            if (!processToolExecution(event)) {
+                                throw ToolReceiptPersistenceException()
+                            }
                         }
                         is AgentEvent.Completed -> {
+                            check(currentMessageText(assistantEntryId).isNotBlank()) {
+                                "A completed turn must contain a substantive assistant answer."
+                            }
                             if (!terminalRecorded) {
                                 diagnostics.recordSafely(
                                     DiagnosticEvent.TurnCompleted(
@@ -1107,17 +1932,20 @@ class PersonalEdgeViewModel(
                                 )
                                 terminalRecorded = true
                             }
-                            ensureAssistantMessage(assistantEntryId)
+                            turnCompleted = true
                         }
                         is AgentEvent.Failure -> {
+                            clearActiveReasoning(turnId, assistantEntryId)
                             reconcileRetainedToolExecutions()
+                            turnFailureCode = TurnRecoveryPolicy.failureCode(event)
                             if (!terminalRecorded) {
                                 diagnostics.recordSafely(
                                     DiagnosticEvent.TurnFailed(
                                         durationMillis = diagnosticDuration(startedAt),
                                         deltaCount = deltaCount,
                                         deltaByteCount = deltaByteCount,
-                                        errorCode = event.runtimeCode?.toDiagnosticErrorCode()
+                                        errorCode = event.toolFailure?.failureCode?.toDiagnosticErrorCode()
+                                            ?: event.runtimeCode?.toDiagnosticErrorCode()
                                             ?: event.code.toDiagnosticErrorCode(),
                                     ),
                                 )
@@ -1128,7 +1956,9 @@ class PersonalEdgeViewModel(
                                 ChatRole.STATUS,
                                 failureText(
                                     code = event.code,
-                                    knownToolExecution = processedToolOrdinals.isNotEmpty(),
+                                    knownToolExecution = processedToolExecutions.isNotEmpty(),
+                                    toolFailure = event.toolFailure,
+                                    runtimeCode = event.runtimeCode,
                                 ),
                             )
                         }
@@ -1144,15 +1974,18 @@ class PersonalEdgeViewModel(
                         ),
                     )
                     terminalRecorded = true
+                    turnFailureCode = TurnOutcomeFailureCode.INVALID_MODEL_SEQUENCE
                 }
             } catch (_: CancellationException) {
                 val knownToolExecution = withContext(NonCancellable) {
                     reconcileRetainedToolExecutions()
-                    processedToolOrdinals.isNotEmpty()
+                    controller.retainedToolExecutions(turnId).isNotEmpty()
                 }
                 if (!terminalRecorded) {
                     val cause = thermalTurn.cancellationCause.current()
                         ?: DiagnosticTurnCancellationCause.LIFECYCLE
+                    turnCancelled = true
+                    turnFailureCode = TurnRecoveryPolicy.cancellationCode(cause)
                     val thermalStatus = if (cause == DiagnosticTurnCancellationCause.THERMAL) {
                         thermalTurn.latch.currentDecision()?.status
                     } else {
@@ -1172,7 +2005,10 @@ class PersonalEdgeViewModel(
                 removeMessageIfBlank(assistantEntryId)
                 addMessage(
                     ChatRole.STATUS,
-                    if (knownToolExecution) {
+                    if (failedToolReceiptOrdinals.isNotEmpty()) {
+                        "Tool 결과가 발생했지만 영수증을 안전하게 저장하지 못했습니다. " +
+                            "외부 상태를 확인하고 자동으로 재시도하지 마세요."
+                    } else if (knownToolExecution) {
                         "Tool 결과는 위 영수증대로 확정됐지만 후속 모델 답변은 취소됐습니다. " +
                             "자동으로 재시도하지 않습니다."
                     } else {
@@ -1182,9 +2018,10 @@ class PersonalEdgeViewModel(
             } catch (failure: Exception) {
                 val knownToolExecution = withContext(NonCancellable) {
                     reconcileRetainedToolExecutions()
-                    processedToolOrdinals.isNotEmpty()
+                    controller.retainedToolExecutions(turnId).isNotEmpty()
                 }
                 if (!terminalRecorded) {
+                    turnFailureCode = TurnOutcomeFailureCode.UNKNOWN
                     diagnostics.recordSafely(
                         DiagnosticEvent.TurnFailed(
                             durationMillis = diagnosticDuration(startedAt),
@@ -1199,7 +2036,10 @@ class PersonalEdgeViewModel(
                 removeMessageIfBlank(assistantEntryId)
                 addMessage(
                     ChatRole.STATUS,
-                    if (knownToolExecution) {
+                    if (failedToolReceiptOrdinals.isNotEmpty()) {
+                        "Tool 결과가 발생했지만 영수증을 안전하게 저장하지 못했습니다. " +
+                            "외부 상태를 확인하고 자동으로 재시도하지 마세요."
+                    } else if (knownToolExecution) {
                         "Tool 결과는 위 영수증대로 확정됐지만 후속 처리에 실패했습니다. " +
                             "자동으로 재시도하지 않습니다."
                     } else {
@@ -1211,21 +2051,42 @@ class PersonalEdgeViewModel(
                 // model had already produced; a partial answer is history, not garbage.
                 withContext(NonCancellable) {
                     reconcileRetainedToolExecutions()
-                    history.record(
-                        conversationId,
-                        MessageRole.ASSISTANT,
-                        currentMessageText(assistantEntryId),
+                    val finalized = history.finalizeTurn(
+                        conversationId = conversationId,
+                        turnId = turnId.value,
+                        assistantText = currentMessageText(assistantEntryId),
+                        completed = turnCompleted,
+                        cancelled = turnCancelled,
+                        failureCode = turnFailureCode ?: TurnOutcomeFailureCode.UNKNOWN,
                     )
+                    if (!finalized) {
+                        _chatHistory.update { state ->
+                            state.copy(
+                                error = "최종 답변과 안전 복구 상태를 함께 저장하지 못했습니다.",
+                            )
+                        }
+                    }
+                    if (recoveryCapsuleStarted && !turnCompleted) {
+                        history.recoveryEntry(conversationId)?.let(::replaceRecoveryEntry)
+                    }
                 }
                 activeThermalTurn.compareAndSet(thermalTurn, null)
                 _uiState.update { state ->
-                    if (state.activeTurnId == turnId) state.copy(activeTurnId = null) else state
+                    if (state.activeTurnId == turnId) {
+                        state.copy(activeTurnId = null, activeReasoning = null)
+                    } else {
+                        state
+                    }
                 }
                 finishDiagnosticPhase()
             }
             // After the turn is released, never during it: the controller runs one turn at a time.
             summarizeInBackground(conversationId)
         }.also(thermalTurn.job::set)
+        return true
+        } finally {
+            if (acquiredMutationLease) mutationLease.close()
+        }
     }
 
     fun cancelTurn() {
@@ -1270,17 +2131,40 @@ class PersonalEdgeViewModel(
         }
     }
 
-    private fun ensureAssistantMessage(id: String) {
+    private fun appendActiveReasoning(
+        turnId: TurnId,
+        assistantEntryId: String,
+        delta: String,
+    ) {
+        if (delta.isEmpty()) return
         _uiState.update { state ->
-            state.copy(
-                messages = state.messages.map { entry ->
-                    if (entry.id == id && entry.text.isBlank()) {
-                        entry.copy(text = "요청 처리를 완료했습니다.")
-                    } else {
-                        entry
-                    }
-                },
+            val updated = ActiveReasoningUiPolicy.append(
+                current = state.activeReasoning,
+                activeTurnId = state.activeTurnId,
+                turnId = turnId,
+                assistantEntryId = assistantEntryId,
+                delta = delta,
             )
+            if (updated === state.activeReasoning) {
+                state
+            } else {
+                state.copy(activeReasoning = updated)
+            }
+        }
+    }
+
+    private fun clearActiveReasoning(turnId: TurnId, assistantEntryId: String) {
+        _uiState.update { state ->
+            val updated = ActiveReasoningUiPolicy.clear(
+                current = state.activeReasoning,
+                turnId = turnId,
+                assistantEntryId = assistantEntryId,
+            )
+            if (updated === state.activeReasoning) {
+                state
+            } else {
+                state.copy(activeReasoning = updated)
+            }
         }
     }
 
@@ -1289,6 +2173,7 @@ class PersonalEdgeViewModel(
 
     /** Returns the assistant text being closed off, so the caller can persist it in order. */
     private fun recordToolAndAdvanceAssistant(
+        turnId: TurnId,
         toolName: String,
         outcome: ToolExecutionOutcome,
         currentAssistantEntryId: String,
@@ -1300,6 +2185,12 @@ class PersonalEdgeViewModel(
                 entry.id == currentAssistantEntryId && entry.text.isBlank()
             }
             state.copy(
+                activeReasoning = ActiveReasoningUiPolicy.advance(
+                    current = state.activeReasoning,
+                    activeTurnId = state.activeTurnId,
+                    turnId = turnId,
+                    nextAssistantEntryId = nextAssistantEntryId,
+                ),
                 messages = transcript + listOf(
                     ChatEntry(
                         id = UUID.randomUUID().toString(),
@@ -1329,17 +2220,37 @@ class PersonalEdgeViewModel(
         }
     }
 
+    private fun replaceRecoveryEntry(entry: ChatEntry) {
+        _uiState.update { state ->
+            state.copy(
+                messages = state.messages.filterNot { candidate ->
+                    candidate.recoveryAction?.turnId == entry.recoveryAction?.turnId
+                } + entry,
+            )
+        }
+    }
+
+    private fun actionEntryId(action: ChatRecoveryAction): String =
+        "turn-recovery-${action.turnId}"
+
     private fun failureText(
         code: AgentFailureCode,
         knownToolExecution: Boolean = false,
+        toolFailure: ToolFailureDetail? = null,
+        runtimeCode: LlmFailureCode? = null,
     ): String = if (knownToolExecution) {
-        when (code) {
-            AgentFailureCode.DEADLINE_EXCEEDED ->
+        when {
+            runtimeCode == LlmFailureCode.CONTEXT_BUDGET_EXCEEDED ->
+                "Tool 결과는 위 영수증대로 확정됐지만 후속 답변용 문맥 공간이 부족했습니다. " +
+                    "'계속 답해줘'라고 보내면 원래 읽기 요청을 새로 수행합니다."
+            code == AgentFailureCode.DEADLINE_EXCEEDED ->
                 "Tool 결과는 위 영수증대로 확정됐지만 후속 답변 시간이 초과됐습니다. " +
                     "자동으로 재시도하지 않습니다."
             else -> "Tool 결과는 위 영수증대로 확정됐지만 후속 처리가 중단됐습니다. " +
                 "자동으로 재시도하지 않습니다."
         }
+    } else if (toolFailure != null) {
+        toolFailureText(toolFailure)
     } else when (code) {
         AgentFailureCode.BUSY -> "다른 요청이 진행 중입니다."
         AgentFailureCode.DEADLINE_EXCEEDED ->
@@ -1349,6 +2260,8 @@ class PersonalEdgeViewModel(
         AgentFailureCode.TOOL_NOT_EXECUTED ->
             "Tool이 실행되지 않았거나 결과를 확정할 수 없습니다. 자동으로 재시도하지 " +
                 "않았습니다. 대상 앱의 상태를 확인한 뒤 다시 결정하세요."
+        AgentFailureCode.TOOL_FAILED ->
+            "Tool 조회가 완료되지 않았습니다. 입력과 외부 서비스 상태를 확인하세요."
         AgentFailureCode.STEP_LIMIT_EXCEEDED,
         AgentFailureCode.TOOL_CALL_LIMIT_EXCEEDED -> "Agent 실행 한도를 초과해 중단했습니다."
         AgentFailureCode.INVALID_TURN,
@@ -1359,6 +2272,7 @@ class PersonalEdgeViewModel(
 
     private fun applyThermalObservation(observation: ThermalObservation) {
         if (observation.directive == ThermalDirective.CONTINUE) return
+        BackgroundSummaryPriority.cancelForThermalPolicy(summaryJob)
         activeThermalInitialization.get()?.let { initialization ->
             applyThermalInitializationDirective(initialization, observation)
         }
@@ -1459,7 +2373,6 @@ class PersonalEdgeViewModel(
         )
         modelJob?.cancel()
         runtime.close()
-        super.onCleared()
     }
 
     private class ActiveThermalTurn(
@@ -1480,13 +2393,70 @@ class PersonalEdgeViewModel(
 
     companion object {
         val modelManifest = PinnedModelManifest.value
-        // The typed prompt shares the runtime budget with the trusted preamble prepended below.
-        // Long prompts reserve 640 bytes for the date line and at least one recent message; short
-        // prompts automatically receive more history while the final request remains <= 2 KiB.
-        private const val MIN_TURN_CONTEXT_BYTES = 640
-        private const val MAX_PROMPT_BYTES = MAX_USER_PROMPT_BYTES - MIN_TURN_CONTEXT_BYTES
         private const val UNRESOLVED_ACTION_WARNING_ID = "unresolved-action-warning"
         private val TURN_CONTEXT_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd(E) HH:mm", Locale.KOREAN)
     }
+}
+
+/** Typed, content-free signal; never includes Tool arguments, results, or transcript text. */
+private class ToolReceiptPersistenceException : Exception()
+
+/** Exact content-free identity for one trusted controller execution slot. */
+private data class ProcessedToolExecution(
+    val toolName: String,
+    val outcome: ToolExecutionOutcome,
+)
+
+private fun validTransferPassphrase(value: String): Boolean =
+    value.codePointCount(0, value.length) in
+        EncryptedUserDataArchive.MIN_PASSPHRASE_CODE_POINTS..
+            EncryptedUserDataArchive.MAX_PASSPHRASE_CODE_POINTS &&
+        value.codePoints().noneMatch { Character.isISOControl(it) }
+
+private fun MemoryEntity.recallNotice(zone: ZoneId): String = buildString {
+    append("기억 참고 · ")
+    append(
+        when (category) {
+            MemoryCategory.PREFERENCE -> "선호"
+            MemoryCategory.PERSON -> "사람"
+            MemoryCategory.PLACE -> "장소"
+            MemoryCategory.ROUTINE -> "루틴"
+            MemoryCategory.FACT -> "사실"
+        },
+    )
+    append(" · ‘")
+    append(content.takeCodePoints(MAX_RECALL_NOTICE_CONTENT_CHARACTERS))
+    append("’ · 요청과 관련 표현이 겹친 사용자 승인 기억")
+    append(" · 마지막 확인 ")
+    append(Instant.ofEpochMilli(lastConfirmedAtEpochMillis).atZone(zone).toLocalDate())
+    validUntilEpochMillis?.let { expiry ->
+        append(" · ")
+        append(Instant.ofEpochMilli(expiry - 1L).atZone(zone).toLocalDate())
+        append("까지")
+    }
+}
+
+private const val MAX_RECALL_NOTICE_CONTENT_CHARACTERS = 80
+
+private fun UserDataArchiveFailure.userMessage(): String = when (this) {
+    UserDataArchiveFailure.INVALID_PASSPHRASE ->
+        "암호 문구는 제어문자 없이 12자 이상 128자 이하로 입력하세요."
+    UserDataArchiveFailure.TOO_LARGE -> "백업 파일이 비어 있거나 허용 크기를 초과했습니다."
+    UserDataArchiveFailure.INVALID_FORMAT -> "Personal Edge 백업 파일 형식이 아닙니다."
+    UserDataArchiveFailure.UNSUPPORTED_VERSION -> "지원하지 않는 백업 포맷 버전입니다."
+    UserDataArchiveFailure.SCHEMA_MISMATCH -> "현재 앱과 백업의 데이터 스키마 버전이 다릅니다."
+    UserDataArchiveFailure.AUTHENTICATION_FAILED -> "암호 문구가 다르거나 파일이 변조되었습니다."
+    UserDataArchiveFailure.HASH_MISMATCH -> "복호화된 데이터의 SHA-256 무결성이 일치하지 않습니다."
+    UserDataArchiveFailure.INVALID_PAYLOAD -> "백업 내부 데이터가 안전한 구조 검사를 통과하지 못했습니다."
+}
+
+private fun UserDataImportResult.summaryMessage(): String = buildString {
+    append("가져오기 완료: 대화 ").append(importedConversations)
+    append("개, 메시지 ").append(importedMessages)
+    append("개, 기억 ").append(importedMemories)
+    append("개, 리마인더 ").append(importedReminders)
+    append("개, 후보 ").append(importedProposals).append("개")
+    if (skippedRows > 0) append(" · 기존/충돌 ").append(skippedRows).append("개 건너뜀")
+    if (calendarRemapRequired) append(" · 캘린더는 이 기기에서 다시 선택 필요")
 }

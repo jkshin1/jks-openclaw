@@ -126,27 +126,60 @@ class CalendarUpdateEventTool(
         if (!changesTitle && !changesLocation && !changesStart && !changesEnd) {
             return ValidationResult.Invalid("변경할 내용이 없습니다.")
         }
+        val conflicts = try {
+            CalendarConflictPolicy.overlapping(
+                gateway.queryEvents(
+                    resultingStart,
+                    resultingEnd,
+                    CalendarConflictPolicy.QUERY_LIMIT,
+                ),
+                resultingStart,
+                resultingEnd,
+                excludingEventId = eventId,
+            )
+        } catch (_: CalendarAccessException) {
+            return ValidationResult.Invalid("일정 충돌을 확인하지 못해 수정을 중단했습니다.")
+        }
 
         return ValidationResult.Valid(
             CanonicalFields.encode(
                 buildMap {
                     put(FIELD_EVENT_ID, eventId.toString())
                     put(FIELD_EXPECTED_DIGEST, CalendarText.eventDigest(existing))
-                    put(FIELD_CURRENT_TITLE, existing.title)
+                    put(
+                        FIELD_CURRENT_TITLE,
+                        CalendarText.sanitizeForModel(
+                            existing.title,
+                            CalendarText.MAX_TITLE_CHARACTERS,
+                        ).ifEmpty { "(제목 없음)" },
+                    )
                     put(FIELD_CURRENT_START, existing.startEpochMillis.toString())
                     put(FIELD_CURRENT_END, existing.endEpochMillis.toString())
+                    put(FIELD_TIME_ZONE, zone.id)
                     if (changesTitle) put(FIELD_TITLE, title)
                     if (changesStart) put(FIELD_START, start.toString())
                     if (changesEnd) put(FIELD_END, end.toString())
                     if (changesLocation) put(FIELD_LOCATION, location)
+                    conflicts.firstOrNull()?.let { conflict ->
+                        put(FIELD_CONFLICT_COUNT, conflicts.size.toString())
+                        put(
+                            FIELD_CONFLICT_TITLE,
+                            CalendarText.sanitizeForModel(
+                                conflict.title,
+                                CalendarText.MAX_TITLE_CHARACTERS,
+                            ).ifEmpty { "(제목 없음)" },
+                        )
+                        put(FIELD_CONFLICT_START, conflict.startEpochMillis.toString())
+                        put(FIELD_CONFLICT_END, conflict.endEpochMillis.toString())
+                    }
                 },
             ),
         )
     }
 
     override fun preview(input: CanonicalToolInput): ActionPreview {
-        val zone = zoneProvider()
         val fields = CanonicalFields.decode(input)
+        val zone = ZoneId.of(fields.requiredString(FIELD_TIME_ZONE))
         val currentStart = CalendarText.formatLocalDateTime(fields.requiredLong(FIELD_CURRENT_START), zone)
         val currentEnd = CalendarText.formatLocalDateTime(fields.requiredLong(FIELD_CURRENT_END), zone)
 
@@ -163,6 +196,16 @@ class CalendarUpdateEventTool(
                     append("  종료 → ${CalendarText.formatLocalDateTime(value.toLong(), zone)}\n")
                 }
                 fields[FIELD_LOCATION]?.let { value -> append("  장소 → \"$value\"\n") }
+                append("시간대: ${zone.id}")
+                fields[FIELD_CONFLICT_COUNT]?.let { count ->
+                    append("\n\n⚠ 변경 후 겹치는 일정 ${count}개")
+                    append("\n첫 일정: \"")
+                    append(fields.requiredString(FIELD_CONFLICT_TITLE))
+                    append("\" ")
+                    append(CalendarText.formatLocalDateTime(fields.requiredLong(FIELD_CONFLICT_START), zone))
+                    append(" ~ ")
+                    append(CalendarText.formatLocalDateTime(fields.requiredLong(FIELD_CONFLICT_END), zone))
+                }
             }.trimEnd(),
         )
     }
@@ -173,6 +216,12 @@ class CalendarUpdateEventTool(
     ): CalendarUpdateEventResult {
         val fields = CanonicalFields.decode(input)
         val eventId = fields.requiredLong(FIELD_EVENT_ID)
+        if (runCatching { zoneProvider().id }.getOrNull() != fields.requiredString(FIELD_TIME_ZONE)) {
+            return CalendarUpdateEventResult(
+                updated = false,
+                reason = "timezone_changed_since_confirmation",
+            )
+        }
 
         val current = try {
             gateway.findEvent(eventId)
@@ -194,7 +243,7 @@ class CalendarUpdateEventTool(
             return CalendarUpdateEventResult(updated = false, reason = "no_change")
         }
 
-        val updated = gateway.updateEvent(eventId, patch)
+        val updated = gateway.updateEvent(current.mutationSnapshot(), patch)
         return CalendarUpdateEventResult(
             updated = updated,
             reason = if (updated) null else "rejected_by_provider",
@@ -215,9 +264,14 @@ class CalendarUpdateEventTool(
         internal const val FIELD_CURRENT_TITLE = "current_title"
         internal const val FIELD_CURRENT_START = "current_start"
         internal const val FIELD_CURRENT_END = "current_end"
+        internal const val FIELD_TIME_ZONE = "time_zone"
         internal const val FIELD_TITLE = "title"
         internal const val FIELD_START = "start"
         internal const val FIELD_END = "end"
         internal const val FIELD_LOCATION = "location"
+        internal const val FIELD_CONFLICT_COUNT = "conflict_count"
+        internal const val FIELD_CONFLICT_TITLE = "conflict_title"
+        internal const val FIELD_CONFLICT_START = "conflict_start"
+        internal const val FIELD_CONFLICT_END = "conflict_end"
     }
 }

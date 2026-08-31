@@ -1,8 +1,10 @@
 package com.personaledge.agent
 
 import com.personaledge.core.data.AgentSettings
+import com.personaledge.core.data.SecretKeyName
 import com.personaledge.core.tools.RouteEstimateTool
 import com.personaledge.core.tools.WebSearchTool
+import com.personaledge.core.tools.WeatherTool
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -38,15 +40,58 @@ class NetworkSettingsPolicyTest {
         val defaults = AgentSettings()
         assertFalse(NetworkToolConsent.isEnabled(RouteEstimateTool.NAME, defaults))
         assertFalse(NetworkToolConsent.isEnabled(WebSearchTool.NAME, defaults))
+        assertFalse(NetworkToolConsent.isEnabled(WeatherTool.NAME, defaults))
         assertFalse(NetworkToolConsent.isEnabled("future_network_tool", defaults))
 
         val routeOnly = defaults.copy(routeLookupEnabled = true)
         assertTrue(NetworkToolConsent.isEnabled(RouteEstimateTool.NAME, routeOnly))
         assertFalse(NetworkToolConsent.isEnabled(WebSearchTool.NAME, routeOnly))
+        assertFalse(NetworkToolConsent.isEnabled(WeatherTool.NAME, routeOnly))
 
         val searchOnly = defaults.copy(webSearchEnabled = true)
         assertFalse(NetworkToolConsent.isEnabled(RouteEstimateTool.NAME, searchOnly))
         assertTrue(NetworkToolConsent.isEnabled(WebSearchTool.NAME, searchOnly))
+        assertTrue(NetworkToolConsent.isEnabled(WeatherTool.NAME, searchOnly))
+    }
+
+    @Test
+    fun `network consent intersects durable settings with the process gate`() {
+        val settings = AgentSettings(routeLookupEnabled = true, webSearchEnabled = true)
+        val interlock = OwnerConsentInterlock()
+        assertTrue(NetworkToolConsent.isAllowed(RouteEstimateTool.NAME, settings, interlock))
+        assertTrue(NetworkToolConsent.isAllowed(WebSearchTool.NAME, settings, interlock))
+        assertTrue(NetworkToolConsent.isAllowed(WeatherTool.NAME, settings, interlock))
+
+        interlock.requestEnabled(OwnerConsentFeature.WEB_SEARCH, enabled = false)
+
+        assertTrue(NetworkToolConsent.isAllowed(RouteEstimateTool.NAME, settings, interlock))
+        assertFalse(NetworkToolConsent.isAllowed(WebSearchTool.NAME, settings, interlock))
+        assertFalse(NetworkToolConsent.isAllowed(WeatherTool.NAME, settings, interlock))
+    }
+
+    @Test
+    fun `weather setup identifies device geocoding and Open-Meteo`() {
+        val reason = NetworkToolConsent.disabledReason(WeatherTool.NAME)
+
+        assertTrue(reason.contains("기기 위치 검색"))
+        assertTrue(reason.contains("Open-Meteo"))
+        assertFalse(reason.contains("You.com"))
+    }
+
+    @Test
+    fun `web search setup identifies both outbound providers without provider tuning`() {
+        val reason = NetworkToolConsent.disabledReason(WebSearchTool.NAME)
+        val tavily = CredentialSlot.TAVILY_API_KEY
+
+        assertTrue(reason.contains("You.com"))
+        assertTrue(reason.contains("Tavily"))
+        assertFalse(reason.contains("NAVER"))
+        assertEquals(SecretKeyName.TAVILY_API_KEY, tavily.key)
+        assertTrue(tavily.label.contains("Tavily"))
+        assertTrue(tavily.label.contains("백업"))
+        assertTrue(tavily.hint.contains("저장"))
+        assertTrue(tavily.hint.contains("확인"))
+        assertFalse(tavily.label.contains("재시도"))
     }
 
     @Test

@@ -89,6 +89,325 @@ class ConversationRepositoryTest {
     }
 
     @Test
+    fun toolExecutionCommitStoresAssistantReceiptAndReadOrdinalAtomically() = runBlocking {
+        val conversationId = repository.createConversation("원자 커밋")
+        val userOrdinal = repository.appendMessage(
+            conversationId,
+            MessageRole.USER,
+            "이천 날씨 알려 줘",
+        )!!
+        val turnId = "turn-11111111-1111-1111-1111-111111111111"
+        val outcomes = TurnOutcomeRepository(database = database, clock = { now })
+        assertTrue(outcomes.start(turnId, conversationId, userOrdinal))
+
+        assertTrue(
+            repository.commitToolExecution(
+                conversationId = conversationId,
+                turnId = turnId,
+                assistantText = "먼저 확인하겠습니다.",
+                toolReceipt = "현재 및 오늘 날씨를 확인했습니다.",
+                toolName = "weather_current",
+                toolRisk = TurnToolRisk.READ_ONLY,
+                trustedOrdinal = 1,
+                outcome = TurnToolCommitOutcome.READ_COMPLETED,
+            ),
+        )
+
+        val messages = repository.listMessages(conversationId)
+        assertEquals(listOf(1L, 2L, 3L), messages.map(MessageEntity::ordinal))
+        assertEquals(
+            listOf(MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL_RECEIPT),
+            messages.map(MessageEntity::role),
+        )
+        assertEquals(
+            listOf("weather_current"),
+            database.turnOutcomeDao().listReadExecutions(turnId).map { it.toolName },
+        )
+        assertEquals(TurnOutcomeState.READ_EXECUTED, database.turnOutcomeDao().find(turnId)?.state)
+    }
+
+    @Test
+    fun repeatedReadToolExecutionCommitIsAnExactIdempotentNoOp() = runBlocking {
+        val conversationId = repository.createConversation("read replay")
+        val userOrdinal = repository.appendMessage(
+            conversationId,
+            MessageRole.USER,
+            "이천 날씨 알려 줘",
+        )!!
+        val turnId = "turn-55555555-5555-5555-5555-555555555555"
+        val outcomes = TurnOutcomeRepository(database = database, clock = { now })
+        assertTrue(outcomes.start(turnId, conversationId, userOrdinal))
+
+        suspend fun commit(toolName: String, receipt: String): Boolean =
+            repository.commitToolExecution(
+                conversationId = conversationId,
+                turnId = turnId,
+                assistantText = "먼저 확인하겠습니다.",
+                toolReceipt = receipt,
+                toolName = toolName,
+                toolRisk = TurnToolRisk.READ_ONLY,
+                trustedOrdinal = 1,
+                outcome = TurnToolCommitOutcome.READ_COMPLETED,
+            )
+
+        assertTrue(commit("weather_current", "현재 및 오늘 날씨를 확인했습니다."))
+        val afterFirstCommit = repository.listMessages(conversationId)
+
+        assertTrue(commit("weather_current", "현재 및 오늘 날씨를 확인했습니다."))
+        assertFalse(commit("weather_current", "변조된 영수증"))
+        assertFalse(commit("alarm_next", "다음 알람 시각을 확인했습니다."))
+
+        val afterReplays = repository.listMessages(conversationId)
+        assertEquals(afterFirstCommit, afterReplays)
+        assertEquals(1, afterReplays.count { it.role == MessageRole.TOOL_RECEIPT })
+        assertEquals(
+            "tool-commit:$turnId:1:READ_ONLY:READ_COMPLETED:weather_current",
+            afterReplays.single { it.role == MessageRole.TOOL_RECEIPT }.id,
+        )
+        assertEquals(
+            listOf("weather_current"),
+            database.turnOutcomeDao().listReadExecutions(turnId).map { it.toolName },
+        )
+    }
+
+    @Test
+    fun concurrentIdenticalReadCommitsStoreOneReceipt() = runBlocking {
+        val conversationId = repository.createConversation("concurrent replay")
+        val userOrdinal = repository.appendMessage(
+            conversationId,
+            MessageRole.USER,
+            "날씨 알려 줘",
+        )!!
+        val turnId = "turn-66666666-6666-6666-6666-666666666666"
+        val outcomes = TurnOutcomeRepository(database = database, clock = { now })
+        assertTrue(outcomes.start(turnId, conversationId, userOrdinal))
+
+        val results = (1..2).map {
+            async(Dispatchers.IO) {
+                repository.commitToolExecution(
+                    conversationId = conversationId,
+                    turnId = turnId,
+                    assistantText = "확인 중입니다.",
+                    toolReceipt = "현재 및 오늘 날씨를 확인했습니다.",
+                    toolName = "weather_current",
+                    toolRisk = TurnToolRisk.READ_ONLY,
+                    trustedOrdinal = 1,
+                    outcome = TurnToolCommitOutcome.READ_COMPLETED,
+                )
+            }
+        }.awaitAll()
+
+        assertEquals(listOf(true, true), results)
+        val messages = repository.listMessages(conversationId)
+        assertEquals(1, messages.count { it.role == MessageRole.ASSISTANT })
+        assertEquals(1, messages.count { it.role == MessageRole.TOOL_RECEIPT })
+    }
+
+    @Test
+    fun repeatedWriteCompletedCommitKeepsUnknownStateAndRejectsMismatch() = runBlocking {
+        val conversationId = repository.createConversation("write completed replay")
+        val userOrdinal = repository.appendMessage(
+            conversationId,
+            MessageRole.USER,
+            "알람 맞춰 줘",
+        )!!
+        val turnId = "turn-77777777-7777-7777-7777-777777777777"
+        val outcomes = TurnOutcomeRepository(database = database, clock = { now })
+        assertTrue(outcomes.start(turnId, conversationId, userOrdinal))
+        assertTrue(outcomes.armSideEffect(turnId, "alarm_set", TurnToolRisk.DATA_WRITE))
+
+        suspend fun commit(outcome: TurnToolCommitOutcome, receipt: String): Boolean =
+            repository.commitToolExecution(
+                conversationId = conversationId,
+                turnId = turnId,
+                assistantText = "",
+                toolReceipt = receipt,
+                toolName = "alarm_set",
+                toolRisk = TurnToolRisk.DATA_WRITE,
+                trustedOrdinal = 1,
+                outcome = outcome,
+            )
+
+        assertTrue(commit(TurnToolCommitOutcome.WRITE_COMPLETED, "알람 추가를 요청했습니다."))
+        val afterFirstCommit = repository.listMessages(conversationId)
+
+        assertTrue(commit(TurnToolCommitOutcome.WRITE_COMPLETED, "알람 추가를 요청했습니다."))
+        assertFalse(commit(TurnToolCommitOutcome.WRITE_REFUSED, "알람은 추가되지 않았습니다."))
+
+        assertEquals(afterFirstCommit, repository.listMessages(conversationId))
+        assertEquals(TurnOutcomeState.WRITE_UNKNOWN, database.turnOutcomeDao().find(turnId)?.state)
+        assertEquals(1, outcomes.unresolvedSideEffects().size)
+    }
+
+    @Test
+    fun repeatedWriteRefusedCommitStaysDefinitiveAndRejectsMismatch() = runBlocking {
+        val conversationId = repository.createConversation("write refused replay")
+        val userOrdinal = repository.appendMessage(
+            conversationId,
+            MessageRole.USER,
+            "알람 맞춰 줘",
+        )!!
+        val turnId = "turn-88888888-8888-8888-8888-888888888888"
+        val outcomes = TurnOutcomeRepository(database = database, clock = { now })
+        assertTrue(outcomes.start(turnId, conversationId, userOrdinal))
+        assertTrue(outcomes.armSideEffect(turnId, "alarm_set", TurnToolRisk.DATA_WRITE))
+
+        suspend fun commit(outcome: TurnToolCommitOutcome, receipt: String): Boolean =
+            repository.commitToolExecution(
+                conversationId = conversationId,
+                turnId = turnId,
+                assistantText = "",
+                toolReceipt = receipt,
+                toolName = "alarm_set",
+                toolRisk = TurnToolRisk.DATA_WRITE,
+                trustedOrdinal = 1,
+                outcome = outcome,
+            )
+
+        assertTrue(commit(TurnToolCommitOutcome.WRITE_REFUSED, "알람은 추가되지 않았습니다."))
+        val afterFirstCommit = repository.listMessages(conversationId)
+
+        assertTrue(commit(TurnToolCommitOutcome.WRITE_REFUSED, "알람은 추가되지 않았습니다."))
+        assertFalse(commit(TurnToolCommitOutcome.WRITE_COMPLETED, "알람 추가를 요청했습니다."))
+
+        assertEquals(afterFirstCommit, repository.listMessages(conversationId))
+        assertEquals(TurnOutcomeState.FAILED, database.turnOutcomeDao().find(turnId)?.state)
+        assertTrue(outcomes.unresolvedSideEffects().isEmpty())
+    }
+
+    @Test
+    fun failedToolOutcomeTransitionRollsBackBothTranscriptRowsAndNeverClosesTurn() = runBlocking {
+        val conversationId = repository.createConversation("원자 롤백")
+        val userOrdinal = repository.appendMessage(
+            conversationId,
+            MessageRole.USER,
+            "날씨 알려 줘",
+        )!!
+        val turnId = "turn-22222222-2222-2222-2222-222222222222"
+        val outcomes = TurnOutcomeRepository(database = database, clock = { now })
+        assertTrue(outcomes.start(turnId, conversationId, userOrdinal))
+
+        assertFalse(
+            repository.commitToolExecution(
+                conversationId = conversationId,
+                turnId = turnId,
+                assistantText = "이 텍스트는 롤백되어야 합니다.",
+                toolReceipt = "이 영수증도 롤백되어야 합니다.",
+                toolName = "weather_current?argument=private",
+                toolRisk = TurnToolRisk.READ_ONLY,
+                trustedOrdinal = 1,
+                outcome = TurnToolCommitOutcome.READ_COMPLETED,
+            ),
+        )
+
+        assertEquals(listOf(MessageRole.USER), repository.listMessages(conversationId).map { it.role })
+        val storedOutcome = database.turnOutcomeDao().find(turnId)!!
+        assertEquals(TurnOutcomeState.STARTED, storedOutcome.state)
+        assertEquals(TurnRecoverability.NONE, storedOutcome.recoverability)
+        assertTrue(database.turnOutcomeDao().listReadExecutions(turnId).isEmpty())
+    }
+
+    @Test
+    fun maxOrdinalCorruptionFailsClosedWithoutWrappingOrCompletingTurn() = runBlocking {
+        val conversationId = repository.createConversation("ordinal 손상")
+        database.messageDao().insert(
+            MessageEntity(
+                id = "corrupt-max-ordinal",
+                conversationId = conversationId,
+                ordinal = Long.MAX_VALUE,
+                role = MessageRole.USER,
+                text = "기존 요청",
+                createdAtEpochMillis = now,
+            ),
+        )
+        val turnId = "turn-33333333-3333-3333-3333-333333333333"
+        val outcomes = TurnOutcomeRepository(database = database, clock = { now })
+        assertTrue(outcomes.start(turnId, conversationId, Long.MAX_VALUE))
+
+        assertNull(repository.appendMessage(conversationId, MessageRole.USER, "wrap 금지"))
+        assertFalse(
+            repository.commitToolExecution(
+                conversationId = conversationId,
+                turnId = turnId,
+                assistantText = "저장되면 안 됩니다.",
+                toolReceipt = "영수증도 저장되면 안 됩니다.",
+                toolName = "weather_current",
+                toolRisk = TurnToolRisk.READ_ONLY,
+                trustedOrdinal = 1,
+                outcome = TurnToolCommitOutcome.READ_COMPLETED,
+            ),
+        )
+        assertFalse(
+            repository.finalizeTurn(
+                conversationId = conversationId,
+                turnId = turnId,
+                assistantText = "완료되면 안 됩니다.",
+                completed = true,
+                cancelled = false,
+                failureCode = TurnOutcomeFailureCode.UNKNOWN,
+            ),
+        )
+
+        assertEquals(listOf(Long.MAX_VALUE), repository.listMessages(conversationId).map { it.ordinal })
+        assertEquals(TurnOutcomeState.STARTED, database.turnOutcomeDao().find(turnId)?.state)
+        assertTrue(database.turnOutcomeDao().listReadExecutions(turnId).isEmpty())
+    }
+
+    @Test
+    fun lateWriteRefusalCannotCommitAFalseReceiptOrClearUnknownSideEffect() = runBlocking {
+        val conversationId = repository.createConversation("write refusal")
+        val userOrdinal = repository.appendMessage(
+            conversationId,
+            MessageRole.USER,
+            "알람 맞춰 줘",
+        )!!
+        val turnId = "turn-44444444-4444-4444-4444-444444444444"
+        val outcomes = TurnOutcomeRepository(database = database, clock = { now })
+        assertTrue(outcomes.start(turnId, conversationId, userOrdinal))
+        assertTrue(outcomes.armSideEffect(turnId, "alarm_set", TurnToolRisk.DATA_WRITE))
+        assertTrue(outcomes.recordTool(turnId, "alarm_set", TurnToolRisk.DATA_WRITE))
+
+        assertFalse(
+            repository.commitToolExecution(
+                conversationId = conversationId,
+                turnId = turnId,
+                assistantText = "",
+                toolReceipt = "알람이 추가되지 않았습니다.",
+                toolName = "alarm_set",
+                toolRisk = TurnToolRisk.DATA_WRITE,
+                trustedOrdinal = 1,
+                outcome = TurnToolCommitOutcome.WRITE_REFUSED,
+            ),
+        )
+
+        assertEquals(listOf(MessageRole.USER), repository.listMessages(conversationId).map { it.role })
+        assertEquals(TurnOutcomeState.WRITE_UNKNOWN, database.turnOutcomeDao().find(turnId)?.state)
+        assertEquals(1, outcomes.unresolvedSideEffects().size)
+    }
+
+    @Test
+    fun messagesAfterAnOrdinalReturnTheOldestPendingBatch() = runBlocking {
+        val conversationId = repository.createConversation("순차 요약")
+        repeat(75) { index ->
+            repository.appendMessage(conversationId, MessageRole.USER, "메시지 $index")
+        }
+
+        val firstBatch = repository.listMessagesAfter(
+            conversationId = conversationId,
+            afterOrdinal = 0L,
+            limit = 60,
+        )
+        val secondBatch = repository.listMessagesAfter(
+            conversationId = conversationId,
+            afterOrdinal = firstBatch.last().ordinal,
+            limit = 60,
+        )
+
+        assertEquals((1L..60L).toList(), firstBatch.map(MessageEntity::ordinal))
+        assertEquals((61L..75L).toList(), secondBatch.map(MessageEntity::ordinal))
+    }
+
+    @Test
     fun storedTextIsTrimmedAndCapped() = runBlocking {
         val conversationId = repository.createConversation("   ")
         repository.appendMessage(

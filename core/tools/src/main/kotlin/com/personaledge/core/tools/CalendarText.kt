@@ -6,6 +6,7 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * Shared validation for every calendar tool.
@@ -35,7 +36,10 @@ internal object CalendarText {
         val trimmed = value.trim()
         if (!LOCAL_DATE_TIME.matches(trimmed)) return null
         return try {
-            LocalDateTime.parse(trimmed).atZone(zone).toInstant().toEpochMilli()
+            val local = LocalDateTime.parse(trimmed)
+            val offsets = zone.rules.getValidOffsets(local)
+            if (offsets.size != 1) return null
+            local.toInstant(offsets.single()).toEpochMilli()
         } catch (_: DateTimeException) {
             null
         }
@@ -78,14 +82,19 @@ internal object CalendarText {
             while (index < value.length) {
                 val codePoint = value.codePointAt(index)
                 index += Character.charCount(codePoint)
-                val unsafe = Character.isISOControl(codePoint) || when (Character.getType(codePoint)) {
+                val type = Character.getType(codePoint)
+                val unsafe = Character.isISOControl(codePoint) || when (type) {
                     Character.FORMAT.toInt(),
                     Character.LINE_SEPARATOR.toInt(),
                     Character.PARAGRAPH_SEPARATOR.toInt(),
                     -> true
                     else -> false
                 }
-                if (!unsafe) appendCodePoint(codePoint)
+                when {
+                    !unsafe -> appendCodePoint(codePoint)
+                    Character.isWhitespace(codePoint) || Character.isISOControl(codePoint) -> append(' ')
+                    else -> Unit
+                }
             }
         }
         // Delimiter replacement must follow unsafe-character removal. Otherwise an input such as
@@ -93,6 +102,7 @@ internal object CalendarText {
         val safe = withoutInvisibleText
             .replace(MODEL_CONTROL_TOKEN_OPEN, " ")
             .replace(MODEL_CONTROL_TOKEN_CLOSE, " ")
+            .replace(Regex("\\s+"), " ")
             .trim()
         if (safe.codePointCount(0, safe.length) <= maximumCharacters) return safe
         return safe.substring(0, safe.offsetByCodePoints(0, maximumCharacters))
@@ -124,5 +134,5 @@ internal object CalendarText {
     private fun sha256(value: String): String = MessageDigest
         .getInstance("SHA-256")
         .digest(value.toByteArray(Charsets.UTF_8))
-        .joinToString(separator = "") { byte -> "%02x".format(byte) }
+        .joinToString(separator = "") { byte -> "%02x".format(Locale.ROOT, byte) }
 }

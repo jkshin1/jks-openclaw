@@ -1,7 +1,10 @@
 package com.personaledge.agent
 
 import android.content.Context
+import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
+import com.personaledge.core.agent.AgentLoopLimits
 import com.personaledge.core.diagnostics.DiagnosticThermalStatus
 import com.personaledge.core.diagnostics.DiagnosticTurnCancellationCause
 import java.util.concurrent.Executor
@@ -35,6 +38,42 @@ internal object ThermalTurnPolicy {
     }
 }
 
+/**
+ * Owner-requested full-budget foreground lane for a bounded Fold8 thermal measurement.
+ *
+ * Headroom is still sampled for evidence, but neither a forecast nor an observed status through
+ * SEVERE shortens a user-requested decode. [ThermalTurnPolicy] remains authoritative: CRITICAL
+ * cooperatively cancels, while EMERGENCY/SHUTDOWN/UNKNOWN abort immediately. Foreground and
+ * background model work use the same owner-selected boundary: no app-level thermal restriction
+ * is applied before CRITICAL.
+ */
+internal object PredictiveThermalPolicy {
+    fun workload(observation: ThermalObservation): ThermalWorkload = when (observation.status) {
+        DiagnosticThermalStatus.NONE,
+        DiagnosticThermalStatus.LIGHT,
+        DiagnosticThermalStatus.MODERATE,
+        DiagnosticThermalStatus.SEVERE,
+        DiagnosticThermalStatus.CRITICAL,
+        DiagnosticThermalStatus.EMERGENCY,
+        DiagnosticThermalStatus.SHUTDOWN,
+        DiagnosticThermalStatus.UNKNOWN,
+        -> ThermalWorkload.NORMAL
+    }
+
+    fun applyOutputBudget(
+        limits: AgentLoopLimits,
+        @Suppress("UNUSED_PARAMETER") observation: ThermalObservation,
+    ): AgentLoopLimits = limits
+
+    /** Background model work follows the same CRITICAL boundary as foreground inference. */
+    fun allowBackgroundSummary(observation: ThermalObservation): Boolean =
+        ThermalTurnPolicy.canStart(observation.status)
+}
+
+internal enum class ThermalWorkload {
+    NORMAL,
+}
+
 internal enum class ThermalDirective(val urgency: Int) {
     CONTINUE(0),
     COOPERATIVE_CANCEL(1),
@@ -49,7 +88,25 @@ internal data class ThermalObservation(
     val status: DiagnosticThermalStatus,
     val directive: ThermalDirective,
     val stopSequence: Long,
+    val headroom: ThermalHeadroom? = null,
 )
+
+internal data class ThermalHeadroom(
+    val forecast: Float,
+    val moderateThreshold: Float = DEFAULT_MODERATE_HEADROOM,
+    val severeThreshold: Float = DEFAULT_SEVERE_HEADROOM,
+) {
+    init {
+        require(forecast.isFinite() && forecast >= 0f)
+        require(moderateThreshold.isFinite() && moderateThreshold >= 0f)
+        require(severeThreshold.isFinite() && severeThreshold >= moderateThreshold)
+    }
+
+    private companion object {
+        const val DEFAULT_MODERATE_HEADROOM = 0.8f
+        const val DEFAULT_SEVERE_HEADROOM = 1.0f
+    }
+}
 
 internal data class ThermalStopDecision(
     val status: DiagnosticThermalStatus,
@@ -96,6 +153,9 @@ internal class TurnCancellationCauseLatch {
 internal interface ThermalStatusSource {
     fun current(): DiagnosticThermalStatus
 
+    /** Null means prediction is unsupported or temporarily unavailable. */
+    fun forecastHeadroom(forecastSeconds: Int): ThermalHeadroom? = null
+
     fun subscribe(listener: (DiagnosticThermalStatus) -> Unit): AutoCloseable
 }
 
@@ -106,9 +166,39 @@ internal class AndroidThermalStatusSource(
     private val powerManager = requireNotNull(
         (context.applicationContext ?: context).getSystemService(PowerManager::class.java),
     )
+    private val headroomLock = Any()
+    private var lastHeadroomReadAtMillis = Long.MIN_VALUE
+    private var cachedHeadroom: ThermalHeadroom? = null
 
     override fun current(): DiagnosticThermalStatus =
         powerManager.currentThermalStatus.toDiagnosticThermalStatus()
+
+    override fun forecastHeadroom(forecastSeconds: Int): ThermalHeadroom? =
+        synchronized(headroomLock) {
+            val now = SystemClock.elapsedRealtime()
+            if (lastHeadroomReadAtMillis != Long.MIN_VALUE &&
+                now - lastHeadroomReadAtMillis < MIN_HEADROOM_SAMPLE_INTERVAL_MILLIS
+            ) {
+                return@synchronized cachedHeadroom
+            }
+            lastHeadroomReadAtMillis = now
+            val forecast = runCatching {
+                powerManager.getThermalHeadroom(forecastSeconds.coerceIn(0, 60))
+            }.getOrNull()?.takeIf { value -> value.isFinite() && value >= 0f }
+                ?: return@synchronized null.also { cachedHeadroom = null }
+            val thresholds = if (Build.VERSION.SDK_INT >= 35) {
+                runCatching { powerManager.thermalHeadroomThresholds }.getOrDefault(emptyMap())
+            } else {
+                emptyMap()
+            }
+            val moderate = thresholds[PowerManager.THERMAL_STATUS_MODERATE]
+                ?.takeIf { value -> value.isFinite() && value >= 0f }
+                ?: DEFAULT_MODERATE_HEADROOM
+            val severe = thresholds[PowerManager.THERMAL_STATUS_SEVERE]
+                ?.takeIf { value -> value.isFinite() && value >= moderate }
+                ?: maxOf(DEFAULT_SEVERE_HEADROOM, moderate)
+            ThermalHeadroom(forecast, moderate, severe).also { cachedHeadroom = it }
+        }
 
     override fun subscribe(listener: (DiagnosticThermalStatus) -> Unit): AutoCloseable {
         val platformListener = PowerManager.OnThermalStatusChangedListener { status ->
@@ -118,6 +208,12 @@ internal class AndroidThermalStatusSource(
         return AutoCloseable {
             powerManager.removeThermalStatusListener(platformListener)
         }
+    }
+
+    private companion object {
+        const val MIN_HEADROOM_SAMPLE_INTERVAL_MILLIS = 10_000L
+        const val DEFAULT_MODERATE_HEADROOM = 0.8f
+        const val DEFAULT_SEVERE_HEADROOM = 1.0f
     }
 }
 
@@ -160,7 +256,12 @@ internal class ThermalStatusMonitor private constructor(
         } else {
             DiagnosticThermalStatus.UNKNOWN
         }
-        return publish(observed)
+        val headroom = if (observed == DiagnosticThermalStatus.UNKNOWN) {
+            null
+        } else {
+            runCatching { source.forecastHeadroom(HEADROOM_FORECAST_SECONDS) }.getOrNull()
+        }
+        return publish(observed, headroom)
     }
 
     /** The ViewModel owns exactly one O(1) directive callback for the monitor lifetime. */
@@ -179,7 +280,10 @@ internal class ThermalStatusMonitor private constructor(
         }
     }
 
-    private fun publish(status: DiagnosticThermalStatus): ThermalObservation {
+    private fun publish(
+        status: DiagnosticThermalStatus,
+        headroom: ThermalHeadroom? = mutableObservation.value.headroom,
+    ): ThermalObservation {
         val directive = ThermalTurnPolicy.directive(status)
         var statusChanged = false
         val next = synchronized(observationLock) {
@@ -191,7 +295,7 @@ internal class ThermalStatusMonitor private constructor(
             } else {
                 saturatedIncrement(previous.stopSequence)
             }
-            ThermalObservation(status, directive, nextSequence).also {
+            ThermalObservation(status, directive, nextSequence, headroom).also {
                 mutableObservation.value = it
             }
         }
@@ -205,6 +309,8 @@ internal class ThermalStatusMonitor private constructor(
     }
 
     companion object {
+        private const val HEADROOM_FORECAST_SECONDS = 30
+
         fun create(context: Context): ThermalStatusMonitor = runCatching {
             ThermalStatusMonitor(AndroidThermalStatusSource(context))
         }.getOrElse {

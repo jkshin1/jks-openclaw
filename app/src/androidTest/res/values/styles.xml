@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Match AndroidX WhiteBackgroundTheme's lifecycle behavior without its white flash. -->
+    <style
+        name="Theme.PersonalEdgeAgent.AndroidTestEmpty"
+        parent="@android:style/Theme.Holo.NoActionBar.Fullscreen">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:fadingEdge">none</item>
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+</resources>

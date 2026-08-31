@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+            Debug-only. This source set is not part of the release variant, so the activity does
+            not exist in a signed build at all. It renders the real composables against fabricated
+            state so every screen — including states that need a loaded 3.66GB model or a pending
+            confirmation — can be reviewed on an emulator.
+
+            It is exported because `adb shell am start` cannot reach a non-exported activity. It
+            reads nothing: no ViewModel, no vault, no calendar, no diagnostics.
+        -->
+        <activity
+            android:name=".UiGalleryActivity"
+            android:exported="true"
+            android:label="UI Gallery"
+            android:windowSoftInputMode="adjustResize" />
+    </application>
+
+</manifest>

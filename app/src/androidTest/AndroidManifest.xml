@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <!--
+            ActivityScenario uses this opaque Activity to move MainActivity through onStop while
+            preserving its ViewModel. AndroidX defaults it to a white window, which looks like a
+            product crash on a dark physical device during the sustained-background acceptance
+            test. Keep the Activity opaque so the lifecycle assertion remains valid, but use a
+            dark test-only window.
+        -->
+        <activity
+            android:name="androidx.test.core.app.InstrumentationActivityInvoker$EmptyActivity"
+            android:theme="@style/Theme.PersonalEdgeAgent.AndroidTestEmpty"
+            tools:replace="android:theme" />
+    </application>
+
+</manifest>

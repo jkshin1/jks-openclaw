@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.personaledge.core.data.NotificationRepository
+import com.personaledge.core.data.CommitmentProposalRepository
 import com.personaledge.core.data.SettingsRepository
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,9 @@ import kotlinx.coroutines.launch
 class NotificationCaptureSink(
     private val settings: SettingsRepository,
     private val notifications: NotificationRepository,
+    private val proposals: CommitmentProposalRepository? = null,
+    private val captureInterlock: NotificationCaptureInterlock = NotificationCaptureInterlock(),
+    private val ownerConsentInterlock: OwnerConsentInterlock = OwnerConsentInterlock(),
     private val allowedPackages: Set<String> = NotificationCapture.DEFAULT_ALLOWED_PACKAGES,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -29,15 +33,46 @@ class NotificationCaptureSink(
 
     /** Returns true when the post was stored. Every rejection path is silent by design. */
     suspend fun accept(post: NotificationPost): Boolean {
-        val current = runCatching { settings.current() }.getOrNull() ?: return false
-        // Re-read on every post: notification access can stay granted long after the user turns
-        // capture off, and the listener keeps running either way.
-        if (!current.notificationCaptureEnabled) return false
+        val request = prepareCapture() ?: return false
+        return accept(post, request)
+    }
 
-        val draft = NotificationCapture.extract(post, allowedPackages) ?: return false
-        val stored = runCatching { notifications.capture(draft) }.getOrDefault(false)
-        if (stored) pruneIfDue(current.notificationRetentionDays)
-        return stored
+    /** Called synchronously in the listener callback before its IO coroutine can be reordered. */
+    internal fun prepareCapture(): NotificationCaptureInterlock.CaptureRequest? =
+        captureInterlock.prepareCapture()
+
+    internal suspend fun accept(
+        post: NotificationPost,
+        request: NotificationCaptureInterlock.CaptureRequest,
+    ): Boolean {
+        return captureInterlock.withCaptureBoundary(request) {
+            val current = runCatching { settings.current() }.getOrNull()
+                ?: return@withCaptureBoundary false
+            // Re-read on every post while holding the same boundary as setting changes.
+            if (!captureInterlock.captureAllowed(current.notificationCaptureEnabled)) {
+                return@withCaptureBoundary false
+            }
+
+            val draft = NotificationCapture.extract(post, allowedPackages)
+                ?: return@withCaptureBoundary false
+            val stored = runCatching { notifications.capture(draft) }.getOrDefault(false)
+            val proposalStore = proposals
+            if (stored && proposalStore != null) {
+                CommitmentProposalDetector.detect(draft)?.let { proposal ->
+                    val latest = runCatching { settings.current() }.getOrNull()
+                    if (
+                        latest != null && ownerConsentInterlock.allowed(
+                            OwnerConsentFeature.COMMITMENT_PROPOSALS,
+                            latest.commitmentProposalsEnabled,
+                        )
+                    ) {
+                        runCatching { proposalStore.offer(proposal) }
+                    }
+                }
+            }
+            if (stored) pruneIfDue(current.notificationRetentionDays)
+            stored
+        } ?: false
     }
 
     /** Pruning on every message would be wasteful; hourly keeps the bound without the cost. */
@@ -73,19 +108,35 @@ class KakaoNotificationListenerService : NotificationListenerService() {
         sink = NotificationCaptureSink(
             settings = container.settings,
             notifications = container.notifications,
+            proposals = container.commitmentProposals,
+            captureInterlock = container.notificationCaptureInterlock,
+            ownerConsentInterlock = container.ownerConsentInterlock,
         )
     }
 
     override fun onDestroy() {
+        KakaoNotificationReplyBridge.detach(this)
         scope.cancel()
         sink = null
         super.onDestroy()
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        KakaoNotificationReplyBridge.attach(this)
+    }
+
+    override fun onListenerDisconnected() {
+        KakaoNotificationReplyBridge.detach(this)
+        super.onListenerDisconnected()
     }
 
     override fun onNotificationPosted(statusBarNotification: StatusBarNotification?) {
         // The listener grant exposes every package. Reject by package before even asking Android
         // for the Notification/Bundle so another app's text is neither materialized nor parsed.
         if (!NotificationCapture.isAllowedPackage(statusBarNotification?.packageName)) return
+        val target = sink ?: return
+        val captureRequest = target.prepareCapture() ?: return
         val notification = statusBarNotification?.notification ?: return
         val post = NotificationPostReader.read(
             packageName = statusBarNotification.packageName,
@@ -94,8 +145,7 @@ class KakaoNotificationListenerService : NotificationListenerService() {
             flags = notification.flags,
             extras = notification.extras,
         ) ?: return
-        val target = sink ?: return
-        scope.launch { target.accept(post) }
+        scope.launch { target.accept(post, captureRequest) }
     }
 }
 

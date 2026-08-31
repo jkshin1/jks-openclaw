@@ -1,9 +1,18 @@
 package com.personaledge.agent
 
+import com.personaledge.core.agent.AutomaticWebSearchPolicy
+import com.personaledge.core.agent.TrustedWebSearchRequest
+import com.personaledge.core.agent.TurnOutputBudgetPolicy
 import com.personaledge.core.data.ConversationEntity
 import com.personaledge.core.data.ConversationRepository
 import com.personaledge.core.data.MessageEntity
 import com.personaledge.core.data.MessageRole
+import com.personaledge.core.data.TurnOutcomeRepository
+import com.personaledge.core.data.TurnOutcomeFailureCode
+import com.personaledge.core.data.TurnRecoverability
+import com.personaledge.core.data.TurnToolCommitOutcome
+import com.personaledge.core.data.TurnToolRisk
+import com.personaledge.core.data.takeCodePoints
 
 data class ConversationSummaryUi(
     val id: String,
@@ -19,6 +28,36 @@ data class ChatHistoryState(
 )
 
 /**
+ * A legacy transcript-only read that can be upgraded to the durable recovery state machine.
+ *
+ * [text] is the bounded request used for the immediate retry. The conversation and ordinal keep
+ * every later recovery capsule bound to the original user-owned transcript row rather than to a
+ * follow-up such as "why did you stop?".
+ */
+internal data class UnfinishedReadRequest(
+    val conversationId: String,
+    val userMessageOrdinal: Long,
+    val text: String,
+)
+
+/**
+ * One subjectless web-search follow-up bound to the immediately preceding owner USER row.
+ *
+ * The typed request hides its query outside `core:agent`; [userMessageOrdinal] is the durable
+ * recovery authority if the fresh read completes but its final answer is interrupted.
+ */
+internal data class ContextualWebSearchRequest(
+    val conversationId: String,
+    val userMessageOrdinal: Long,
+    val trustedRequest: TrustedWebSearchRequest,
+    val inheritLongFormRequest: Boolean,
+) {
+    override fun toString(): String =
+        "ContextualWebSearchRequest(userMessageOrdinal=$userMessageOrdinal, " +
+            "inheritLongFormRequest=$inheritLongFormRequest, query=<redacted>)"
+}
+
+/**
  * The only place chat transcripts reach storage.
  *
  * A conversation row is created lazily on the first message rather than when a screen opens, so
@@ -31,6 +70,7 @@ data class ChatHistoryState(
  */
 class ChatHistoryCoordinator(
     private val repository: ConversationRepository,
+    private val turnOutcomes: TurnOutcomeRepository? = null,
 ) {
     /** Returns the restored transcript, or an empty list when there is nothing to restore. */
     suspend fun restoreMostRecent(): RestoredConversation = runCatching {
@@ -40,9 +80,15 @@ class ChatHistoryCoordinator(
         RestoredConversation(newest.id, loadEntries(newest.id))
     }.getOrDefault(RestoredConversation(null, emptyList()))
 
-    suspend fun switchTo(conversationId: String): RestoredConversation = runCatching {
-        RestoredConversation(conversationId, loadEntries(conversationId))
-    }.getOrDefault(RestoredConversation(conversationId, emptyList()))
+    suspend fun switchTo(conversationId: String): ConversationSwitchResult = try {
+        val conversation = repository.findConversation(conversationId)
+            ?: return ConversationSwitchResult.NotFound
+        ConversationSwitchResult.Success(
+            RestoredConversation(conversation.id, loadEntries(conversation.id)),
+        )
+    } catch (_: Exception) {
+        ConversationSwitchResult.StorageUnavailable
+    }
 
     /**
      * Returns the conversation to append to, creating one titled from [firstPrompt] if needed.
@@ -52,13 +98,301 @@ class ChatHistoryCoordinator(
         activeConversationId: String?,
         firstPrompt: String,
     ): String? {
-        if (activeConversationId != null) return activeConversationId
-        return runCatching { repository.createConversation(titleFrom(firstPrompt)) }.getOrNull()
+        return runCatching {
+            activeConversationId
+                ?.takeIf { conversationId -> repository.findConversation(conversationId) != null }
+                ?: repository.createConversation(titleFrom(firstPrompt))
+        }.getOrNull()
     }
 
-    suspend fun record(conversationId: String?, role: MessageRole, text: String) {
-        if (conversationId == null || text.isBlank()) return
-        runCatching { repository.appendMessage(conversationId, role, text) }
+    suspend fun record(conversationId: String?, role: MessageRole, text: String): Boolean {
+        if (conversationId == null) return false
+        if (text.isBlank()) return true
+        return recordOrdinal(conversationId, role, text) != null
+    }
+
+    /** Returns the durable ordinal needed by a content-free turn recovery capsule. */
+    suspend fun recordOrdinal(
+        conversationId: String?,
+        role: MessageRole,
+        text: String,
+    ): Long? {
+        if (conversationId == null || text.isBlank()) return null
+        return runCatching { repository.appendMessage(conversationId, role, text) }.getOrNull()
+    }
+
+    /** One Room transaction for the transcript phase, app receipt, and closed Tool metadata. */
+    suspend fun commitToolExecution(
+        conversationId: String?,
+        turnId: String,
+        assistantText: String,
+        toolReceipt: String,
+        toolName: String,
+        toolRisk: TurnToolRisk,
+        trustedOrdinal: Int,
+        outcome: TurnToolCommitOutcome,
+    ): Boolean {
+        if (conversationId == null) return false
+        return repository.commitToolExecution(
+            conversationId = conversationId,
+            turnId = turnId,
+            assistantText = assistantText,
+            toolReceipt = toolReceipt,
+            toolName = toolName,
+            toolRisk = toolRisk,
+            trustedOrdinal = trustedOrdinal,
+            outcome = outcome,
+        )
+    }
+
+    /** A transient action derived from durable closed state; it is never written to chat history. */
+    suspend fun recoveryEntry(conversationId: String?): ChatEntry? {
+        if (conversationId == null) return null
+        val recovery = turnOutcomes?.latestRecovery(conversationId) ?: return null
+        val action = when (recovery.recoverability) {
+            TurnRecoverability.REQUERY_READ -> ChatRecoveryAction(
+                turnId = recovery.turnId,
+                conversationId = recovery.conversationId,
+                type = ChatRecoveryType.REQUERY_READ,
+                label = "읽기 다시 수행",
+                expectedReadTools = recovery.expectedReadTools,
+            )
+            TurnRecoverability.VERIFY_EXTERNAL_STATE -> ChatRecoveryAction(
+                turnId = recovery.turnId,
+                conversationId = recovery.conversationId,
+                type = ChatRecoveryType.VERIFY_EXTERNAL_STATE,
+                label = "외부 상태 확인 완료",
+                expectedReadTools = emptyList(),
+            )
+            TurnRecoverability.NONE -> return null
+        }
+        val message = when (action.type) {
+            ChatRecoveryType.REQUERY_READ ->
+                "이 읽기 요청의 최종 답변이 완료되지 않았습니다. 이전 결과를 이어 쓰지 않고 새로 조회할 수 있습니다."
+            ChatRecoveryType.VERIFY_EXTERNAL_STATE ->
+                TurnRecoveryPolicy.verificationGuidance(recovery)
+        }
+        return ChatEntry(
+            id = recoveryEntryId(recovery.turnId),
+            role = ChatRole.STATUS,
+            text = message,
+            recoveryAction = action,
+        )
+    }
+
+    /** Verification obligations survive transcript deletion and are therefore queried globally. */
+    suspend fun unresolvedSideEffectEntries(): List<ChatEntry> =
+        turnOutcomes?.unresolvedSideEffects().orEmpty().map { recovery ->
+            val action = ChatRecoveryAction(
+                turnId = recovery.turnId,
+                conversationId = recovery.conversationId,
+                type = ChatRecoveryType.VERIFY_EXTERNAL_STATE,
+                label = "외부 상태 확인 완료",
+                expectedReadTools = emptyList(),
+            )
+            ChatEntry(
+                id = recoveryEntryId(recovery.turnId),
+                role = ChatRole.STATUS,
+                text = TurnRecoveryPolicy.verificationGuidance(recovery),
+                recoveryAction = action,
+            )
+        }
+
+    suspend fun recoveryRecord(action: ChatRecoveryAction) =
+        turnOutcomes?.recovery(action.turnId, action.conversationId)?.takeIf { recovery ->
+            when (action.type) {
+                ChatRecoveryType.REQUERY_READ ->
+                    recovery.recoverability == TurnRecoverability.REQUERY_READ &&
+                        TurnRecoveryPolicy.matchesExpectedReadTools(
+                            expected = recovery.expectedReadTools,
+                            observed = action.expectedReadTools,
+                        )
+                ChatRecoveryType.VERIFY_EXTERNAL_STATE ->
+                    recovery.recoverability == TurnRecoverability.VERIFY_EXTERNAL_STATE &&
+                        action.expectedReadTools.isEmpty()
+            }
+        }
+
+    suspend fun dismissRecovery(action: ChatRecoveryAction): Boolean =
+        turnOutcomes?.dismissVerification(action.turnId, action.conversationId) ?: false
+
+    suspend fun finalizeTurn(
+        conversationId: String?,
+        turnId: String,
+        assistantText: String,
+        completed: Boolean,
+        cancelled: Boolean,
+        failureCode: TurnOutcomeFailureCode,
+    ): Boolean {
+        if (conversationId == null) return false
+        return repository.finalizeTurn(
+            conversationId = conversationId,
+            turnId = turnId,
+            assistantText = assistantText,
+            completed = completed,
+            cancelled = cancelled,
+            failureCode = failureCode,
+        )
+    }
+
+    /**
+     * Starts the durable capsule for a normal, typed-recovery, or legacy-transcript retry.
+     *
+     * A legacy retry deliberately points at [UnfinishedReadRequest.userMessageOrdinal]. The newly
+     * persisted follow-up stays visible in the transcript, but can never replace the original read
+     * request as the recovery authority if this fresh read is interrupted again.
+     */
+    internal suspend fun startTurnRecoveryCapsule(
+        turnId: String,
+        conversationId: String?,
+        persistedUserMessageOrdinal: Long?,
+        unfinishedReadRequest: UnfinishedReadRequest?,
+        contextualWebSearchRequest: ContextualWebSearchRequest? = null,
+        predecessorTurnId: String?,
+    ): Boolean {
+        val outcomeRepository = turnOutcomes ?: return false
+        if (
+            conversationId == null ||
+            persistedUserMessageOrdinal == null ||
+            persistedUserMessageOrdinal <= 0L ||
+            listOfNotNull(unfinishedReadRequest, contextualWebSearchRequest).size > 1 ||
+            ((unfinishedReadRequest != null || contextualWebSearchRequest != null) &&
+                predecessorTurnId != null)
+        ) {
+            return false
+        }
+        if (unfinishedReadRequest != null) {
+            if (
+                unfinishedReadRequest.conversationId != conversationId ||
+                unfinishedReadRequest.userMessageOrdinal <= 0L ||
+                unfinishedReadRequest.text.isBlank()
+            ) {
+                return false
+            }
+            return outcomeRepository.start(
+                turnId = turnId,
+                conversationId = conversationId,
+                userMessageOrdinal = unfinishedReadRequest.userMessageOrdinal,
+            )
+        }
+        if (contextualWebSearchRequest != null) {
+            if (
+                contextualWebSearchRequest.conversationId != conversationId ||
+                contextualWebSearchRequest.userMessageOrdinal <= 0L
+            ) {
+                return false
+            }
+            return outcomeRepository.startContextualRead(
+                turnId = turnId,
+                conversationId = conversationId,
+                userMessageOrdinal = persistedUserMessageOrdinal,
+                recoverySourceUserMessageOrdinal =
+                    contextualWebSearchRequest.userMessageOrdinal,
+            )
+        }
+        return if (predecessorTurnId == null) {
+            outcomeRepository.start(
+                turnId = turnId,
+                conversationId = conversationId,
+                userMessageOrdinal = persistedUserMessageOrdinal,
+            )
+        } else {
+            outcomeRepository.startSuccessor(
+                predecessorTurnId = predecessorTurnId,
+                turnId = turnId,
+                conversationId = conversationId,
+                userMessageOrdinal = persistedUserMessageOrdinal,
+            )
+        }
+    }
+
+    /**
+     * Resolves a subjectless web instruction from only the immediately preceding completed turn's
+     * USER row. Assistant text, summaries, memories, Tool results, and other conversations are never
+     * candidate query sources.
+     */
+    internal suspend fun contextualWebSearchRequestForFollowUp(
+        conversationId: String?,
+        followUp: String,
+    ): ContextualWebSearchRequest? {
+        if (conversationId == null) return null
+        return runCatching {
+            val messages = repository.listMessages(
+                conversationId,
+                CONTEXTUAL_SEARCH_MESSAGE_WINDOW,
+            )
+            if (messages.lastOrNull()?.role != MessageRole.ASSISTANT) return@runCatching null
+            val previousUser = messages.lastOrNull { message -> message.role == MessageRole.USER }
+                ?: return@runCatching null
+            val trusted = AutomaticWebSearchPolicy.contextualRequestOrNull(
+                followUp = followUp,
+                previousUserRequest = previousUser.text,
+            ) ?: return@runCatching null
+            ContextualWebSearchRequest(
+                conversationId = conversationId,
+                userMessageOrdinal = previousUser.ordinal,
+                trustedRequest = trusted,
+                inheritLongFormRequest = TurnOutputBudgetPolicy.requestsLongForm(previousUser.text),
+            )
+        }.getOrNull()
+    }
+
+    /**
+     * Finds the original read request only when the stored transcript ends at a closed-set
+     * READ_ONLY Tool receipt and the current message asks to continue the missing answer.
+     *
+     * Tool payloads are deliberately not persisted. Recovery therefore means performing the
+     * original read again, never treating the old receipt as if it contained an answer. Only a
+     * closed set of content-free READ_ONLY receipts is accepted so a write can never be replayed.
+     */
+    internal suspend fun unfinishedReadRequestForFollowUp(
+        conversationId: String?,
+        followUp: String,
+    ): UnfinishedReadRequest? {
+        if (conversationId == null || !UnfinishedReadFollowUp.matches(followUp)) return null
+        return runCatching {
+            // Schema-6 state is authoritative. A VERIFY capsule must never be bypassed by a
+            // transcript phrase, and a REQUERY capsule has its own exactly-scoped UI action.
+            if (turnOutcomes?.latestRecovery(conversationId) != null) return@runCatching null
+            val messages = repository.listMessages(conversationId, RECOVERY_MESSAGE_WINDOW)
+            val last = messages.lastOrNull() ?: return@runCatching null
+            val userIndex = messages.indexOfLast { message -> message.role == MessageRole.USER }
+            if (userIndex < 0) return@runCatching null
+            val afterUser = messages.drop(userIndex + 1)
+            val toolReceipts = afterUser.filter { message -> message.role == MessageRole.TOOL_RECEIPT }
+            val original = messages[userIndex].takeIf {
+                last.role == MessageRole.TOOL_RECEIPT &&
+                    last.text in RECOVERABLE_READ_RECEIPTS &&
+                    toolReceipts.isNotEmpty() &&
+                    toolReceipts.all { receipt -> receipt.text in RECOVERABLE_READ_RECEIPTS }
+            }
+            original?.let { message ->
+                message.text
+                    .trim()
+                    .takeCodePoints(MAX_RECOVERED_REQUEST_CHARACTERS)
+                    .takeIf(String::isNotBlank)
+                    ?.let { boundedText ->
+                        UnfinishedReadRequest(
+                            conversationId = conversationId,
+                            userMessageOrdinal = message.ordinal,
+                            text = boundedText,
+                        )
+                    }
+            }
+        }.getOrNull()
+    }
+
+    /** Role-aware context for short corrections such as "서울이 아니라 동탄" after weather. */
+    suspend fun hasRecentWeatherRead(conversationId: String?): Boolean {
+        if (conversationId == null) return false
+        return runCatching {
+            repository.listMessages(conversationId, RECOVERY_MESSAGE_WINDOW)
+                .takeLast(RECENT_WEATHER_CONTEXT_MESSAGES)
+                .any { message ->
+                    message.role == MessageRole.TOOL_RECEIPT &&
+                        message.text == WEATHER_READ_RECEIPT
+                }
+        }.getOrDefault(false)
     }
 
     suspend fun listConversations(): List<ConversationSummaryUi> = runCatching {
@@ -71,27 +405,106 @@ class ChatHistoryCoordinator(
     suspend fun deleteAll(): Boolean =
         runCatching { repository.deleteAllConversations() }.isSuccess
 
-    private suspend fun loadEntries(conversationId: String): List<ChatEntry> = repository
-        .listMessages(conversationId)
-        .map(MessageEntity::toChatEntry)
+    private suspend fun loadEntries(conversationId: String): List<ChatEntry> = buildList {
+        addAll(repository.listMessages(conversationId).map(MessageEntity::toChatEntry))
+        recoveryEntry(conversationId)?.let(::add)
+    }
 
     /** A first line is a better handle than a timestamp when scanning a list of threads. */
     private fun titleFrom(prompt: String): String = prompt
         .lineSequence()
         .firstOrNull { line -> line.isNotBlank() }
         ?.trim()
-        ?.take(MAX_TITLE_CHARACTERS)
+        ?.takeCodePoints(MAX_TITLE_CHARACTERS)
         .orEmpty()
 
     private companion object {
         const val MAX_TITLE_CHARACTERS = 40
+        const val MAX_RECOVERED_REQUEST_CHARACTERS = 500
+        const val RECOVERY_MESSAGE_WINDOW = 12
+        const val CONTEXTUAL_SEARCH_MESSAGE_WINDOW = 8
+        const val RECENT_WEATHER_CONTEXT_MESSAGES = 6
+        const val WEATHER_READ_RECEIPT = "현재 및 오늘 날씨를 확인했습니다."
+        val RECOVERABLE_READ_RECEIPTS = setOf(
+            "웹 검색을 완료했습니다.",
+            WEATHER_READ_RECEIPT,
+            "캘린더에서 일정을 읽었습니다.",
+            "다음 알람 시각을 확인했습니다.",
+            "수집된 카카오톡 알림을 검색했습니다.",
+            "네이버 지도에서 이동 시간을 조회했습니다.",
+            "로컬 리마인더를 조회했습니다.",
+        )
+
+        fun recoveryEntryId(turnId: String) = "turn-recovery-$turnId"
     }
+}
+
+internal object UnfinishedReadFollowUp {
+    fun matches(value: String): Boolean {
+        val normalized = value.trim().lowercase()
+        if (normalized.isEmpty() || normalized.codePointCount(0, normalized.length) > 120) {
+            return false
+        }
+        return STOPPED_PHRASES.any(normalized::contains) ||
+            CONTINUATION_PHRASES.any(normalized::contains) ||
+            (normalized.contains("답변") && NEGATIVE_ANSWER_TERMS.any(normalized::contains))
+    }
+
+    private val CONTINUATION_PHRASES = listOf(
+        "계속해", "계속 해", "마저", "이어줘", "이어 줘", "결과 알려", "다시 알려",
+        "답변해줘", "답변해 줘", "답해줘", "답해 줘", "continue", "finish the answer",
+    )
+    private val NEGATIVE_ANSWER_TERMS = listOf(
+        "안 해", "안해", "못 해", "못해", "없어", "않", "왜",
+    )
+    private val STOPPED_PHRASES = listOf(
+        "왜 중단", "왜 멈", "중단했", "중단됐", "멈췄", "왜 실패", "why did you stop",
+    )
+}
+
+enum class ChatRecoveryType {
+    REQUERY_READ,
+    VERIFY_EXTERNAL_STATE,
+}
+
+class ChatRecoveryAction(
+    val turnId: String,
+    val conversationId: String,
+    val type: ChatRecoveryType,
+    val label: String,
+    expectedReadTools: List<String> = emptyList(),
+) {
+    val expectedReadTools: List<String> = expectedReadTools.toList()
+
+    init {
+        require(
+            when (type) {
+                ChatRecoveryType.REQUERY_READ ->
+                    TurnRecoveryPolicy.validExpectedReadTools(expectedReadTools)
+                ChatRecoveryType.VERIFY_EXTERNAL_STATE -> expectedReadTools.isEmpty()
+            },
+        )
+    }
+
+    /** [label] is UI text and must never be copied into incidental diagnostic rendering. */
+    override fun toString(): String =
+        "ChatRecoveryAction(" +
+            "turnId=$turnId, conversationId=$conversationId, type=$type, " +
+            "expectedReadTools=$expectedReadTools)"
 }
 
 data class RestoredConversation(
     val conversationId: String?,
     val entries: List<ChatEntry>,
 )
+
+sealed interface ConversationSwitchResult {
+    data class Success(val restored: RestoredConversation) : ConversationSwitchResult
+
+    data object NotFound : ConversationSwitchResult
+
+    data object StorageUnavailable : ConversationSwitchResult
+}
 
 private fun ConversationEntity.toSummary() = ConversationSummaryUi(
     id = id,

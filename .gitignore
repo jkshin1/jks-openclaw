@@ -16,6 +16,10 @@ captures/
 .jdk/
 .kotlin/
 
+# Host Python script caches
+__pycache__/
+*.py[cod]
+
 # Secrets and signing material
 *.jks
 *.keystore
@@ -39,11 +43,26 @@ models/*
 !models/README.md
 !models/model-manifest.example.json
 !models/model-manifest.json
+!models/model-manifest-qwen3-8b.json
+!models/eval/
+models/eval/*
+!models/eval/korean-tool-use-v1.jsonl
+!models/eval/korean-dialogue-quality-v1.jsonl
+!models/eval/host-candidate-provenance-v1.json
 *.litertlm
 *.task
 *.safetensors
 
 # Reports and traces
-reports/
+reports/*
+!reports/eval/
+reports/eval/*
+!reports/eval/qwen3-8b-litert-emulator-2026-08-30.json
+!reports/eval/qwen3-8b-qwen8blab-native-lifecycle-2026-08-30.json
+!reports/eval/qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3.jsonl
+!reports/eval/qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3.audit.jsonl
+!reports/eval/qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3.score.json
+!reports/eval/qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3.gate.json
+!reports/eval/e4b-vs-qwen3.5-9b-focused-2026-08-30.json
 traces/
 *.hprof

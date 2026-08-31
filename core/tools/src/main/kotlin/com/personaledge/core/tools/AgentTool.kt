@@ -71,7 +71,11 @@ enum class ToolRisk {
 sealed interface ValidationResult {
     data class Valid(val canonicalParams: String) : ValidationResult
 
-    data class Invalid(val reason: String) : ValidationResult
+    /** [failureCode] is optional and must never encode model, provider, or credential text. */
+    data class Invalid(
+        val reason: String,
+        val failureCode: ToolFailureCode? = null,
+    ) : ValidationResult
 }
 
 class ExecutionPermit internal constructor(
@@ -89,10 +93,19 @@ class PreparedAction<P : ToolParams, R : Any> internal constructor(
     val preview: ActionPreview,
     val expiresAtEpochMillis: Long,
     val confirmation: ConfirmationRequirement,
+    /** SHA-256 of the canonical input retained for compatibility with existing confirmation UI. */
     val parameterDigest: String,
+    /** Domain-separated v2 digest binding the complete trusted authorization identity. */
+    val challengeDigest: String,
+    /** Content-free digest binding the exact title and summary presented for confirmation. */
+    internal val previewDigest: String,
+    /** Legacy-stable replay key; the durable ledger receives only this content-free digest. */
     val idempotencyKey: String,
+    /** Length-framed v2 replay identity bound into [challengeDigest]. */
+    internal val replayIdentityDigest: String,
     val requiredCapabilities: Set<ToolCapability>,
     val risk: ToolRisk,
+    internal val requestId: String,
     internal val canonicalInput: CanonicalToolInput,
     internal val tool: AgentTool<P, R>,
     internal val permit: ExecutionPermit,
@@ -104,5 +117,9 @@ sealed interface PreparationResult<out P : ToolParams, out R : Any> {
         val action: PreparedAction<P, R>,
     ) : PreparationResult<P, R>
 
-    data class Rejected(val reason: String) : PreparationResult<Nothing, Nothing>
+    /** Closed failure metadata may cross layers; [reason] remains internal to the Tool boundary. */
+    data class Rejected(
+        val reason: String,
+        val failureCode: ToolFailureCode? = null,
+    ) : PreparationResult<Nothing, Nothing>
 }

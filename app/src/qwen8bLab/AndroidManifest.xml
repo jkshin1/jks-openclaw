@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Defense in depth: the lab runtime may read, but cannot hold device-write grants. -->
+    <uses-permission
+        android:name="android.permission.READ_CALENDAR"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.WRITE_CALENDAR"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.INTERNET"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.ACCESS_NETWORK_STATE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="com.android.alarm.permission.SET_ALARM"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:node="remove" />
+
+    <application>
+        <!-- This build is an instrumentation-only runtime lab, not an interactive app. -->
+        <activity
+            android:name=".MainActivity"
+            android:enabled="false" />
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+        </provider>
+        <service
+            android:name=".KakaoNotificationListenerService"
+            tools:node="remove" />
+        <receiver
+            android:name=".ReminderAlarmReceiver"
+            tools:node="remove" />
+        <receiver
+            android:name=".ReminderActionReceiver"
+            tools:node="remove" />
+        <receiver
+            android:name=".ReminderRescheduleReceiver"
+            tools:node="remove" />
+    </application>
+</manifest>

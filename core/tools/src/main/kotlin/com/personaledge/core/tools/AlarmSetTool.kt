@@ -1,6 +1,7 @@
 package com.personaledge.core.tools
 
 import java.time.ZoneId
+import java.util.Locale
 
 data class AlarmSetParams(
     val time: String,
@@ -30,7 +31,9 @@ class AlarmSetTool(
 
     override val descriptor = ToolDescriptor(
         name = NAME,
-        description = "Create a standard Android alarm at a local time, optionally repeating",
+        description = "Create a standard Android clock alarm at the next occurrence of a time, " +
+            "optionally repeating by weekday. Never use this when the user names a calendar " +
+            "date, today, or tomorrow; use reminder_create so the requested date is preserved.",
         risk = ToolRisk.DATA_WRITE,
         requiredCapabilities = setOf(ToolCapability.SCHEDULE_ALARM),
     )
@@ -88,7 +91,7 @@ class AlarmSetTool(
         return ActionPreview(
             title = "알람 추가",
             summary = buildString {
-                append("%02d:%02d".format(hour, minute))
+                append("%02d:%02d".format(Locale.ROOT, hour, minute))
                 fields[FIELD_LABEL]?.let { label -> append(" · \"$label\"") }
                 append("\n")
                 append(

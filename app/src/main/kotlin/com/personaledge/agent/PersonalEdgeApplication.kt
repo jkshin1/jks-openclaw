@@ -1,6 +1,12 @@
 package com.personaledge.agent
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.CalendarContract
 import com.personaledge.core.diagnostics.DiagnosticEvent
 import com.personaledge.core.diagnostics.DiagnosticExportResult
 import com.personaledge.core.diagnostics.DiagnosticPhase
@@ -19,6 +25,7 @@ class PersonalEdgeApplication : Application() {
     }
     private lateinit var recorder: DiagnosticRecorder
     private lateinit var channel: AppDiagnosticChannel
+    private var calendarObserver: ContentObserver? = null
 
     /** Created eagerly but resolved lazily; see [AppContainer]. */
     val container: AppContainer by lazy { AppContainer(this) }
@@ -37,6 +44,33 @@ class PersonalEdgeApplication : Application() {
         // Previous low-memory, crash and ANR exits are available only after a new start.
         channel.recordHistoricalExits()
         channel.recordResourceSnapshot()
+        if (CandidateProcessPolicy.providerIntegrationsEnabled(BuildConfig.CANDIDATE_MODEL_LAB)) {
+            ReminderWorkBootstrap.start(this)
+            ensureCalendarReconciliationObserver()
+        }
+    }
+
+    /** Debounces live CalendarContract edits into the deterministic leave-by worker. */
+    fun ensureCalendarReconciliationObserver() {
+        if (!CandidateProcessPolicy.providerIntegrationsEnabled(BuildConfig.CANDIDATE_MODEL_LAB) ||
+            calendarObserver != null ||
+            checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                ReminderWorkBootstrap.enqueueLeaveByReconcile(this@PersonalEdgeApplication)
+            }
+        }
+        if (runCatching {
+                contentResolver.registerContentObserver(
+                    CalendarContract.Events.CONTENT_URI,
+                    true,
+                    observer,
+                )
+            }.isSuccess
+        ) {
+            calendarObserver = observer
+        }
     }
 
     internal fun diagnosticChannel(): AppDiagnosticChannel =
@@ -111,3 +145,8 @@ internal class AppDiagnosticChannel(
 internal fun Application.personalEdgeDiagnostics(): AppDiagnosticChannel =
     (this as? PersonalEdgeApplication)?.diagnosticChannel()
         ?: AppDiagnosticChannel(DiagnosticRecorder.noOp(), Executor(Runnable::run))
+
+/** Keeps the isolated candidate process from starting provider-backed app integrations. */
+internal object CandidateProcessPolicy {
+    fun providerIntegrationsEnabled(candidateModelLab: Boolean): Boolean = !candidateModelLab
+}

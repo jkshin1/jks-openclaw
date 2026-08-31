@@ -11,6 +11,9 @@ package com.personaledge.core.tools
 class ScopedCalendarGateway(
     private val delegate: CalendarProviderGateway,
     private val pinnedCalendarId: suspend () -> Long?,
+    private val readCalendarIds: suspend () -> Set<Long> = {
+        pinnedCalendarId()?.let(::setOf).orEmpty()
+    },
 ) : CalendarGateway {
 
     override suspend fun writableCalendars(): List<CalendarAccount> {
@@ -23,19 +26,22 @@ class ScopedCalendarGateway(
         endEpochMillis: Long,
         limit: Int,
     ): List<CalendarEvent> {
-        val pinned = pinnedCalendarId()
-            ?: throw CalendarAccessException("설정에서 사용할 캘린더를 먼저 선택하세요.")
-        return delegate
-            .queryEvents(pinned, startEpochMillis, endEpochMillis, limit)
-            // Provider scoping is authoritative; retain this check as defense in depth against a
-            // broken or malicious provider implementation.
-            .filter { event -> event.calendarId == pinned }
+        val scopedIds = readCalendarIds().filter { it > 0 }.toSet()
+        if (scopedIds.isEmpty()) {
+            throw CalendarAccessException("설정에서 읽을 캘린더를 먼저 선택하세요.")
+        }
+        return scopedIds.flatMap { calendarId ->
+            delegate
+                .queryEvents(calendarId, startEpochMillis, endEpochMillis, limit)
+                .filter { event -> event.calendarId == calendarId }
+        }
+            .sortedBy(CalendarEvent::startEpochMillis)
             .take(limit)
     }
 
     override suspend fun findEvent(eventId: Long): CalendarEvent? {
-        val pinned = pinnedCalendarId() ?: return null
-        return delegate.findEvent(eventId)?.takeIf { event -> event.calendarId == pinned }
+        val scopedIds = readCalendarIds()
+        return delegate.findEvent(eventId)?.takeIf { event -> event.calendarId in scopedIds }
     }
 
     override suspend fun insertEvent(draft: CalendarEventDraft): Long? {
@@ -44,14 +50,18 @@ class ScopedCalendarGateway(
         return delegate.insertEvent(draft)
     }
 
-    override suspend fun updateEvent(eventId: Long, patch: CalendarEventPatch): Boolean {
+    override suspend fun updateEvent(
+        expected: CalendarEventMutationSnapshot,
+        patch: CalendarEventPatch,
+    ): Boolean {
         val pinned = pinnedCalendarId() ?: return false
-        val existing = delegate.findEvent(eventId)
+        if (expected.calendarId != pinned || expected.eventId <= 0L) return false
+        val existing = delegate.findEvent(expected.eventId)
             ?.takeIf { event -> event.calendarId == pinned }
             ?: return false
-        check(existing.eventId == eventId)
-        // CalendarContract applies both predicates in one update. A sync that moves the row after
-        // the read therefore yields zero updated rows instead of writing outside the pinned scope.
-        return delegate.updateEvent(pinned, eventId, patch)
+        if (existing.mutationSnapshot() != expected) return false
+        // The provider repeats this complete comparison in the update WHERE. A sync after this
+        // read therefore yields zero rows instead of overwriting state the owner never confirmed.
+        return delegate.updateEvent(expected, patch)
     }
 }

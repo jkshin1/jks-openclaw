@@ -18,7 +18,7 @@ internal object UntrustedText {
 
     private val HTML_TAG = Regex("<[^>]{0,200}>")
 
-    /** Only the entities the NAVER search response actually emits. */
+    /** Small fixed entity set accepted from search-provider titles and snippets. */
     private val HTML_ENTITIES = listOf(
         "&lt;" to "<",
         "&gt;" to ">",
@@ -31,7 +31,7 @@ internal object UntrustedText {
     )
 
     /**
-     * Strips markup, decodes the handful of entities NAVER emits, removes control-token delimiters
+     * Strips markup, decodes the fixed entity set, removes control-token delimiters
      * and invisible formatting, collapses whitespace, and caps the length.
      *
      * Order matters: tags are removed before entities are decoded, so a decoded `&lt;b&gt;` cannot

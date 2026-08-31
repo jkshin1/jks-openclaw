@@ -16,10 +16,20 @@ import com.personaledge.core.tools.AlarmSetTool
 import com.personaledge.core.tools.CalendarCreateEventTool
 import com.personaledge.core.tools.CalendarQueryTool
 import com.personaledge.core.tools.CalendarUpdateEventTool
+import com.personaledge.core.tools.CommitmentProposalTool
 import com.personaledge.core.tools.FakeArrivalNoticeTool
 import com.personaledge.core.tools.NotificationSearchTool
+import com.personaledge.core.tools.KakaoNotificationReplyTool
+import com.personaledge.core.tools.KakaoShareMessageTool
+import com.personaledge.core.tools.MemoryRememberTool
 import com.personaledge.core.tools.RouteEstimateTool
+import com.personaledge.core.tools.ReminderCancelTool
+import com.personaledge.core.tools.ReminderCreateTool
+import com.personaledge.core.tools.ReminderQueryTool
+import com.personaledge.core.tools.ReminderUpdateTool
+import com.personaledge.core.tools.ToolFailureCode
 import com.personaledge.core.tools.WebSearchTool
+import com.personaledge.core.tools.WeatherTool
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
@@ -43,6 +53,14 @@ class PersonalEdgeDiagnosticsTest {
             DiagnosticErrorCode.TOOL_CALL_LIMIT_EXCEEDED,
             AgentFailureCode.TOOL_CALL_LIMIT_EXCEEDED.toDiagnosticErrorCode(),
         )
+
+        val mappedToolFailures = ToolFailureCode.values().map { code ->
+            code.toDiagnosticErrorCode()
+        }
+        assertEquals(ToolFailureCode.values().size, mappedToolFailures.distinct().size)
+        ToolFailureCode.values().zip(mappedToolFailures).forEach { (source, diagnostic) ->
+            assertEquals("TOOL_${source.name}", diagnostic.name)
+        }
     }
 
     @Test
@@ -59,6 +77,15 @@ class PersonalEdgeDiagnosticsTest {
             NotificationSearchTool.NAME to DiagnosticToolRisk.READ_ONLY,
             RouteEstimateTool.NAME to DiagnosticToolRisk.READ_ONLY,
             WebSearchTool.NAME to DiagnosticToolRisk.READ_ONLY,
+            WeatherTool.NAME to DiagnosticToolRisk.READ_ONLY,
+            KakaoShareMessageTool.NAME to DiagnosticToolRisk.COMMUNICATION,
+            KakaoNotificationReplyTool.NAME to DiagnosticToolRisk.COMMUNICATION,
+            MemoryRememberTool.NAME to DiagnosticToolRisk.LOCAL_WRITE,
+            CommitmentProposalTool.NAME to DiagnosticToolRisk.LOCAL_WRITE,
+            ReminderCreateTool.NAME to DiagnosticToolRisk.LOCAL_WRITE,
+            ReminderUpdateTool.NAME to DiagnosticToolRisk.LOCAL_WRITE,
+            ReminderCancelTool.NAME to DiagnosticToolRisk.LOCAL_WRITE,
+            ReminderQueryTool.NAME to DiagnosticToolRisk.READ_ONLY,
         )
 
         expected.forEach { (name, risk) ->

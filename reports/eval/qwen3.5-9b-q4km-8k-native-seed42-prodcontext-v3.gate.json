@@ -1,0 +1,79 @@
+{
+  "caseCount": 26,
+  "evaluationRunBinding": {
+    "baseUrl": "http://127.0.0.1:8098",
+    "endpointModel": "local",
+    "maxOutputTokens": 1024,
+    "modelArtifactFileName": "Qwen3.5-9B-Q4_K_M.gguf",
+    "modelArtifactSha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+    "modelArtifactSizeBytes": 5680522464,
+    "modelLabel": "qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3",
+    "repeatPenalty": 1.1,
+    "runId": "6f80434b-6c85-425f-9626-7df456b437bf",
+    "seed": 42,
+    "temperature": 0.1,
+    "thinking": "off",
+    "toolFormat": "native",
+    "topK": 50
+  },
+  "passed": false,
+  "profile": "quality",
+  "schemaVersion": 3,
+  "violationCount": 9,
+  "violations": [
+    {
+      "actual": 2,
+      "metric": "rejectedToolCallCount",
+      "rule": "maximum",
+      "threshold": 0
+    },
+    {
+      "actual": "audit-unreviewed:0/26",
+      "metric": "reviewCoverage",
+      "rule": "minimum",
+      "threshold": "all-required-cases-attested"
+    },
+    {
+      "actual": 8,
+      "metric": "languageEvidence",
+      "rule": "minimum",
+      "threshold": 9
+    },
+    {
+      "actual": 0.846154,
+      "metric": "toolSelectionAccuracy",
+      "rule": "minimum",
+      "threshold": 0.95
+    },
+    {
+      "actual": 0.470588,
+      "metric": "argumentExactMatch",
+      "rule": "minimum",
+      "threshold": 0.9
+    },
+    {
+      "actual": 0.625,
+      "metric": "dateTimeExactMatch",
+      "rule": "minimum",
+      "threshold": 0.9
+    },
+    {
+      "actual": 0.769231,
+      "metric": "finalStateAccuracy",
+      "rule": "minimum",
+      "threshold": 0.95
+    },
+    {
+      "actual": 0.333333,
+      "metric": "responseLanguageAccuracy",
+      "rule": "minimum",
+      "threshold": 0.99
+    },
+    {
+      "actual": 0.222222,
+      "metric": "unnecessaryToolCallRate",
+      "rule": "maximum",
+      "threshold": 0.02
+    }
+  ]
+}

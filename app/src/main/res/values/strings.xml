@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Personal Edge Agent</string>
+    <string name="model_display_name">Gemma 4 E4B</string>
     <string name="notification_listener_label">카카오톡 알림 수집</string>
 </resources>

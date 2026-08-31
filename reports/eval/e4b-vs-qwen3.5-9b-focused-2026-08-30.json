@@ -1,0 +1,531 @@
+{
+  "schemaVersion": 1,
+  "receiptType": "focused-model-comparison-evidence",
+  "recordedDate": "2026-08-30",
+  "scope": {
+    "includedModels": [
+      "current E4B",
+      "Qwen3.5-9B Q4_K_M"
+    ],
+    "otherModelsRun": false,
+    "physicalDeviceConnectedOrInspected": false,
+    "sameBackendComparison": false,
+    "purpose": "Bounded rejection and readiness evidence, not a speed ranking or promotion receipt."
+  },
+  "sourceBinding": {
+    "wholeTreeStateSha256": null,
+    "reason": "The working tree is intentionally dirty and was not frozen; exact model, APK, evaluator, corpus, test-source, and result-artifact digests are recorded instead.",
+    "corpus": {
+      "path": "models/eval/korean-tool-use-v1.jsonl",
+      "sha256": "528a2fafc3e995f9ff473ca541c183da105a3c0e7c946fa9f6502f1e19a3c3d9"
+    },
+    "evaluatorFiles": [
+      {
+        "path": "scripts/validate-model-eval-corpus.py",
+        "sha256": "5a6ab9a9e3c9aaadec547810ea2d02afc4ddc8f08f98321140bfd8316a53bc70"
+      },
+      {
+        "path": "scripts/run-model-eval-harness.py",
+        "sha256": "4875938f4bbdab0775a3b736b8c7a88ac0b65855e31d0cec698b224838d76956"
+      },
+      {
+        "path": "scripts/score-model-eval.py",
+        "sha256": "8631171b55f5c0039990bfc1b8f31246b0b65f4f9548190abe623f26fa398b2c"
+      },
+      {
+        "path": "scripts/gate-model-eval.py",
+        "sha256": "2ed9708fe4a5fa7e8b9e557281f75f9f3f8edf198870991416ca294bd1b2ab95"
+      }
+    ]
+  },
+  "currentE4b": {
+    "artifact": {
+      "path": "models/gemma-4-E4B-it.litertlm",
+      "repository": "litert-community/gemma-4-E4B-it-litert-lm",
+      "revision": "2eee7ac325f20eb8c9ac1d0e972f7c84663062da",
+      "sizeBytes": 3659530240,
+      "sha256": "0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0",
+      "contextTokens": 4096,
+      "maxOutputTokens": 1024,
+      "runtime": "LiteRT-LM 0.16.1"
+    },
+    "apkBinding": {
+      "applicationId": "com.personaledge.agent",
+      "appApk": {
+        "path": "app/build/outputs/apk/debug/app-debug.apk",
+        "sizeBytes": 64786431,
+        "sha256": "fd5b1ee7ac7a782789d440ada98a0c8182a19be66140c6898453404ed70c79d8"
+      },
+      "testApk": {
+        "path": "app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk",
+        "sizeBytes": 2487498,
+        "sha256": "06446b491422b2f65cc040d929e55ae786a4b05a4103bf53f53132dcba732b08"
+      },
+      "appAndTestCertificateSha256": "e342e15a574c391710fcf07b82fa025afc1a7db76d405b626b83dd3d25825402"
+    },
+    "avdBinding": {
+      "adbSerial": "emulator-5580",
+      "avdName": "personal_edge_api37_model",
+      "kind": "android-emulator",
+      "apiLevel": 37,
+      "abi": "arm64-v8a",
+      "hardware": "ranchu",
+      "buildFingerprint": "google/sdk_gphone64_arm64/emu64a:17/CE2A.260420.019/15611780:userdebug/dev-keys",
+      "backend": "CPU"
+    },
+    "testSources": [
+      {
+        "path": "app/src/androidTest/kotlin/com/personaledge/agent/KoreanToolSelectionTest.kt",
+        "sha256": "bcc87d97ca6d2cf8556ea09e263fa040662a665502bb76777abfb3ff5d83f4bf"
+      },
+      {
+        "path": "app/src/androidTest/kotlin/com/personaledge/agent/PastedMailScheduleAcceptanceTest.kt",
+        "sha256": "eea2bae01091c457d84833f80eefd6aa780991005302b4df43a7d675e68e2a26"
+      },
+      {
+        "path": "app/src/androidTest/kotlin/com/personaledge/agent/CurrentModelAvdRuntimeSmokeTest.kt",
+        "sha256": "704cdf20c322f0b423d67ce4af8c0ce0d6a83e47a424d14ac084ab68bffc6b88"
+      }
+    ],
+    "avdRuns": [
+      {
+        "test": "KoreanToolSelectionTest#theRealModelSelectsTheCalendarWriteToolOnAnEmulator",
+        "assertionOutcome": "failed",
+        "requestedIntent": "calendar create",
+        "observedTool": "calendar_query",
+        "observedToolRisk": "read_only",
+        "writeExecuted": false,
+        "modelInspectMillis": 4620,
+        "runtimeInitializeMillis": 441,
+        "turnMillis": 19030,
+        "postTurnPssBytes": 4794672128,
+        "maximumObservedThermal": "none",
+        "evidence": "Content-free production diagnostics under the exact app UID."
+      },
+      {
+        "test": "PastedMailScheduleAcceptanceTest#aPastedMailAsksWhereToRegisterAndThenSelectsTheDatedReminderTool",
+        "assertionOutcome": "passed",
+        "firstTurnMillis": 55,
+        "firstTurnDeltaBytes": 233,
+        "resumedObservedTool": "reminder_create",
+        "confirmationRisk": "local_write",
+        "confirmationOutcome": "denied",
+        "writeExecuted": false,
+        "resumedTurnMillis": 27177,
+        "postTurnPssBytes": 6246323200,
+        "maximumObservedThermal": "none",
+        "evidence": "Instrumentation PASS plus content-free production diagnostics under the exact app UID."
+      },
+      {
+        "test": "CurrentModelAvdRuntimeSmokeTest#currentModelCancelsAndRecoversWithoutProviders",
+        "assertionOutcome": "passed",
+        "instrumentationElapsedSeconds": 8.291,
+        "modelInspectMillis": 1705,
+        "runtimeInitializeMillis": 338,
+        "baselineTurnMillis": 2396,
+        "baselinePssBytes": 4647967744,
+        "cancelMillis": 1777,
+        "runtimeReadyAfterCancel": true,
+        "recoveryTurnMillis": 1970,
+        "recoveryPssBytes": 4630941696,
+        "providerOrToolGatewayCreated": false,
+        "writeExecuted": false,
+        "evidence": "Fresh explicit instrumentation rerun bound to the exact test APK and model SHA-256."
+      }
+    ],
+    "decision": "Keep as the deployable baseline, but do not claim that the bounded AVD probes establish full Tool quality or Fold8 readiness."
+  },
+  "qwen35_9b": {
+    "artifact": {
+      "path": "models/candidates/Qwen3.5-9B-Q4_K_M.gguf",
+      "sizeBytes": 5680522464,
+      "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+      "format": "GGUF Q4_K_M"
+    },
+    "hostRuntime": {
+      "server": "llama-server",
+      "version": "0.3.0",
+      "build": 10621,
+      "commit": "c1d0e7a00",
+      "backend": "Metal",
+      "contextTokens": 8192,
+      "parallelSlots": 1,
+      "jinja": true,
+      "thinking": "off"
+    },
+    "evaluationRunBinding": {
+      "runId": "6f80434b-6c85-425f-9626-7df456b437bf",
+      "modelLabel": "qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3",
+      "requestContextFormat": "production-no-history-v1",
+      "referenceTime": "2026-08-23T10:00:00+09:00",
+      "zoneId": "Asia/Seoul",
+      "caseCount": 26,
+      "toolExposure": "fixed fourteen-Tool evaluation subset",
+      "seed": 42,
+      "temperature": 0.1,
+      "topK": 50,
+      "repeatPenalty": 1.1,
+      "maxOutputTokens": 1024,
+      "toolFormat": "native"
+    },
+    "quality": {
+      "toolSelectionAccuracy": 0.846154,
+      "argumentExactMatch": 0.470588,
+      "dateTimeExactMatch": 0.625,
+      "clarificationAccuracy": 0.961538,
+      "finalStateAccuracy": 0.769231,
+      "responseLanguageAccuracy": 0.333333,
+      "stateChangingToolMiscalledRate": 0.0,
+      "unnecessaryToolCallRate": 0.222222,
+      "languageEvidenceObserved": 8,
+      "languageEvidenceEligible": 9,
+      "rejectedToolCallCount": 2,
+      "reviewCoverage": "0/26 audit-unreviewed"
+    },
+    "gate": {
+      "profile": "quality",
+      "passed": false,
+      "violationCount": 9,
+      "violatedMetrics": [
+        "rejectedToolCallCount",
+        "reviewCoverage",
+        "languageEvidence",
+        "toolSelectionAccuracy",
+        "argumentExactMatch",
+        "dateTimeExactMatch",
+        "finalStateAccuracy",
+        "responseLanguageAccuracy",
+        "unnecessaryToolCallRate"
+      ]
+    },
+    "resultArtifacts": [
+      {
+        "path": "reports/eval/qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3.jsonl",
+        "sizeBytes": 8906,
+        "sha256": "6d1ea970ef199b02818904f771aa63865eef5c39d4afe8bd7f1e407e739963f0"
+      },
+      {
+        "path": "reports/eval/qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3.audit.jsonl",
+        "sizeBytes": 37325,
+        "sha256": "c3213e047f7fd7063fd27424de87b4ab28dde03599ec8cfdfa166e6e71b4d79c"
+      },
+      {
+        "path": "reports/eval/qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3.score.json",
+        "sizeBytes": 4160,
+        "sha256": "3dd9221f7b4d0175252705da06cd7bb2a36992a433cda28385b9e8fb0832d7d9"
+      },
+      {
+        "path": "reports/eval/qwen3.5-9b-q4km-8k-native-seed42-prodcontext-v3.gate.json",
+        "sizeBytes": 1870,
+        "sha256": "dad001e619482fb592c6bd4e29d7e28570106c4a2347417f7807d23dbcd1ae30"
+      }
+    ],
+    "androidStatus": "No official, reproducible, project-verified Qwen3.5-9B LiteRT-LM path was established. The GGUF result is host-only and cannot be loaded by the app.",
+    "decision": "Do not replace E4B with this artifact."
+  },
+  "additionalAndroidSafetyEvidence": {
+    "environment": {
+      "adbSerial": "emulator-5580",
+      "avdName": "personal_edge_api37_model",
+      "buildFingerprint": "google/sdk_gphone64_arm64/emu64a:17/CE2A.260420.019/15611780:userdebug/dev-keys",
+      "physicalDeviceConnectedOrInspected": false
+    },
+    "readOnlyDisposableEnvironment": {
+      "adbSerial": "emulator-5582",
+      "avdName": "personal_edge_api37_foldable",
+      "buildFingerprint": "google/sdk_gphone64_arm64/emu64a:17/CE2A.260420.019/15611780:userdebug/dev-keys",
+      "apiLevel": 37,
+      "abi": "arm64-v8a",
+      "launchIsolation": "-read-only -no-snapshot-save",
+      "accountCount": 0,
+      "preRunInstalledAppVersion": "1.0.0-rc1",
+      "testAppApk": {
+        "path": "app/build/outputs/apk/debug/app-debug.apk",
+        "version": "1.0.0-rc11",
+        "sizeBytes": 64786431,
+        "sha256": "15ac657f00f4eb2b35fdb3943c42bdc6dfff2b42bfe40dbfdcb9cf18879e37ad"
+      },
+      "postRestartInstalledAppVersion": "1.0.0-rc1",
+      "postRestartCalendarRows": 0,
+      "postRestartNextAlarm": null,
+      "persistenceConclusion": "The rc11 APK install, permissions, Keystore placeholders, settings, local calendars, alarms, and test data were discarded with the read-only session.",
+      "physicalDeviceConnectedOrInspected": false
+    },
+    "summary": {
+      "uniqueTestCount": 241,
+      "passedCount": 209,
+      "assumptionSkippedCount": 32,
+      "failedCount": 0,
+      "countingBoundary": "Deduplicated class-and-method identities across the listed safety runs; repeated methods in the 93-case disposable suite are counted once. Model-quality AVD timings remain separate under currentE4b.avdRuns."
+    },
+    "testApkBindings": [
+      {
+        "path": "core/llm/build/outputs/apk/androidTest/debug/llm-debug-androidTest.apk",
+        "applicationId": "com.personaledge.core.llm.test",
+        "targetApplicationId": "com.personaledge.core.llm.test",
+        "sizeBytes": 55960267,
+        "sha256": "ada8d89d5bd081dbfba247f3eda808e9f305b67740abbe095b6f2e0ffadc478c",
+        "certificateSha256": "e342e15a574c391710fcf07b82fa025afc1a7db76d405b626b83dd3d25825402"
+      },
+      {
+        "path": "core/data/build/outputs/apk/androidTest/debug/data-debug-androidTest.apk",
+        "applicationId": "com.personaledge.core.data.test",
+        "targetApplicationId": "com.personaledge.core.data.test",
+        "sizeBytes": 11003321,
+        "sha256": "775d5f8df665be031601eac45e136c4eb355b8733d0c785ad5b7b7b617cbcb17",
+        "certificateSha256": "e342e15a574c391710fcf07b82fa025afc1a7db76d405b626b83dd3d25825402"
+      },
+      {
+        "path": "app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk",
+        "applicationId": "com.personaledge.agent.test",
+        "targetApplicationId": "com.personaledge.agent",
+        "sizeBytes": 2487498,
+        "sha256": "06446b491422b2f65cc040d929e55ae786a4b05a4103bf53f53132dcba732b08",
+        "certificateSha256": "e342e15a574c391710fcf07b82fa025afc1a7db76d405b626b83dd3d25825402"
+      },
+      {
+        "path": "core/tools/build/outputs/apk/androidTest/debug/tools-debug-androidTest.apk",
+        "applicationId": "com.personaledge.core.tools.test",
+        "targetApplicationId": "com.personaledge.core.tools.test",
+        "sizeBytes": 6324651,
+        "sha256": "9a1bde88573ff97be7955aff41aabb43bc4c21ad79d5b7cf6bb3afed9b9aab14",
+        "certificateSha256": "e342e15a574c391710fcf07b82fa025afc1a7db76d405b626b83dd3d25825402"
+      },
+      {
+        "path": "core/diagnostics/build/outputs/apk/androidTest/debug/diagnostics-debug-androidTest.apk",
+        "applicationId": "com.personaledge.core.diagnostics.test",
+        "targetApplicationId": "com.personaledge.core.diagnostics.test",
+        "sizeBytes": 4904583,
+        "sha256": "4a4c9c15dd6e8452369170cb41569bb0aadffb121cf33eff32b0cd56ef37dd2b",
+        "certificateSha256": "e342e15a574c391710fcf07b82fa025afc1a7db76d405b626b83dd3d25825402"
+      }
+    ],
+    "runs": [
+      {
+        "component": "com.personaledge.core.llm.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "all core:llm Android instrumentation tests",
+        "total": 10,
+        "passed": 9,
+        "assumptionSkipped": 1,
+        "failed": 0,
+        "elapsedSeconds": 0.104,
+        "skipReason": "The emulator filesystem rejected creation of the hard-link attack fixture with EACCES; the guarded hard-link rejection assertion could not be exercised.",
+        "coveredBoundaries": [
+          "automatic Tool calling and thinking disabled",
+          "model digest and size mismatch fail closed",
+          "failed or cancelled import never commits a partial model",
+          "writable artifact rejection",
+          "immutable artifact convergence",
+          "owner-only app-private LiteRT cache directory"
+        ],
+        "stateBoundary": "Self-target test UID with synthetic model bytes; the production E4B store was not addressed."
+      },
+      {
+        "component": "com.personaledge.core.data.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "all core:data Android instrumentation tests",
+        "total": 84,
+        "passed": 84,
+        "assumptionSkipped": 0,
+        "failed": 0,
+        "elapsedSeconds": 1.914,
+        "coveredBoundaries": [
+          "Room schema migration and repository invariants",
+          "memory secret and control-text refusal",
+          "test-UID secret vault and secure filesystem",
+          "turn recovery and side-effect replay prevention",
+          "reminder recurrence and stale-action refusal",
+          "notification retention bounds",
+          "user-data transfer validation"
+        ],
+        "stateBoundary": "Self-target test UID using in-memory or test-only databases/files and test-UID keystore state; no production app database, provider, or vault was addressed."
+      },
+      {
+        "component": "com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "ChatHistoryCoordinatorTest",
+        "total": 25,
+        "passed": 25,
+        "assumptionSkipped": 0,
+        "failed": 0,
+        "elapsedSeconds": 0.552,
+        "coveredBoundaries": [
+          "trusted read recovery remains bound to the original request",
+          "write recovery never offers automatic replay",
+          "contextual search cannot inherit writes or incomplete turns",
+          "transcript deletion and bounded restoration"
+        ],
+        "stateBoundary": "Production target process with an in-memory Room database only; no Tool gateway or external provider was created."
+      },
+      {
+        "component": "com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "ConversationSummarizerTest, StoredNotificationGatewayTest, NotificationCaptureSinkTest",
+        "total": 33,
+        "passed": 33,
+        "assumptionSkipped": 0,
+        "failed": 0,
+        "elapsedSeconds": 0.474,
+        "coveredBoundaries": [
+          "summary batching, byte bounds, and critical-literal hallucination refusal",
+          "notification capture default-off and independent commitment opt-in",
+          "retention pruning and wildcard-safe search",
+          "disable-request races fail closed"
+        ],
+        "stateBoundary": "Production target process with in-memory Room databases and per-test cache DataStore files only; no notification listener or external provider was invoked."
+      },
+      {
+        "component": "com.personaledge.core.tools.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "SqliteActionLedgerTest",
+        "total": 11,
+        "passed": 11,
+        "assumptionSkipped": 0,
+        "failed": 0,
+        "elapsedSeconds": 0.175,
+        "testSource": {
+          "path": "core/tools/src/androidTest/kotlin/com/personaledge/core/tools/SqliteActionLedgerTest.kt",
+          "sha256": "7f402ac84f87bcc815c85037522416c3409e715d488a28676c3ce64f6bc60cc5"
+        },
+        "coveredBoundaries": [
+          "durable claim replay refusal across process reopen",
+          "concurrent idempotency produces one winner",
+          "terminal state cannot be rewritten",
+          "capacity and unreadable-storage failures stay closed"
+        ],
+        "stateBoundary": "Self-target test UID using only no_backup/action-ledger.db and its journals; no production app storage or external provider was addressed."
+      },
+      {
+        "component": "com.personaledge.core.diagnostics.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "AndroidDiagnosticsInstrumentationTest",
+        "total": 2,
+        "passed": 2,
+        "assumptionSkipped": 0,
+        "failed": 0,
+        "elapsedSeconds": 0.063,
+        "testSource": {
+          "path": "core/diagnostics/src/androidTest/kotlin/com/personaledge/core/diagnostics/AndroidDiagnosticsInstrumentationTest.kt",
+          "sha256": "69a8097f828a8797114dc9c9dd00678381a52cee8afb03cbcb58e8eabea9ce73"
+        },
+        "coveredBoundaries": [
+          "private fixed-link diagnostic rotation",
+          "platform exit, resource, and thermal probes fail open"
+        ],
+        "stateBoundary": "Self-target test UID using its own no_backup diagnostics files and process telemetry only; no production app storage or external provider was addressed."
+      },
+      {
+        "component": "com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "NotificationPostReaderTest, KakaoReplySettingsTest, ThermalStatusMonitorInstrumentedTest",
+        "total": 11,
+        "passed": 11,
+        "assumptionSkipped": 0,
+        "failed": 0,
+        "elapsedSeconds": 0.034,
+        "targetAppApk": {
+          "path": "app/build/outputs/apk/debug/app-debug.apk",
+          "sizeBytes": 64786431,
+          "sha256": "15ac657f00f4eb2b35fdb3943c42bdc6dfff2b42bfe40dbfdcb9cf18879e37ad"
+        },
+        "testSources": [
+          {
+            "path": "app/src/androidTest/kotlin/com/personaledge/agent/NotificationPostReaderTest.kt",
+            "sha256": "b932c64c9602a815c92a687836c01ca37065985af4d95a8f8bb4bad25fdd5cb4"
+          },
+          {
+            "path": "app/src/androidTest/kotlin/com/personaledge/agent/KakaoReplySettingsTest.kt",
+            "sha256": "fda1fc20b0ee48bdf3dbf98d6bc644387be05b814d567bb5972a6b1122c368ae"
+          },
+          {
+            "path": "app/src/androidTest/kotlin/com/personaledge/agent/ThermalStatusMonitorInstrumentedTest.kt",
+            "sha256": "96e6db8b750779ac49a2344750fba300f09545d6f79da4db3f3dc410cfeb7633"
+          }
+        ],
+        "coveredBoundaries": [
+          "synthetic notification payload parsing",
+          "Kakao reply permission defaults off and persists only after opt-in",
+          "thermal listener registration and idempotent close"
+        ],
+        "stateBoundary": "No provider, network, runtime-permission, calendar, alarm, credential-vault, production Room, or production DataStore access. App startup added content-free process/resource diagnostics only."
+      },
+      {
+        "component": "com.personaledge.core.tools.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "AndroidCalendarGatewayTest, AndroidAlarmGatewayTest",
+        "total": 13,
+        "passed": 13,
+        "assumptionSkipped": 0,
+        "failed": 0,
+        "elapsedSeconds": 1.089,
+        "coveredBoundaries": [
+          "CalendarProvider create, query, update, compare-and-set, calendar scoping, and exact cleanup",
+          "Clock-app package visibility, next-alarm read, and foreground alarm delivery"
+        ],
+        "stateBoundary": "Account-free emulator-5582 read-only session. Tests created only tracked local calendar rows and emulator clock alarms; cleanup left zero calendar rows, and all session state was discarded after shutdown."
+      },
+      {
+        "component": "com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "thirteen explicitly selected non-live app classes",
+        "total": 93,
+        "passed": 90,
+        "assumptionSkipped": 3,
+        "failed": 0,
+        "skipReasons": [
+          "one qwen8bLab-only BuildConfig assertion",
+          "two Tool-selection acceptances requiring an installed verified model"
+        ],
+        "coveredBoundaries": [
+          "conversation recovery and summary integrity",
+          "notification parsing, retention, opt-in, and cancellation races",
+          "foreground Clock alarm creation",
+          "Android Keystore placeholder credential lifecycle and rejection redaction",
+          "execution-time calendar, memory, Kakao, and candidate-read-only interlocks",
+          "thermal listener cleanup"
+        ],
+        "stateBoundary": "Account-free emulator-5582 read-only session. The real debug-app vault, permissions, settings, alarms, and cache were changed only inside the disposable overlay; a clean restart returned to rc1 and proved those changes were not persisted."
+      },
+      {
+        "component": "com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner",
+        "scope": "sixteen explicitly selected physical/live guard classes",
+        "total": 28,
+        "passed": 0,
+        "assumptionSkipped": 28,
+        "failed": 0,
+        "elapsedSeconds": 0.177,
+        "coveredBoundaries": [
+          "physical alarm, Fold8 lifecycle, reminder, language, and runtime lanes require explicit opt-in",
+          "Kakao, route, weather, web-search, and provider-live lanes require explicit opt-in and physical-device boundaries"
+        ],
+        "stateBoundary": "No opt-in arguments were supplied. Every method stopped at its assumption guard before provider, network, model, notification, alarm, reminder, or physical-device work."
+      }
+    ],
+    "postRunProductionModelCheck": {
+      "path": "no_backup/personal-edge-models-v1/0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0.litertlm",
+      "sizeBytes": 3659530240,
+      "ownerModeOctal": "0400",
+      "note": "The size and read-only mode remained intact after the additional tests. The exact digest had already been verified by the bound E4B runtime smoke; this post-run stat is not a second guest-side digest calculation."
+    },
+    "excludedFromExecution": [
+      "SamsungCalendarSelectionAcceptanceTest because its owner gate is an assertion and it requires a Samsung account calendar",
+      "SamsungCalendarLiveAcceptanceTest because its owner gates are assertions and it requires an exact owner event or approved Samsung Calendar round trip",
+      "Qwen8bLabRuntimeSmokeTest because it targets Qwen3-8B, which is outside the owner-narrowed E4B versus Qwen3.5-9B scope"
+    ],
+    "claimsNotMade": [
+      "These tests do not add Qwen3.5-9B Android evidence.",
+      "Repository and policy tests do not expand E4B model-quality coverage.",
+      "No result in this section is Fold8 physical acceptance."
+    ]
+  },
+  "hostVerification": {
+    "environmentDoctorPassed": true,
+    "hostScriptTests": {
+      "passed": 20,
+      "failed": 0
+    },
+    "gradleReleaseGate": {
+      "command": "./gradlew --offline releaseGate",
+      "passed": true,
+      "coverage": "JVM tests, debug and release lint, minified release assembly, deterministic SBOM/provenance tests and packaged verification, and the 20 host script checks."
+    },
+    "boundary": "The release gate did not run connectedAndroidTest and adds no physical-device evidence."
+  },
+  "comparisonBoundary": {
+    "quality": "E4B did not run the 26-case host corpus and Qwen did not run inside the Android app, so aggregate quality is not ranked head-to-head.",
+    "performance": "E4B AVD CPU timings and Qwen host Metal timings are not comparable.",
+    "promotion": "Neither lane is a Fold8 physical promotion receipt. A later same-contract LiteRT run and Fold8 acceptance remain required."
+  }
+}

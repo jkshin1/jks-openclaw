@@ -46,34 +46,42 @@ class SettingsRepositoryTest {
     fun anEmptyStoreReadsAsTheConservativeDefaults() = runBlocking {
         val settings = repository.current()
 
-        assertEquals(PreferredBackend.CPU, settings.preferredBackend)
-        assertTrue(settings.confirmLocalWrites)
         assertNull(settings.defaultCalendarId)
         assertFalse(settings.notificationCaptureEnabled)
         assertFalse(settings.routeLookupEnabled)
         assertFalse(settings.webSearchEnabled)
+        assertFalse(settings.memoryEnabled)
+        assertEquals(8 * 60, settings.dailyBriefMinutesOfDay)
     }
 
     @Test
     fun writtenSettingsAreReadBack() = runBlocking {
-        repository.setPreferredBackend(PreferredBackend.GPU)
-        repository.setConfirmLocalWrites(false)
         repository.setDefaultCalendar(calendarId = 42, label = "개인")
         repository.setDefaultOriginLabel("  서울시청  ")
         repository.setNotificationCaptureEnabled(true)
         repository.setRouteLookupEnabled(true)
         repository.setWebSearchEnabled(true)
+        repository.setMemoryEnabled(true)
+        repository.setDailyBriefMinutesOfDay(7 * 60 + 35)
 
         val settings = repository.current()
 
-        assertEquals(PreferredBackend.GPU, settings.preferredBackend)
-        assertFalse(settings.confirmLocalWrites)
         assertEquals(42L, settings.defaultCalendarId)
         assertEquals("개인", settings.defaultCalendarLabel)
         assertEquals("서울시청", settings.defaultOriginLabel)
         assertTrue(settings.notificationCaptureEnabled)
         assertTrue(settings.routeLookupEnabled)
         assertTrue(settings.webSearchEnabled)
+        assertTrue(settings.memoryEnabled)
+        assertEquals(7 * 60 + 35, settings.dailyBriefMinutesOfDay)
+    }
+
+    @Test
+    fun invalidDailyBriefTimeIsRejectedBeforePersistence() = runBlocking {
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { repository.setDailyBriefMinutesOfDay(24 * 60) }
+        }
+        assertEquals(8 * 60, repository.current().dailyBriefMinutesOfDay)
     }
 
     @Test
@@ -111,15 +119,15 @@ class SettingsRepositoryTest {
 
     @Test
     fun clearingResetsEverythingToTheSafeDefaults() = runBlocking {
-        repository.setConfirmLocalWrites(false)
         repository.setRouteLookupEnabled(true)
         repository.setWebSearchEnabled(true)
+        repository.setMemoryEnabled(true)
 
         repository.clear()
 
         val settings = repository.current()
-        assertTrue(settings.confirmLocalWrites)
         assertFalse(settings.routeLookupEnabled)
         assertFalse(settings.webSearchEnabled)
+        assertFalse(settings.memoryEnabled)
     }
 }

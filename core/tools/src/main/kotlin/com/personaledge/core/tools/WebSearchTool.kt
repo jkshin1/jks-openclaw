@@ -5,21 +5,24 @@ data class WebSearchParams(
 ) : ToolParams
 
 data class WebSearchResult(
+    val provider: WebSearchProvider,
     val hits: List<WebSearchHit>,
 )
 
 /**
- * Searches the web through NAVER.
+ * Searches the web through an owner-enabled You.com request with a bounded Tavily fallback.
  *
- * Two things leave the device and one hostile thing comes back. The query is sent to NAVER, and
- * the results are text written by strangers that will be read into a model prompt.
+ * One query leaves the device for You.com and, only when its result fails a bounded quality gate,
+ * may leave once more for Tavily. The results are text written by strangers that will be read into
+ * a model prompt.
  *
  * That returning text is data, never instruction, and the architecture is what guarantees it: a
  * tool result cannot invoke a tool, the model cannot call anything without the orchestrator, and
- * every side effect needs the user's confirmation against an immutable snapshot. The outbound
- * query itself also requires confirmation because it discloses user text to NAVER. A page that
- * says "book a flight" changes nothing on its own. [UntrustedText] adds the narrower guarantee
- * that such text cannot impersonate the Gemma template or render as something it is not.
+ * every side effect needs the user's confirmation against an immutable snapshot. The read-only
+ * query runs without a per-request confirmation sheet after the owner enables web search in
+ * settings; the network interlock re-checks that opt-in immediately before execution. A page that
+ * says "book a flight" changes nothing on its own. [UntrustedText] adds the narrower guarantee that
+ * such text cannot impersonate the Gemma template or render as something it is not.
  */
 class WebSearchTool(
     private val gateway: WebSearchGateway,
@@ -29,7 +32,6 @@ class WebSearchTool(
         name = NAME,
         description = "Search the web for current information and return titles, links, and snippets",
         risk = ToolRisk.READ_ONLY,
-        minimumConfirmation = ConfirmationRequirement.UserConfirmation,
         requiredCapabilities = setOf(ToolCapability.NETWORK),
     )
 
@@ -42,7 +44,10 @@ class WebSearchTool(
             return ValidationResult.Invalid("검색어에 허용되지 않는 문자가 있습니다.")
         }
         if (!gateway.credentialsPresent()) {
-            return ValidationResult.Invalid("설정에서 네이버 검색 키를 먼저 입력하세요.")
+            return ValidationResult.Invalid(
+                reason = "사용 가능한 웹 검색 제공자가 없습니다.",
+                failureCode = ToolFailureCode.CREDENTIALS_MISSING,
+            )
         }
 
         return ValidationResult.Valid(CanonicalFields.encode(mapOf(FIELD_QUERY to query)))
@@ -52,7 +57,7 @@ class WebSearchTool(
         val fields = CanonicalFields.decode(input)
         return ActionPreview(
             title = "웹 검색",
-            summary = "\"${fields.requiredString(FIELD_QUERY)}\"를 네이버에서 검색합니다.",
+            summary = "\"${fields.requiredString(FIELD_QUERY)}\"를 You.com에 전송하고 필요하면 Tavily로 재검색합니다.",
         )
     }
 
@@ -61,11 +66,13 @@ class WebSearchTool(
         permit: ExecutionPermit,
     ): WebSearchResult {
         val fields = CanonicalFields.decode(input)
+        val response = gateway.search(
+            query = fields.requiredString(FIELD_QUERY),
+            limit = MAX_HITS,
+        )
         return WebSearchResult(
-            hits = gateway.search(
-                query = fields.requiredString(FIELD_QUERY),
-                limit = MAX_HITS,
-            ),
+            provider = response.provider,
+            hits = response.hits,
         )
     }
 

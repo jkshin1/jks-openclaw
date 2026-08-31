@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+        Only the window shell. Everything inside is Compose, so this theme exists to pick the
+        pre-Compose window background — matching the light palette's grouped background keeps the
+        cold-launch frame from flashing a different colour than the app.
+    -->
     <style name="Theme.PersonalEdgeAgent" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">#FFF2F2F7</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

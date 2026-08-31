@@ -8,13 +8,7 @@ sealed interface ConfirmationRequirement {
     data object StrongAuthentication : ConfirmationRequirement
 }
 
-data class ConfirmationSettings(
-    val confirmLocalWrites: Boolean = true,
-)
-
-class ConfirmationPolicy(
-    private val settings: ConfirmationSettings = ConfirmationSettings(),
-) {
+class ConfirmationPolicy {
     fun evaluate(
         risk: ToolRisk,
         minimum: ConfirmationRequirement = ConfirmationRequirement.NotRequired,
@@ -22,11 +16,7 @@ class ConfirmationPolicy(
 
     private fun riskRequirement(risk: ToolRisk): ConfirmationRequirement = when (risk) {
         ToolRisk.READ_ONLY -> ConfirmationRequirement.NotRequired
-        ToolRisk.LOCAL_WRITE -> if (settings.confirmLocalWrites) {
-            ConfirmationRequirement.UserConfirmation
-        } else {
-            ConfirmationRequirement.NotRequired
-        }
+        ToolRisk.LOCAL_WRITE -> ConfirmationRequirement.UserConfirmation
         ToolRisk.DATA_WRITE -> ConfirmationRequirement.UserConfirmation
         ToolRisk.COMMUNICATION -> ConfirmationRequirement.UserConfirmation
         ToolRisk.VEHICLE_CONTROL -> ConfirmationRequirement.UserConfirmation

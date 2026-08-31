@@ -38,14 +38,15 @@ class SecretVaultTest {
         vault.store(SecretKeyName.NAVER_MAP_CLIENT_ID, "client-id-value")
 
         assertTrue(vault.contains(SecretKeyName.NAVER_MAP_CLIENT_ID))
+        assertEquals(SecretHealth.READABLE, vault.health(SecretKeyName.NAVER_MAP_CLIENT_ID))
         assertEquals("client-id-value", vault.read(SecretKeyName.NAVER_MAP_CLIENT_ID))
     }
 
     @Test
     fun theCiphertextOnDiskDoesNotContainThePlaintext() = runBlocking {
-        vault.store(SecretKeyName.NAVER_SEARCH_CLIENT_ID, "super-secret-search-key")
+        vault.store(SecretKeyName.TAVILY_API_KEY, "tvly-super-secret-search-key")
 
-        val stored = File(directory, SecretKeyName.NAVER_SEARCH_CLIENT_ID.fileName).readBytes()
+        val stored = File(directory, SecretKeyName.TAVILY_API_KEY.fileName).readBytes()
         val asText = String(stored, Charsets.ISO_8859_1)
 
         assertFalse(asText.contains("super-secret-search-key"))
@@ -66,21 +67,36 @@ class SecretVaultTest {
     }
 
     @Test
-    fun aTamperedCiphertextIsReportedAsAbsentRatherThanReturned() = runBlocking {
-        vault.store(SecretKeyName.NAVER_SEARCH_CLIENT_ID, "authentic-value")
+    fun aTamperedCiphertextIsReportedAsUnreadableRatherThanReturned() = runBlocking {
+        vault.store(SecretKeyName.TAVILY_API_KEY, "tvly-authentic-value")
 
-        val file = File(directory, SecretKeyName.NAVER_SEARCH_CLIENT_ID.fileName)
+        val file = File(directory, SecretKeyName.TAVILY_API_KEY.fileName)
         val bytes = file.readBytes()
         bytes[bytes.lastIndex] = (bytes[bytes.lastIndex].toInt() xor 0x01).toByte()
         file.writeBytes(bytes)
 
-        assertNull(vault.read(SecretKeyName.NAVER_SEARCH_CLIENT_ID))
+        assertNull(vault.read(SecretKeyName.TAVILY_API_KEY))
+        assertEquals(SecretHealth.UNREADABLE, vault.health(SecretKeyName.TAVILY_API_KEY))
+    }
+
+    @Test
+    fun anExistingEmptyCiphertextIsUnreadableRatherThanAbsent() = runBlocking {
+        val file = File(directory, SecretKeyName.NAVER_MAP_CLIENT_SECRET.fileName)
+        file.writeBytes(byteArrayOf())
+
+        assertTrue(vault.contains(SecretKeyName.NAVER_MAP_CLIENT_SECRET))
+        assertNull(vault.read(SecretKeyName.NAVER_MAP_CLIENT_SECRET))
+        assertEquals(
+            SecretHealth.UNREADABLE,
+            vault.health(SecretKeyName.NAVER_MAP_CLIENT_SECRET),
+        )
     }
 
     @Test
     fun anAbsentSecretReadsAsNull() = runBlocking {
         assertFalse(vault.contains(SecretKeyName.NAVER_MAP_CLIENT_ID))
         assertNull(vault.read(SecretKeyName.NAVER_MAP_CLIENT_ID))
+        assertEquals(SecretHealth.ABSENT, vault.health(SecretKeyName.NAVER_MAP_CLIENT_ID))
     }
 
     @Test

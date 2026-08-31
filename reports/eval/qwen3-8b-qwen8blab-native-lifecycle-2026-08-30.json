@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 2,
+  "observedAt": "2026-08-30",
+  "claimBoundary": "Isolated API 37 ARM64 emulator CPU evidence only; no physical Fold8 was connected or inspected.",
+  "sourceStateBoundary": "Artifact-bound by the recorded model and APK SHA-256 values; the exact source-tree state is unknown and must not be inferred.",
+  "decision": {
+    "status": "rejected_for_agent_replacement",
+    "reason": "The exact public Qwen3-8B LiteRT artifact with LiteRT-LM 0.16.1 and this lab configuration completed text, cancellation, and recovery, but both tested 128-token Tool probes returned plain-text JSON and zero structured native Tool calls. This result does not reject every Qwen3-8B conversion or runtime configuration."
+  },
+  "artifact": {
+    "repository": "litert-community/Qwen3-8B",
+    "revision": "71ff705588319d52d374977eff3da4eee0c0d26e",
+    "fileName": "qwen3_8b_mixed_int4.litertlm",
+    "sizeBytes": 4887412736,
+    "sha256": "cb4e6d0de4bbf6656d177812cf0c6a983967dedd17e7f88e84b901c3a9862a42",
+    "metadataMaxTotalTokens": 2048,
+    "artifactOwnedMaxOutputTokens": null,
+    "embeddedQwenToolTemplatePresent": true
+  },
+  "labConfiguration": {
+    "configuredContextTokens": 2048,
+    "configuredMaxOutputCeilingTokens": 384,
+    "turnOutputBudgets": {
+      "noTool": 64,
+      "tool": 128,
+      "cancellation": 384,
+      "recovery": 64
+    }
+  },
+  "build": {
+    "buildRef": "qwen8bLab-final-pair-rerun-2026-08-30",
+    "buildType": "qwen8bLab",
+    "applicationId": "com.personaledge.agent.qwen8blab",
+    "versionName": "1.0.0-rc11-qwen8b-lab",
+    "candidateModelLab": true,
+    "sideEffectingToolsEnabled": false,
+    "modelStoreRoot": "personal-edge-models-qwen3-8b-v1",
+    "appApk": {
+      "sizeBytes": 63432236,
+      "hostSha256UsedForInstall": "780c4e02dbd32343e9bb32923315ae252f6f40ef80c557becc6516367a62880f",
+      "installedBaseApkSha256": "780c4e02dbd32343e9bb32923315ae252f6f40ef80c557becc6516367a62880f"
+    },
+    "testApk": {
+      "sizeBytes": 2567150,
+      "hostSha256UsedForInstall": "32eab9748f0ef8dd41cd1fa32ac73f669da98cdbaaeace630da2618548f9c44e",
+      "installedBaseApkSha256": "32eab9748f0ef8dd41cd1fa32ac73f669da98cdbaaeace630da2618548f9c44e"
+    },
+    "signingCertificateSha256": "e342e15a574c391710fcf07b82fa025afc1a7db76d405b626b83dd3d25825402",
+    "v2SignatureVerified": true
+  },
+  "isolation": {
+    "instrumentationOnly": true,
+    "mainActivityEnabled": false,
+    "workManagerInitializerPresent": false,
+    "removedPermissions": [
+      "android.permission.READ_CALENDAR",
+      "android.permission.WRITE_CALENDAR",
+      "android.permission.INTERNET",
+      "android.permission.ACCESS_NETWORK_STATE",
+      "com.android.alarm.permission.SET_ALARM",
+      "android.permission.SCHEDULE_EXACT_ALARM",
+      "android.permission.RECEIVE_BOOT_COMPLETED"
+    ],
+    "notificationPermissionDeclared": true,
+    "notificationPermissionGrantedAtTestTime": false,
+    "appReminderReceiversPresent": false,
+    "providerBootBoundaryTest": {
+      "classAndMethod": "com.personaledge.agent.Qwen8bLabRuntimeSmokeTest#candidateProcessHasNoProviderBootCapability",
+      "result": "passed_1_of_1",
+      "assertionsAtTestTime": {
+        "workManagerUninitialized": true,
+        "ownedScheduledJobsEmpty": true,
+        "notificationChannelsEmpty": true
+      }
+    },
+    "nonReadOnlyInterlockTest": {
+      "classAndMethod": "com.personaledge.agent.DeviceExecutionInterlockTest#qwenLabBuildConfigAllowsOnlyReadOnlyRiskAtBothInterlockPhases",
+      "result": "passed_1_of_1",
+      "phases": [
+        "PREPARE",
+        "EXECUTE"
+      ]
+    }
+  },
+  "runtime": {
+    "litertLmVersion": "0.16.1",
+    "backend": "CPU",
+    "automaticToolCalling": false,
+    "avd": "personal_edge_api37_model",
+    "apiLevel": 37,
+    "abi": "arm64-v8a",
+    "qemu": true,
+    "xnnCacheBytes": 4269490248,
+    "pssMeasurement": "Debug.getPss() * 1024 sampled once immediately after each recorded stage; these are post-stage samples, not peak RSS or peak PSS."
+  },
+  "runs": [
+    {
+      "id": "natural-single-tool-lifecycle-final-pair-rerun",
+      "buildRef": "qwen8bLab-final-pair-rerun-2026-08-30",
+      "instrumentationClassAndMethod": "com.personaledge.agent.Qwen8bLabRuntimeSmokeTest#manualToolLifecycleIsProviderFreeAndRecoverable",
+      "instrumentationArguments": {
+        "qwen8bLabRuntime": "true",
+        "qwen8bLabTarget": "emulator",
+        "inferenceBackend": "cpu",
+        "qwen8bLabExplicitToolFence": "false"
+      },
+      "result": "failed_no_structured_native_tool_call",
+      "modelInspectMs": 1680,
+      "runtimeInitializeMs": 4110,
+      "noToolTurnMs": 10599,
+      "noToolPostStagePssBytes": 8961761280,
+      "toolTurnMs": 17617,
+      "toolTurnPostStagePssBytes": 9239847936,
+      "structuredToolCallCount": 0,
+      "plainTextEvidence": "Repeated JSON objects naming lab_echo with label PING",
+      "toolResponseInjected": false,
+      "rawDiagnosticCancelMsMeaning": "Elapsed from cancellation polling start until runtime.cancel accepted the request, including retries; not cancellation completion latency.",
+      "cancelRequestAcceptedMs": 6742,
+      "cancellationPassed": true,
+      "recoveryMs": 10579,
+      "recoveryPostStagePssBytes": 8987845632,
+      "recoveryPassed": true
+    },
+    {
+      "id": "explicit-qwen-tool-fence-lifecycle-final-pair-rerun",
+      "buildRef": "qwen8bLab-final-pair-rerun-2026-08-30",
+      "instrumentationClassAndMethod": "com.personaledge.agent.Qwen8bLabRuntimeSmokeTest#manualToolLifecycleIsProviderFreeAndRecoverable",
+      "instrumentationArguments": {
+        "qwen8bLabRuntime": "true",
+        "qwen8bLabTarget": "emulator",
+        "inferenceBackend": "cpu",
+        "qwen8bLabExplicitToolFence": "true"
+      },
+      "result": "failed_no_structured_native_tool_call",
+      "modelInspectMs": 2537,
+      "runtimeInitializeMs": 2366,
+      "noToolTurnMs": 12115,
+      "noToolPostStagePssBytes": 8624821248,
+      "toolTurnMs": 7831,
+      "toolTurnPostStagePssBytes": 8960824320,
+      "structuredToolCallCount": 0,
+      "plainTextEvidence": "One JSON object naming lab_echo with label PING; the requested tool fence was absent from structured output",
+      "toolResponseInjected": false,
+      "rawDiagnosticCancelMsMeaning": "Elapsed from cancellation polling start until runtime.cancel accepted the request, including retries; not cancellation completion latency.",
+      "cancelRequestAcceptedMs": 6615,
+      "cancellationPassed": true,
+      "recoveryMs": 10236,
+      "recoveryPostStagePssBytes": 8648019968,
+      "recoveryPassed": true
+    }
+  ],
+  "excludedPreFinalPairHarnessResults": [
+    {
+      "result": "provider-boundary-test-failed-before-assertions",
+      "reason": "PackageManager query omitted MATCH_DISABLED_COMPONENTS; the corrected named test passed and was rerun against the final APK pair."
+    }
+  ],
+  "cleanup": {
+    "candidatePackages": [
+      "com.personaledge.agent.qwen8blab",
+      "com.personaledge.agent.qwen8blab.test"
+    ],
+    "candidatePackagesRemoved": true,
+    "candidateModelAndCacheRemoved": true,
+    "dataFreeKilobytesBeforeRemoval": 2021620,
+    "dataFreeKilobytesAfterRemoval": 11028504,
+    "hostArtifactRetained": true,
+    "pinnedE4bPackageUntouched": true,
+    "pinnedE4bArtifactSizeBytesAfterRemoval": 3659530240,
+    "pinnedE4bArtifactModeAfterRemoval": "0400",
+    "pinnedE4bArtifactLinkCountAfterRemoval": 1,
+    "pinnedE4bArtifactSha256AfterRemoval": "0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0",
+    "emulatorStoppedCleanly": true
+  },
+  "hostVerification": {
+    "doctor": "passed",
+    "hostScriptTests": "passed_20_of_20",
+    "qwen8bLabBuildUnitLintGate": "passed",
+    "productionReleaseGate": "passed_after_final_document_freeze_477_tasks_17_executed_460_up_to_date"
+  }
+}

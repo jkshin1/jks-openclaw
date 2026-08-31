@@ -44,6 +44,26 @@ class DiagnosticJsonEncoderTest {
     }
 
     @Test
+    fun `provider failure records only its closed diagnostic code`() {
+        val json = requireNotNull(
+            DiagnosticJsonEncoder.encode(
+                DiagnosticEvent.TurnFailed(
+                    durationMillis = 7,
+                    deltaCount = 0,
+                    deltaByteCount = 0,
+                    errorCode = DiagnosticErrorCode.TOOL_API_DISABLED_OR_QUOTA_EXCEEDED,
+                ),
+                recordedAtMillis = 9,
+            ),
+        )
+
+        assertTrue(json.contains("\"error_code\":\"tool_api_disabled_or_quota_exceeded\""))
+        listOf("provider_message", "request_url", "query", "credential").forEach { forbidden ->
+            assertFalse(forbidden, json.contains(forbidden))
+        }
+    }
+
+    @Test
     fun `tool name boundary rejects paths recipients and JSON`() {
         assertNotNull(DiagnosticToolName.parse("calendar_lookup_2"))
         assertNull(DiagnosticToolName.parse("recipient@example.com"))
@@ -178,6 +198,19 @@ class DiagnosticJsonEncoderTest {
                 ),
                 recordedAtMillis = 12,
             ),
+        )
+    }
+
+    @Test
+    fun `context availability records only a closed component code`() {
+        val json = DiagnosticJsonEncoder.encode(
+            DiagnosticEvent.ContextUnavailable(DiagnosticContextComponent.MEMORY),
+            recordedAtMillis = 13,
+        )
+
+        assertEquals(
+            "{\"schema_version\":1,\"recorded_at_ms\":13,\"event\":\"context_unavailable\",\"component\":\"memory\"}",
+            json,
         )
     }
 }

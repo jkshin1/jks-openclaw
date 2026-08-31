@@ -1,5 +1,6 @@
 package com.personaledge.core.agent
 
+import com.personaledge.core.llm.TrustedToolResponseBudget
 import com.personaledge.core.tools.AlarmNextParams
 import com.personaledge.core.tools.AlarmNextResult
 import com.personaledge.core.tools.AlarmSetParams
@@ -12,14 +13,36 @@ import com.personaledge.core.tools.CalendarQueryResult
 import com.personaledge.core.tools.CalendarUpdateEventParams
 import com.personaledge.core.tools.CalendarUpdateEventResult
 import com.personaledge.core.tools.CapturedMessageSummary
+import com.personaledge.core.tools.CommitmentProposalParams
+import com.personaledge.core.tools.CommitmentProposalResult
+import com.personaledge.core.tools.CommitmentProposalWriteOutcome
 import com.personaledge.core.tools.FakeArrivalNoticeParams
 import com.personaledge.core.tools.NotificationSearchParams
 import com.personaledge.core.tools.NotificationSearchResult
+import com.personaledge.core.tools.KakaoNotificationReplyParams
+import com.personaledge.core.tools.KakaoNotificationReplyResult
+import com.personaledge.core.tools.KakaoShareMessageParams
+import com.personaledge.core.tools.KakaoShareMessageResult
+import com.personaledge.core.tools.MemoryRememberParams
+import com.personaledge.core.tools.MemoryRememberResult
+import com.personaledge.core.tools.MemoryWriteOutcome
 import com.personaledge.core.tools.RouteEstimateParams
 import com.personaledge.core.tools.RouteEstimateResult
+import com.personaledge.core.tools.ReminderCancelParams
+import com.personaledge.core.tools.ReminderCreateParams
+import com.personaledge.core.tools.ReminderMutationOutcome
+import com.personaledge.core.tools.ReminderMutationResult
+import com.personaledge.core.tools.ReminderQueryParams
+import com.personaledge.core.tools.ReminderSummary
+import com.personaledge.core.tools.ReminderToolPrecision
+import com.personaledge.core.tools.ReminderUpdateParams
 import com.personaledge.core.tools.WebSearchHit
 import com.personaledge.core.tools.WebSearchParams
+import com.personaledge.core.tools.WebSearchProvider
 import com.personaledge.core.tools.WebSearchResult
+import com.personaledge.core.tools.WeatherParams
+import com.personaledge.core.tools.WeatherResult
+import java.util.Locale
 import com.personaledge.core.tools.FakeArrivalNoticeResult
 import com.personaledge.core.tools.ToolParams
 
@@ -454,6 +477,210 @@ internal class WebSearchArgumentsParser(maxArgumentBytes: Int) {
     }
 }
 
+internal class WeatherArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<WeatherParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, ALLOWED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                WeatherParams(location = fields.fields.getValue(LOCATION)),
+            )
+        }
+
+    private companion object {
+        const val LOCATION = "location"
+        val ALLOWED_FIELDS = setOf(LOCATION)
+    }
+}
+
+internal class KakaoShareMessageArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<KakaoShareMessageParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, REQUIRED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                KakaoShareMessageParams(
+                    recipient = fields.fields[RECIPIENT],
+                    message = fields.fields.getValue(MESSAGE),
+                ),
+            )
+        }
+
+    private companion object {
+        const val RECIPIENT = "recipient"
+        const val MESSAGE = "message"
+        val REQUIRED_FIELDS = setOf(MESSAGE)
+        val ALLOWED_FIELDS = REQUIRED_FIELDS + RECIPIENT
+    }
+}
+
+internal class KakaoNotificationReplyArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<KakaoNotificationReplyParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, ALLOWED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                KakaoNotificationReplyParams(
+                    recipient = fields.fields.getValue(RECIPIENT),
+                    message = fields.fields.getValue(MESSAGE),
+                ),
+            )
+        }
+
+    private companion object {
+        const val RECIPIENT = "recipient"
+        const val MESSAGE = "message"
+        val ALLOWED_FIELDS = setOf(RECIPIENT, MESSAGE)
+    }
+}
+
+internal class MemoryRememberArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<MemoryRememberParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, REQUIRED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                MemoryRememberParams(
+                    content = fields.fields.getValue(CONTENT),
+                    category = fields.fields[CATEGORY],
+                    validUntil = fields.fields[VALID_UNTIL],
+                    zoneId = fields.fields[ZONE_ID],
+                    supersedesId = fields.fields[SUPERSEDES_ID],
+                ),
+            )
+        }
+
+    private companion object {
+        const val CONTENT = "content"
+        const val CATEGORY = "category"
+        const val VALID_UNTIL = "valid_until"
+        const val ZONE_ID = "zone_id"
+        const val SUPERSEDES_ID = "supersedes_id"
+        val REQUIRED_FIELDS = setOf(CONTENT)
+        val ALLOWED_FIELDS = REQUIRED_FIELDS + setOf(CATEGORY, VALID_UNTIL, ZONE_ID, SUPERSEDES_ID)
+    }
+}
+
+internal class CommitmentProposalArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<CommitmentProposalParams> =
+        when (val fields = reader.read(json, ALLOWED_FIELDS, REQUIRED_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                CommitmentProposalParams(
+                    summary = fields.fields.getValue(SUMMARY),
+                    proposedAt = fields.fields[PROPOSED_AT],
+                    zoneId = fields.fields[ZONE_ID],
+                ),
+            )
+        }
+
+    private companion object {
+        const val SUMMARY = "summary"
+        const val PROPOSED_AT = "proposed_at"
+        const val ZONE_ID = "zone_id"
+        val REQUIRED_FIELDS = setOf(SUMMARY)
+        val ALLOWED_FIELDS = REQUIRED_FIELDS + setOf(PROPOSED_AT, ZONE_ID)
+    }
+}
+
+internal class ReminderCreateArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<ReminderCreateParams> =
+        when (val fields = reader.read(json, ReminderFields.WRITE_FIELDS, ReminderFields.WRITE_REQUIRED)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(fields.fields.toReminderCreateParams())
+        }
+}
+
+internal class ReminderUpdateArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<ReminderUpdateParams> = when (
+        val fields = reader.read(
+            json,
+            ReminderFields.WRITE_FIELDS + ReminderFields.IDENTITY_FIELDS,
+            ReminderFields.WRITE_REQUIRED + ReminderFields.IDENTITY_FIELDS,
+        )
+    ) {
+        is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+        is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+            fields.fields.toReminderCreateParams().let { create ->
+                ReminderUpdateParams(
+                    reminderId = fields.fields.getValue(ReminderFields.ID),
+                    expectedVersion = fields.fields.getValue(ReminderFields.VERSION),
+                    title = create.title,
+                    triggerAt = create.triggerAt,
+                    zoneId = create.zoneId,
+                    recurrenceRule = create.recurrenceRule,
+                    precision = create.precision,
+                    leadTimeMinutes = create.leadTimeMinutes,
+                    escalationPolicy = create.escalationPolicy,
+                )
+            },
+        )
+    }
+}
+
+internal class ReminderCancelArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<ReminderCancelParams> =
+        when (val fields = reader.read(json, ReminderFields.IDENTITY_FIELDS, ReminderFields.IDENTITY_FIELDS)) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                ReminderCancelParams(
+                    reminderId = fields.fields.getValue(ReminderFields.ID),
+                    expectedVersion = fields.fields.getValue(ReminderFields.VERSION),
+                ),
+            )
+        }
+}
+
+internal class ReminderQueryArgumentsParser(maxArgumentBytes: Int) {
+    private val reader = StrictToolArgumentsReader(maxArgumentBytes)
+
+    fun parse(json: String): ToolArgumentsParseResult<ReminderQueryParams> =
+        when (val fields = reader.read(json, setOf(ReminderFields.LIMIT), emptySet())) {
+            is FlatFieldsResult.Invalid -> ToolArgumentsParseResult.Invalid(fields.error)
+            is FlatFieldsResult.Valid -> ToolArgumentsParseResult.Valid(
+                ReminderQueryParams(fields.fields[ReminderFields.LIMIT]),
+            )
+        }
+}
+
+private object ReminderFields {
+    const val ID = "reminder_id"
+    const val VERSION = "expected_version"
+    const val TITLE = "title"
+    const val TRIGGER = "trigger_at"
+    const val ZONE = "zone_id"
+    const val RECURRENCE = "recurrence_rule"
+    const val PRECISION = "precision"
+    const val LEAD = "lead_time_minutes"
+    const val ESCALATION = "escalation_policy"
+    const val LIMIT = "limit"
+    val IDENTITY_FIELDS = setOf(ID, VERSION)
+    val WRITE_REQUIRED = setOf(TITLE, TRIGGER, ZONE)
+    val WRITE_FIELDS = WRITE_REQUIRED + setOf(RECURRENCE, PRECISION, LEAD, ESCALATION)
+}
+
+private fun Map<String, String>.toReminderCreateParams(): ReminderCreateParams = ReminderCreateParams(
+    title = getValue(ReminderFields.TITLE),
+    triggerAt = getValue(ReminderFields.TRIGGER),
+    zoneId = getValue(ReminderFields.ZONE),
+    recurrenceRule = get(ReminderFields.RECURRENCE),
+    precision = get(ReminderFields.PRECISION),
+    leadTimeMinutes = get(ReminderFields.LEAD),
+    escalationPolicy = get(ReminderFields.ESCALATION),
+)
+
 /**
  * Encodes the trusted result the runtime reinjects.
  *
@@ -465,14 +692,11 @@ internal object TrustedToolResultJson {
     fun encode(result: FakeArrivalNoticeResult): String =
         """{"simulated":${result.simulated}}"""
 
-    fun encode(result: CalendarQueryResult): String = buildString {
-        append("""{"events":[""")
-        result.events.forEachIndexed { index, event ->
-            if (index > 0) append(',')
-            append(encodeEvent(event))
-        }
-        append("""],"truncated":${result.truncated}}""")
-    }
+    fun encode(result: CalendarQueryResult): String = encodeBudgetedList(
+        prefix = "{\"events\":[",
+        records = result.events.map(::encodeEvent),
+        inheritedTruncated = result.truncated,
+    )
 
     fun encode(result: CalendarCreateEventResult): String = buildString {
         append("""{"created":${result.created}""")
@@ -496,14 +720,11 @@ internal object TrustedToolResultJson {
         append('}')
     }
 
-    fun encode(result: NotificationSearchResult): String = buildString {
-        append("""{"messages":[""")
-        result.messages.forEachIndexed { index, message ->
-            if (index > 0) append(',')
-            append(encodeMessage(message))
-        }
-        append("""],"truncated":${result.truncated}}""")
-    }
+    fun encode(result: NotificationSearchResult): String = encodeBudgetedList(
+        prefix = "{\"messages\":[",
+        records = result.messages.map(::encodeMessage),
+        inheritedTruncated = result.truncated,
+    )
 
     fun encode(result: RouteEstimateResult): String = buildString {
         append("""{"origin":${quote(result.origin)}""")
@@ -512,22 +733,156 @@ internal object TrustedToolResultJson {
         append(""","distance_km":${quote(result.distanceKilometres)}}""")
     }
 
-    fun encode(result: WebSearchResult): String = buildString {
-        append("""{"results":[""")
-        result.hits.forEachIndexed { index, hit ->
-            if (index > 0) append(',')
-            append("""{"title":${quote(hit.title)}""")
-            append(""","link":${quote(hit.link)}""")
-            append(""","snippet":${quote(hit.snippet)}}""")
+    fun encode(result: WebSearchResult): String {
+        val provider = when (result.provider) {
+            WebSearchProvider.YOU_COM -> "you.com"
+            WebSearchProvider.TAVILY -> "tavily"
         }
-        append("]}")
+        val prefix = "{\"provider\":${quote(provider)},\"results\":["
+        val records = mutableListOf<String>()
+        var truncated = false
+        for (hit in result.hits) {
+            if (records.size >= MAX_TRUSTED_WEB_HITS) {
+                truncated = true
+                break
+            }
+            if (hit.link.length > MAX_TRUSTED_WEB_LINK_CHARACTERS) {
+                truncated = true
+                continue
+            }
+            val title = hit.title.takeCodePoints(MAX_TRUSTED_WEB_TITLE_CHARACTERS)
+            val snippet = hit.snippet.takeCodePoints(MAX_TRUSTED_WEB_SNIPPET_CHARACTERS)
+            if (title != hit.title || snippet != hit.snippet) truncated = true
+            val encodedHit = buildString {
+                append("{\"title\":${quote(title)}")
+                append(",\"link\":${quote(hit.link)}")
+                append(",\"snippet\":${quote(snippet)}}")
+            }
+            records += encodedHit
+        }
+        return encodeBudgetedList(
+            prefix = prefix,
+            records = records,
+            inheritedTruncated = truncated || records.size < result.hits.size,
+        )
     }
+
+    fun encode(result: WeatherResult): String = buildString {
+        append("{\"resolved_location\":${quote(result.location)}")
+        append(",\"current_at\":${quote(result.currentAt)}")
+        append(",\"condition\":${quote(result.condition)}")
+        append(",\"temperature_c\":${quote(result.temperatureCelsius)}")
+        append(",\"apparent_temperature_c\":${quote(result.apparentTemperatureCelsius)}")
+        append(",\"relative_humidity_percent\":${result.relativeHumidityPercent}")
+        append(",\"precipitation_mm\":${quote(result.precipitationMillimetres)}")
+        append(",\"wind_speed_kmh\":${quote(result.windSpeedKilometresPerHour)}")
+        append(",\"today_minimum_c\":${quote(result.todayMinimumCelsius)}")
+        append(",\"today_maximum_c\":${quote(result.todayMaximumCelsius)}")
+        append(",\"today_precipitation_probability_max_percent\":" +
+            result.todayPrecipitationProbabilityPercent)
+        append(",\"source_name\":${quote(result.sourceName)}")
+        append(",\"source_url\":${quote(result.sourceUrl)}")
+        append(",\"answer_requirements\":\"The app renders this result. Do not add, change, " +
+            "or restate values and do not call another tool.\"}")
+    }
+
+    fun encode(result: KakaoShareMessageResult): String = buildString {
+        append("{\"share_opened\":${result.shareOpened}")
+        append(",\"message_sent\":false")
+        append(",\"recipient_selection_required\":${result.recipientSelectionRequired}")
+        result.reason?.let { reason -> append(",\"reason\":${quote(reason)}") }
+        append('}')
+    }
+
+    fun encode(result: KakaoNotificationReplyResult): String = buildString {
+        append("{\"reply_requested\":${result.replyRequested}")
+        append(",\"message_sent\":false")
+        result.reason?.let { reason -> append(",\"reason\":${quote(reason)}") }
+        append('}')
+    }
+
+    fun encode(result: MemoryRememberResult): String = when (result.outcome) {
+        MemoryWriteOutcome.SAVED -> """{"saved":true}"""
+        MemoryWriteOutcome.CAPACITY_REACHED ->
+            """{"saved":false,"reason":"capacity_reached"}"""
+        MemoryWriteOutcome.REJECTED -> """{"saved":false,"reason":"rejected"}"""
+    }
+
+    fun encode(result: CommitmentProposalResult): String = when (result.outcome) {
+        CommitmentProposalWriteOutcome.SAVED -> """{"saved":true,"scheduled":false}"""
+        CommitmentProposalWriteOutcome.ALREADY_HANDLED ->
+            """{"saved":true,"scheduled":false,"already_handled":true}"""
+        CommitmentProposalWriteOutcome.CAPACITY_REACHED ->
+            """{"saved":false,"scheduled":false,"reason":"capacity_reached"}"""
+        CommitmentProposalWriteOutcome.REJECTED ->
+            """{"saved":false,"scheduled":false,"reason":"rejected"}"""
+    }
+
+    fun encode(result: ReminderMutationResult): String = buildString {
+        append("{\"saved\":")
+        append(result.outcome == ReminderMutationOutcome.SAVED)
+        append(",\"outcome\":")
+        append(quote(result.outcome.name.lowercase(Locale.ROOT)))
+        result.reminderId?.let { append(",\"reminder_id\":${quote(it)}") }
+        result.scheduleVersion?.let { append(",\"schedule_version\":${quote(it.toString())}") }
+        append('}')
+    }
+
+    fun encode(result: List<ReminderSummary>): String = encodeBudgetedList(
+        prefix = "{\"reminders\":[",
+        records = result.map(::encodeReminder),
+        inheritedTruncated = false,
+    )
 
     fun encode(result: CalendarUpdateEventResult): String = buildString {
         append("""{"updated":${result.updated}""")
         result.reason?.let { reason -> append(""","reason":${quote(reason)}""") }
         append('}')
     }
+
+    private fun String.takeCodePoints(maximum: Int): String {
+        if (codePointCount(0, length) <= maximum) return this
+        return substring(0, offsetByCodePoints(0, maximum))
+    }
+
+    /** Keeps a complete ordered prefix of records; a record is never cut into invalid JSON. */
+    private fun encodeBudgetedList(
+        prefix: String,
+        records: List<String>,
+        inheritedTruncated: Boolean,
+    ): String {
+        var returnedCount = 0
+        for (candidateCount in 1..records.size) {
+            val candidate = encodeListEnvelope(
+                prefix = prefix,
+                records = records.subList(0, candidateCount),
+                truncated = inheritedTruncated || candidateCount < records.size,
+            )
+            if (!TrustedToolResponseBudget.allows(listOf(candidate))) break
+            returnedCount = candidateCount
+        }
+        val encoded = encodeListEnvelope(
+            prefix = prefix,
+            records = records.subList(0, returnedCount),
+            truncated = inheritedTruncated || returnedCount < records.size,
+        )
+        check(TrustedToolResponseBudget.allows(listOf(encoded)))
+        return encoded
+    }
+
+    private fun encodeListEnvelope(
+        prefix: String,
+        records: List<String>,
+        truncated: Boolean,
+    ): String = prefix + records.joinToString(",") +
+        "],\"truncated\":$truncated,\"returned_count\":${records.size}}"
+
+    private const val MAX_TRUSTED_WEB_HITS = 2
+    private const val MAX_TRUSTED_WEB_TITLE_CHARACTERS = 50
+    private const val MAX_TRUSTED_WEB_SNIPPET_CHARACTERS = 100
+    private const val MAX_TRUSTED_WEB_LINK_CHARACTERS = 220
+    internal const val MAX_TRUSTED_WEB_RESULT_BYTES =
+        TrustedToolResponseBudget.MAX_TOTAL_PAYLOAD_UTF8_BYTES
 
     private fun encodeMessage(message: CapturedMessageSummary): String = buildString {
         append("""{"conversation":${quote(message.conversation)}""")
@@ -551,6 +906,16 @@ internal object TrustedToolResultJson {
         append('}')
     }
 
+    private fun encodeReminder(reminder: ReminderSummary): String = buildString {
+        append("{\"reminder_id\":${quote(reminder.reminderId)}")
+        append(",\"title\":${quote(reminder.title)}")
+        append(",\"trigger_at_epoch_millis\":${quote(reminder.triggerAtEpochMillis.toString())}")
+        append(",\"zone_id\":${quote(reminder.zoneId)}")
+        reminder.recurrenceRule?.let { append(",\"recurrence_rule\":${quote(it)}") }
+        append(",\"precision\":${quote(reminder.precision.name.lowercase(Locale.ROOT))}")
+        append(",\"schedule_version\":${quote(reminder.scheduleVersion.toString())}}")
+    }
+
     private fun quote(value: String): String = buildString {
         append('"')
         value.forEach { character ->
@@ -560,7 +925,7 @@ internal object TrustedToolResultJson {
                 character == '\n' -> append("\\n")
                 character == '\r' -> append("\\r")
                 character == '\t' -> append("\\t")
-                character.code < 0x20 -> append("\\u%04x".format(character.code))
+                character.code < 0x20 -> append("\\u%04x".format(Locale.ROOT, character.code))
                 else -> append(character)
             }
         }

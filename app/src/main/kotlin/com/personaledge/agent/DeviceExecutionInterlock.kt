@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationManagerCompat
 import com.personaledge.core.diagnostics.DiagnosticThermalStatus
 import com.personaledge.core.tools.AlarmGateway
 import com.personaledge.core.tools.ExecutionInterlock
@@ -33,10 +34,23 @@ class DeviceExecutionInterlock(
     private val alarmGateway: AlarmGateway,
     private val notificationGateway: StoredNotificationGateway,
     private val networkConsent: suspend (String) -> Boolean,
+    private val memoryConsent: suspend () -> Boolean = { false },
+    private val proposalConsent: suspend () -> Boolean = { false },
+    private val kakaoShareAvailable: () -> Boolean = { false },
+    private val kakaoReplyEnabled: suspend () -> Boolean = { false },
+    private val kakaoReplyAvailable: () -> Boolean = { false },
+    private val readCalendarIds: suspend () -> Set<Long> = {
+        pinnedCalendarId()?.let(::setOf).orEmpty()
+    },
+    private val sideEffectingToolsEnabled: Boolean,
 ) : ExecutionInterlock {
     private val applicationContext = context.applicationContext
 
     override suspend fun evaluate(request: InterlockRequest): InterlockDecision {
+        SideEffectingToolPolicy.blockReason(sideEffectingToolsEnabled, request.risk)?.let { reason ->
+            return InterlockDecision.Block(reason)
+        }
+
         // A read is cheap and safe even when the device is warm; only new work is throttled.
         if (request.risk != ToolRisk.READ_ONLY && !ThermalTurnPolicy.canStart(thermalStatus())) {
             return InterlockDecision.Block(
@@ -64,7 +78,7 @@ class DeviceExecutionInterlock(
         ToolCapability.READ_CALENDAR -> permissionReason(
             permission = Manifest.permission.READ_CALENDAR,
             reason = "캘린더 읽기 권한이 없습니다. 설정에서 허용해 주세요.",
-        ) ?: pinnedCalendarReason()
+        ) ?: calendarReadScopeReason()
         ToolCapability.WRITE_CALENDAR -> permissionReason(
             permission = Manifest.permission.WRITE_CALENDAR,
             reason = "캘린더 쓰기 권한이 없습니다. 설정에서 허용해 주세요.",
@@ -72,8 +86,11 @@ class DeviceExecutionInterlock(
         ToolCapability.SCHEDULE_ALARM -> clockAppReason()
         ToolCapability.READ_NOTIFICATIONS -> notificationCaptureReason()
         ToolCapability.NETWORK -> networkReason(toolName)
-        // Declared but not yet wired. Refusing keeps a future tool from shipping unchecked.
-        ToolCapability.POST_NOTIFICATIONS -> "이 기능은 아직 사용할 수 없습니다."
+        ToolCapability.WRITE_MEMORY -> memoryReason()
+        ToolCapability.WRITE_PROPOSALS -> proposalReason()
+        ToolCapability.POST_NOTIFICATIONS -> notificationPostingReason()
+        ToolCapability.OPEN_KAKAO_SHARE -> kakaoShareReason()
+        ToolCapability.REPLY_KAKAO_NOTIFICATION -> kakaoReplyReason()
     }
 
     private fun permissionReason(permission: String, reason: String): String? =
@@ -104,6 +121,21 @@ class DeviceExecutionInterlock(
         }
     }
 
+    private suspend fun calendarReadScopeReason(): String? {
+        val ids = try {
+            readCalendarIds().filter { it > 0 }.toSet()
+        } catch (_: Exception) {
+            return "캘린더 읽기 범위를 확인하지 못했습니다. 설정에서 다시 선택하세요."
+        }
+        if (ids.isEmpty()) return "설정에서 읽을 캘린더를 먼저 선택하세요."
+        val allReadable = ids.all { id ->
+            runCatching { calendarIsReadable(id) }.getOrDefault(false)
+        }
+        return if (allReadable) null else {
+            "읽기 범위의 캘린더 하나 이상을 사용할 수 없습니다. 설정에서 다시 선택하세요."
+        }
+    }
+
     /**
      * The clock app can be disabled or uninstalled between preparation and execution, and
      * `ACTION_SET_ALARM` gives no result, so an unhandled intent would look like success.
@@ -118,6 +150,20 @@ class DeviceExecutionInterlock(
             "알림 접근 권한이 없습니다. 설정에서 허용해 주세요."
         !notificationGateway.captureEnabled() ->
             "알림 수집이 꺼져 있습니다. 설정에서 켜 주세요."
+        else -> null
+    }
+
+    private fun kakaoShareReason(): String? =
+        if (runCatching(kakaoShareAvailable).getOrDefault(false)) null
+        else "카카오톡 공유 화면을 열 수 없습니다. 카카오톡 설치 상태를 확인해 주세요."
+
+    private suspend fun kakaoReplyReason(): String? = when {
+        !notificationGateway.accessGranted() ->
+            "알림 접근 권한이 없습니다. 설정에서 허용해 주세요."
+        !runCatching { kakaoReplyEnabled() }.getOrDefault(false) ->
+            "카카오톡 알림 답장이 꺼져 있습니다. 설정에서 먼저 켜 주세요."
+        !runCatching(kakaoReplyAvailable).getOrDefault(false) ->
+            "카카오톡 알림 연결을 확인할 수 없습니다. 알림 접근 설정을 다시 확인해 주세요."
         else -> null
     }
 
@@ -156,6 +202,37 @@ class DeviceExecutionInterlock(
     } catch (_: Exception) {
         "시계 앱을 확인하지 못했습니다."
     }
+
+    private suspend fun memoryReason(): String? =
+        if (runCatching { memoryConsent() }.getOrDefault(false)) {
+            null
+        } else {
+            "장기 기억이 꺼져 있습니다. 설정에서 먼저 켜 주세요."
+        }
+
+    private suspend fun proposalReason(): String? =
+        if (runCatching { proposalConsent() }.getOrDefault(false)) {
+            null
+        } else {
+            "일정 후보 제안함이 꺼져 있습니다. 리마인더 설정에서 먼저 켜 주세요."
+        }
+
+    private fun notificationPostingReason(): String? = when {
+        !NotificationPermissionPolicy.isGranted(applicationContext) ->
+            "리마인더 알림 권한이 없습니다. 설정에서 알림을 허용해 주세요."
+        !NotificationManagerCompat.from(applicationContext).areNotificationsEnabled() ->
+            "앱 알림이 시스템 설정에서 꺼져 있습니다. 리마인더 알림을 허용해 주세요."
+        else -> null
+    }
+}
+
+/** Pure, variant-fed policy so the candidate write prohibition also has host regression coverage. */
+internal object SideEffectingToolPolicy {
+    private const val BLOCK_REASON =
+        "후보 모델 검증 빌드는 읽기 전용 도구만 허용합니다."
+
+    fun blockReason(sideEffectingToolsEnabled: Boolean, risk: ToolRisk): String? =
+        if (!sideEffectingToolsEnabled && risk != ToolRisk.READ_ONLY) BLOCK_REASON else null
 }
 
 internal enum class NetworkReachability {

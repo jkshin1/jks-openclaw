@@ -69,6 +69,50 @@ data class MessageEntity(
     val createdAtEpochMillis: Long,
 )
 
+enum class MemoryCategory {
+    PREFERENCE,
+    PERSON,
+    PLACE,
+    ROUTINE,
+    FACT,
+}
+
+/**
+ * One user-approved fact that can be recalled across chat threads.
+ *
+ * Memories are deliberately independent from [ConversationEntity]: deleting a transcript must
+ * not silently delete a preference the user chose to keep. [normalizedContent] is a repository-
+ * produced deduplication key and is never shown to the model or user.
+ */
+@Entity(
+    tableName = "memories",
+    indices = [
+        Index(value = ["normalized_content"], unique = true),
+        Index(value = ["supersedes_id"]),
+    ],
+)
+data class MemoryEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "id")
+    val id: String,
+    @ColumnInfo(name = "content")
+    val content: String,
+    @ColumnInfo(name = "normalized_content")
+    val normalizedContent: String,
+    @ColumnInfo(name = "created_at_epoch_millis")
+    val createdAtEpochMillis: Long,
+    @ColumnInfo(name = "updated_at_epoch_millis")
+    val updatedAtEpochMillis: Long,
+    @ColumnInfo(name = "category")
+    val category: MemoryCategory = MemoryCategory.FACT,
+    @ColumnInfo(name = "valid_until_epoch_millis")
+    val validUntilEpochMillis: Long? = null,
+    @ColumnInfo(name = "last_confirmed_at_epoch_millis")
+    val lastConfirmedAtEpochMillis: Long = updatedAtEpochMillis,
+    @ColumnInfo(name = "supersedes_id")
+    val supersedesId: String? = null,
+)
+
 /**
  * A notification observed by the listener service, stored so it can be searched later.
  *

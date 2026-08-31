@@ -1,5 +1,8 @@
 import java.io.StringReader
 import java.util.Properties
+import org.gradle.api.Action
+import org.gradle.api.Task
+import org.gradle.api.tasks.Exec
 
 plugins {
     alias(libs.plugins.android.application)
@@ -45,6 +48,26 @@ check(!releaseSigningRequested || missingSigningSettings.isEmpty()) {
 }
 
 val releaseSigningKeystore = releaseStorePath?.let(::file)
+val releaseSigningConfigured = releaseSigningKeystore != null
+val physicalReleaseTestRequested = providers
+    .gradleProperty("personalEdgePhysicalReleaseTest")
+    .orNull == "true"
+val qwen8bLabTestRequested = providers
+    .gradleProperty("personalEdgeQwen8bLabTest")
+    .orNull == "true"
+check(!(physicalReleaseTestRequested && qwen8bLabTestRequested)) {
+    "personalEdgePhysicalReleaseTest and personalEdgeQwen8bLabTest are mutually exclusive."
+}
+val personalEdgeApplicationId = "com.personaledge.agent"
+val personalEdgeVersionCode = 11
+val personalEdgeVersionName = "1.0.0-rc11"
+val releaseProvenanceDirectory = layout.buildDirectory.dir("generated/releaseProvenance/release")
+val releaseProvenanceFile = releaseProvenanceDirectory.map { directory ->
+    directory.file("release-provenance.json")
+}
+val releaseSbomFile = releaseProvenanceDirectory.map { directory ->
+    directory.file("release-sbom.cdx.json")
+}
 check(releaseSigningKeystore == null || releaseSigningKeystore.isFile) {
     "Release keystore not found at $releaseSigningKeystore. " +
         "Run ./scripts/create-release-keystore.sh or restore it from your offline backup."
@@ -54,13 +77,25 @@ android {
     namespace = "com.personaledge.agent"
     compileSdk = 37
 
+    // Normal host/emulator work keeps the debug target. Physical acceptance can explicitly link
+    // the separately packaged test APK against the minified, owner-signed release. Dependencies
+    // shared with the target APK are not copied into the test APK, so the small owner-reviewed
+    // release suite requires stable cross-APK entry points in proguard-rules.pro.
+    when {
+        physicalReleaseTestRequested -> testBuildType = "release"
+        qwen8bLabTestRequested -> testBuildType = "qwen8bLab"
+    }
+
     defaultConfig {
-        applicationId = "com.personaledge.agent"
+        applicationId = personalEdgeApplicationId
         minSdk = 31
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0-rc1"
+        versionCode = personalEdgeVersionCode
+        versionName = personalEdgeVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("boolean", "CANDIDATE_MODEL_LAB", "false")
+        // Fail closed in any future build type until that variant explicitly opts into writes.
+        buildConfigField("boolean", "SIDE_EFFECTING_TOOLS_ENABLED", "false")
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -88,6 +123,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("boolean", "SIDE_EFFECTING_TOOLS_ENABLED", "true")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -97,11 +135,22 @@ android {
             )
             // Never fall back to the shared debug key: it would fork the installed identity.
             signingConfig = signingConfigs.findByName("release")
+            buildConfigField("boolean", "SIDE_EFFECTING_TOOLS_ENABLED", "true")
+        }
+        create("qwen8bLab") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+            applicationIdSuffix = ".qwen8blab"
+            versionNameSuffix = "-qwen8b-lab"
+            signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("boolean", "CANDIDATE_MODEL_LAB", "true")
+            buildConfigField("boolean", "SIDE_EFFECTING_TOOLS_ENABLED", "false")
         }
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -121,6 +170,14 @@ android {
     }
 }
 
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.sources.assets?.addStaticSourceDirectory(
+            releaseProvenanceDirectory.get().asFile.absolutePath,
+        )
+    }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
@@ -136,6 +193,109 @@ if (releaseSigningKeystore == null) {
     )
 }
 
+val generateReleaseSbom = tasks.register<Exec>("generateReleaseSbom") {
+    group = "build"
+    description = "Generate the deterministic CycloneDX 1.6 release dependency inventory."
+    workingDir(rootProject.projectDir)
+    inputs.file(rootProject.file("scripts/generate-release-sbom.sh"))
+    inputs.file(project.file("gradle.lockfile"))
+    inputs.property("personalEdgeApplicationId", personalEdgeApplicationId)
+    inputs.property("personalEdgeVersionCode", personalEdgeVersionCode)
+    inputs.property("personalEdgeVersionName", personalEdgeVersionName)
+    outputs.file(releaseSbomFile)
+    commandLine(
+        "bash",
+        rootProject.file("scripts/generate-release-sbom.sh").absolutePath,
+        "--project-root",
+        rootProject.projectDir.absolutePath,
+        "--output",
+        releaseSbomFile.get().asFile.absolutePath,
+        "--application-id",
+        personalEdgeApplicationId,
+        "--version-code",
+        personalEdgeVersionCode.toString(),
+        "--version-name",
+        personalEdgeVersionName,
+    )
+}
+
+val generateReleaseProvenance = tasks.register<Exec>("generateReleaseProvenance") {
+    group = "build"
+    description = "Generate the privacy-safe provenance manifest bound to the release SBOM."
+    dependsOn(generateReleaseSbom)
+    workingDir(rootProject.projectDir)
+    inputs.file(rootProject.file("scripts/generate-release-provenance.sh"))
+    inputs.file(releaseSbomFile)
+    inputs.file(rootProject.file("models/model-manifest.json"))
+    inputs.file(project.file("release-signing-identity.json"))
+    inputs.file(rootProject.file("gradle/libs.versions.toml"))
+    inputs.files(
+        rootProject.fileTree("core/data/schemas/com.personaledge.core.data.PersonalEdgeDatabase") {
+            include("*.json")
+        },
+    )
+    inputs.files(
+        rootProject.fileTree(rootProject.projectDir) {
+            include("settings-gradle.lockfile")
+            include("app/gradle.lockfile")
+            include("core/*/gradle.lockfile")
+        },
+    )
+    outputs.file(releaseProvenanceFile)
+    // Git dirty state can change without touching a declared input (for example a new source file).
+    outputs.upToDateWhen { false }
+    commandLine(
+        "bash",
+        rootProject.file("scripts/generate-release-provenance.sh").absolutePath,
+        "--project-root",
+        rootProject.projectDir.absolutePath,
+        "--output",
+        releaseProvenanceFile.get().asFile.absolutePath,
+        "--sbom",
+        releaseSbomFile.get().asFile.absolutePath,
+        "--version-code",
+        personalEdgeVersionCode.toString(),
+        "--version-name",
+        personalEdgeVersionName,
+    )
+}
+
+tasks.register<Exec>("verifyReleaseProvenance") {
+    group = "verification"
+    description = "Verify the packaged release SBOM, provenance, and APK signing identity."
+    dependsOn("assembleRelease")
+    workingDir(rootProject.projectDir)
+    inputs.file(rootProject.file("scripts/verify-release-provenance.sh"))
+    inputs.file(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
+    commandLine(
+        "bash",
+        rootProject.file("scripts/verify-release-provenance.sh").absolutePath,
+        "--apk",
+        layout.buildDirectory.file("outputs/apk/release/app-release.apk").get().asFile.absolutePath,
+        "--project-root",
+        rootProject.projectDir.absolutePath,
+        "--application-id",
+        personalEdgeApplicationId,
+        "--version-code",
+        personalEdgeVersionCode.toString(),
+        "--version-name",
+        personalEdgeVersionName,
+    )
+}
+
+// Release output is an installable migration artifact, not a compile smoke. Refuse the task at
+// pre-build time when the fixed owner identity is unavailable; debug remains usable for host and
+// emulator development.
+tasks.matching { task -> task.name == "preReleaseBuild" }.configureEach {
+    dependsOn(generateReleaseProvenance)
+    inputs.property("personalEdgeReleaseSigningConfigured", releaseSigningConfigured)
+    doFirst(Action<Task> {
+        check(inputs.properties["personalEdgeReleaseSigningConfigured"] == true) {
+            "Release signing is required. Restore the verified personal signing key before building release."
+        }
+    })
+}
+
 dependencies {
     implementation(project(":core:agent"))
     implementation(project(":core:data"))
@@ -148,12 +308,17 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.window)
+    implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit4)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    // Declare the isolated in-memory test's runtime explicitly. The release target also keeps
+    // Room's facade as a narrow cross-APK ABI root in proguard-rules.pro.
+    androidTestImplementation(libs.androidx.room.runtime)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

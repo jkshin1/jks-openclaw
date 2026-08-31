@@ -166,7 +166,10 @@ class LiteRtLlmRuntime internal constructor(
                     _state.value = LlmState.Off
                     fail(LlmFailureCode.CLOSED)
                 }
-                val conversation = readyEngine.createConversation(validatedTools)
+                val conversation = readyEngine.createConversation(
+                    validatedTools,
+                    model.manifest.maxOutputTokens,
+                )
                 try {
                     currentCoroutineContext().ensureActive()
                     if (closeRequested.get()) {
@@ -179,6 +182,8 @@ class LiteRtLlmRuntime internal constructor(
                         conversation = conversation,
                         tools = validatedTools,
                         manifest = model.manifest,
+                        conversationOutputTokenLimit = model.manifest.maxOutputTokens,
+                        conversationToolNames = validatedTools.mapTo(linkedSetOf()) { it.name },
                     )
                     _state.value = LlmState.Ready(readyEngine.backend)
                 } catch (error: Exception) {
@@ -213,6 +218,31 @@ class LiteRtLlmRuntime internal constructor(
     override fun streamUserTurn(
         turnId: TurnId,
         prompt: String,
+    ): Flow<ModelEvent> = streamUserTurnInternal(turnId, prompt, null, null)
+
+    override fun streamUserTurn(
+        turnId: TurnId,
+        prompt: String,
+        maxOutputTokens: Int,
+    ): Flow<ModelEvent> = streamUserTurnInternal(turnId, prompt, maxOutputTokens, null)
+
+    override fun streamUserTurn(
+        turnId: TurnId,
+        prompt: String,
+        maxOutputTokens: Int,
+        toolScope: LlmTurnToolScope,
+    ): Flow<ModelEvent> = streamUserTurnInternal(
+        turnId = turnId,
+        prompt = prompt,
+        requestedMaxOutputTokens = maxOutputTokens,
+        requestedToolNames = toolScope.toolNames,
+    )
+
+    private fun streamUserTurnInternal(
+        turnId: TurnId,
+        prompt: String,
+        requestedMaxOutputTokens: Int?,
+        requestedToolNames: Set<String>?,
     ): Flow<ModelEvent> = channelFlow {
         launch(dispatcher) {
             val emit: suspend (ModelEvent) -> Unit = { event -> send(event) }
@@ -237,10 +267,39 @@ class LiteRtLlmRuntime internal constructor(
                 emit(ModelEvent.Failure(turnId, LlmFailureCode.NOT_INITIALIZED))
                 return@launch
             }
+            val outputTokenLimit = requestedMaxOutputTokens ?: current.manifest.maxOutputTokens
+            if (outputTokenLimit !in 1..current.manifest.maxOutputTokens) {
+                emit(ModelEvent.Failure(turnId, LlmFailureCode.INVALID_PROMPT))
+                return@launch
+            }
+            val scopedTools = if (requestedToolNames == null) {
+                current.tools
+            } else {
+                val names = try {
+                    requestedToolNames.toSet()
+                } catch (_: Exception) {
+                    emit(ModelEvent.Failure(turnId, LlmFailureCode.INVALID_TOOL_DEFINITION))
+                    return@launch
+                }
+                val selected = current.tools.filter { definition -> definition.name in names }
+                if (selected.size != names.size) {
+                    emit(ModelEvent.Failure(turnId, LlmFailureCode.INVALID_TOOL_DEFINITION))
+                    return@launch
+                }
+                selected
+            }
+            val scopedToolNames = scopedTools.mapTo(linkedSetOf()) { definition -> definition.name }
             // The first slice is deliberately stateless across top-level requests. This keeps
             // accumulated Conversation KV state from silently consuming the fixed 4K budget.
-            if (current.hasUserTurnHistory) {
-                val replacementFailure = replaceConversationAfterUnsafeEnd(current)
+            if (current.hasUserTurnHistory ||
+                current.conversationOutputTokenLimit != outputTokenLimit ||
+                current.conversationToolNames != scopedToolNames
+            ) {
+                val replacementFailure = replaceConversationAfterUnsafeEnd(
+                    current,
+                    outputTokenLimit,
+                    scopedTools,
+                )
                 if (replacementFailure != null) {
                     emit(ModelEvent.Failure(turnId, replacementFailure))
                     return@launch
@@ -302,10 +361,27 @@ class LiteRtLlmRuntime internal constructor(
             }
             val maximumBeforeToolResponse = (
                 current.manifest.contextTokens -
-                    current.manifest.maxOutputTokens -
+                    current.conversationOutputTokenLimit -
                     TOOL_RESPONSE_TOKEN_RESERVE
                 ).coerceAtLeast(0)
             if (tokenCount !in 0..maximumBeforeToolResponse) {
+                pendingTurn = null
+                rememberTerminal(turnId)
+                val recoveryFailure = replaceConversationAfterUnsafeEnd(current)
+                emit(
+                    ModelEvent.Failure(
+                        turnId,
+                        recoveryFailure ?: LlmFailureCode.CONTEXT_BUDGET_EXCEEDED,
+                    ),
+                )
+                return@launch
+            }
+
+            // This is the last check before the native boundary. Canonicalization above can
+            // change byte size, and alternate LlmRuntime callers need the same fail-closed cap as
+            // the agent encoders. Consume the pending turn so an oversized response cannot be
+            // retried after its Tool work has already happened.
+            if (!TrustedToolResponseBudget.allows(validatedResponses.map { it.payloadJson })) {
                 pendingTurn = null
                 rememberTerminal(turnId)
                 val recoveryFailure = replaceConversationAfterUnsafeEnd(current)
@@ -403,8 +479,16 @@ class LiteRtLlmRuntime internal constructor(
         var conversationIsSafe = false
         try {
             var finalNativeToolCalls: List<RuntimeToolCall>? = null
+            var emittedThoughtCharacters = 0L
             var emittedTextCharacters = 0L
             current.conversation.stream(input).collect { chunk ->
+                for (delta in chunk.thoughtDeltas) {
+                    emittedThoughtCharacters += delta.length
+                    if (emittedThoughtCharacters > MAX_TEXT_CHARACTERS) {
+                        throw InvalidNativeOutputException()
+                    }
+                    if (delta.isNotEmpty()) emit(ModelEvent.ThoughtDelta(turnId, delta))
+                }
                 for (delta in chunk.textDeltas) {
                     emittedTextCharacters += delta.length
                     if (emittedTextCharacters > MAX_TEXT_CHARACTERS) {
@@ -479,7 +563,7 @@ class LiteRtLlmRuntime internal constructor(
     ): List<LlmToolCall>? {
         if (nativeCalls.isEmpty()) return emptyList()
         if (nativeCalls.size > MAX_TOOL_CALLS) return null
-        val knownNames = current.tools.mapTo(HashSet()) { it.name }
+        val knownNames = current.conversationToolNames
         val ids = HashSet<String>()
         return nativeCalls.map { call ->
             if (call.name !in knownNames) return null
@@ -503,7 +587,7 @@ class LiteRtLlmRuntime internal constructor(
         nativeCalls: List<RuntimeToolCall>,
     ): List<RuntimeToolCall>? {
         if (nativeCalls.isEmpty() || nativeCalls.size > MAX_TOOL_CALLS) return null
-        val knownNames = current.tools.mapTo(HashSet()) { it.name }
+        val knownNames = current.conversationToolNames
         return nativeCalls.map { call ->
             if (call.name !in knownNames) return null
             val arguments = StrictJson.canonicalize(
@@ -539,12 +623,21 @@ class LiteRtLlmRuntime internal constructor(
 
     private fun replaceConversationAfterUnsafeEnd(
         current: RuntimeResources,
+        maxOutputTokens: Int = current.conversationOutputTokenLimit,
+        tools: List<LlmToolDefinition> = current.tools,
     ): LlmFailureCode? {
         current.conversation.safeClose()
         if (closeRequested.get()) return null
         return try {
             current.modelLease.revalidateAndGetOpaquePath()
-            current.conversation = current.engine.createConversation(current.tools)
+            current.conversation = current.engine.createConversation(
+                tools,
+                maxOutputTokens,
+            )
+            current.conversationOutputTokenLimit = maxOutputTokens
+            current.conversationToolNames = tools.mapTo(linkedSetOf()) { definition ->
+                definition.name
+            }
             current.hasUserTurnHistory = false
             null
         } catch (_: ModelStoreException) {
@@ -670,6 +763,8 @@ class LiteRtLlmRuntime internal constructor(
         var conversation: RuntimeConversation,
         val tools: List<LlmToolDefinition>,
         val manifest: ModelManifest,
+        var conversationOutputTokenLimit: Int,
+        var conversationToolNames: Set<String>,
         var hasUserTurnHistory: Boolean = false,
     )
 
@@ -713,7 +808,8 @@ class LiteRtLlmRuntime internal constructor(
         private const val MAX_CPU_THREADS = 256
         private const val MAX_TEXT_CHARACTERS = 1_000_000L
         private const val MAX_REMEMBERED_TURNS = 256
-        private const val TOOL_RESPONSE_TOKEN_RESERVE = 512
+        private const val TOOL_RESPONSE_TOKEN_RESERVE =
+            TrustedToolResponseBudget.RESERVED_CONTEXT_TOKENS
 
         private fun newRuntimeExecutor(): ExecutorService =
             Executors.newSingleThreadExecutor(RuntimeThreadFactory)
@@ -750,7 +846,10 @@ internal fun interface RuntimeEngineFactory {
 internal interface RuntimeEngine : AutoCloseable {
     val backend: InferenceBackend
 
-    fun createConversation(tools: List<LlmToolDefinition>): RuntimeConversation
+    fun createConversation(
+        tools: List<LlmToolDefinition>,
+        maxOutputTokens: Int,
+    ): RuntimeConversation
 }
 
 internal interface RuntimeConversation : AutoCloseable {
@@ -762,25 +861,41 @@ internal interface RuntimeConversation : AutoCloseable {
 }
 
 internal sealed interface RuntimeTurnInput {
-    data class User(val prompt: String) : RuntimeTurnInput
+    data class User(val prompt: String) : RuntimeTurnInput {
+        override fun toString(): String = "RuntimeTurnInput.User(prompt=<redacted>)"
+    }
 
-    data class ToolResponses(val responses: List<RuntimeToolResponse>) : RuntimeTurnInput
+    data class ToolResponses(val responses: List<RuntimeToolResponse>) : RuntimeTurnInput {
+        override fun toString(): String =
+            "RuntimeTurnInput.ToolResponses(responseCount=${responses.size})"
+    }
 }
 
 internal data class RuntimeToolResponse(
     val name: String,
     val payloadJson: String,
-)
+) {
+    override fun toString(): String =
+        "RuntimeToolResponse(name=$name, payloadJson=<redacted>)"
+}
 
 internal data class RuntimeChunk(
+    val thoughtDeltas: List<String> = emptyList(),
     val textDeltas: List<String> = emptyList(),
     val toolCalls: List<RuntimeToolCall> = emptyList(),
-)
+) {
+    override fun toString(): String =
+        "RuntimeChunk(thoughtDeltaCount=${thoughtDeltas.size}, " +
+            "textDeltaCount=${textDeltas.size}, toolCallCount=${toolCalls.size})"
+}
 
 internal data class RuntimeToolCall(
     val name: String,
     val argumentsJson: String,
-)
+) {
+    override fun toString(): String =
+        "RuntimeToolCall(name=$name, argumentsJson=<redacted>)"
+}
 
 internal class RuntimeDriverException : Exception()
 

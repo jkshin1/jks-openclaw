@@ -328,6 +328,76 @@ capture_artifact() {
     return 0
 }
 
+is_release_run_as_denial() {
+    local path="$1"
+    local command_exit="$2"
+    local probe_text
+
+    [[ "$command_exit" == "1" ]] || return 1
+    probe_text="$(tr -d '\r' < "$path")"
+    [[ "$probe_text" == "run-as: package not debuggable: $package_name" ||
+       "$probe_text" == "run-as: Package '$package_name' is not debuggable" ]]
+}
+
+capture_run_as_probe() {
+    local command_id="run-as-probe"
+    local relative_path="run-as.txt"
+    local cap_bytes=65536
+    local final_path="$report_dir/$relative_path"
+    local temp_path
+    local -a pipeline_status
+    local command_exit
+    local limiter_exit
+    local status="failed"
+    local required=1
+    local receipt_output="-"
+
+    temp_path="$(mktemp "$report_dir/.capture-${command_id}.XXXXXX")"
+    set +e
+    "$@" 2>&1 | limit_stream "$cap_bytes" > "$temp_path"
+    pipeline_status=("${PIPESTATUS[@]}")
+    set -e
+    command_exit="${pipeline_status[0]:-125}"
+    limiter_exit="${pipeline_status[1]:-125}"
+
+    if [[ "$limiter_exit" == "0" ]] && validate_host_file "$temp_path" "$cap_bytes"; then
+        mv "$temp_path" "$final_path"
+        chmod 600 "$final_path"
+        if register_file "$relative_path" "$cap_bytes"; then
+            receipt_output="$relative_path"
+            if [[ "$command_exit" == "0" ]] &&
+               grep -Eq '^uid=[0-9]+.*[[:space:]]gid=[0-9]+.*$' "$final_path"; then
+                status="ok"
+                run_as_ok=1
+            elif is_release_run_as_denial "$final_path" "$command_exit"; then
+                status="not_applicable_release"
+                required=0
+                run_as_release=1
+            fi
+        else
+            status="unsafe_output"
+        fi
+    elif [[ "$limiter_exit" == "73" ]]; then
+        status="truncated"
+    else
+        status="unsafe_output"
+    fi
+
+    if [[ -e "$temp_path" && ! -L "$temp_path" ]]; then
+        unlink "$temp_path" 2>/dev/null || true
+    fi
+    record_command "$command_id" "$receipt_output" "$command_exit" "$limiter_exit" \
+        "$status" "$required" "$cap_bytes"
+    if [[ "$status" == "ok" ]]; then
+        echo "OK   $command_id -> $relative_path"
+    elif [[ "$status" == "not_applicable_release" ]]; then
+        echo "SKIP $command_id (release package) -> $relative_path"
+    else
+        echo "FAIL $command_id (command=$command_exit limiter=$limiter_exit status=$status)" >&2
+        overall_failure=1
+    fi
+}
+
 record_skipped_command() {
     local command_id="$1"
     local status="$2"
@@ -561,12 +631,9 @@ capture_artifact thermalservice thermalservice.txt $((4 * 1024 * 1024)) - -- \
 capture_artifact disk disk.txt $((4 * 1024 * 1024)) - -- \
     "$adb_bin" -s "$serial" shell df -k /data /storage/emulated/0
 
-capture_artifact run-as-debuggable run-as.txt 65536 - -- \
-    "$adb_bin" -s "$serial" exec-out run-as "$package_name" id
 run_as_ok=0
-if tail -n 1 "$records_path" | awk -F '\t' '$1 == "run-as-debuggable" && $5 == "ok" { found=1 } END { exit(found ? 0 : 1) }'; then
-    run_as_ok=1
-fi
+run_as_release=0
+capture_run_as_probe "$adb_bin" -s "$serial" shell -T run-as "$package_name" id
 
 diagnostic_names=(
     diagnostics.jsonl
@@ -584,6 +651,10 @@ diagnostic_ids=(
 for ((diagnostic_index = 0; diagnostic_index < ${#diagnostic_names[@]}; diagnostic_index++)); do
     diagnostic_name="${diagnostic_names[$diagnostic_index]}"
     diagnostic_id="${diagnostic_ids[$diagnostic_index]}"
+    if (( run_as_release == 1 )); then
+        record_skipped_command "$diagnostic_id" not_applicable_release "$diagnostic_file_cap"
+        continue
+    fi
     if (( run_as_ok == 0 )); then
         record_skipped_command "$diagnostic_id" dependency_failed "$diagnostic_file_cap"
         continue

@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
@@ -21,38 +22,50 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
-enum class PreferredBackend {
-    CPU,
-    GPU,
-}
-
 /**
  * Every field has a safe default, so a missing or unreadable store degrades to the most
  * conservative behavior rather than to an unconfirmed side effect.
  */
 data class AgentSettings(
-    val preferredBackend: PreferredBackend = PreferredBackend.CPU,
-    val confirmLocalWrites: Boolean = true,
     /** Default calendar for new events. Null means the tool must ask which calendar to use. */
     val defaultCalendarId: Long? = null,
     val defaultCalendarLabel: String? = null,
+    val readCalendarIds: Set<Long> = emptySet(),
     /** Home address used as the default route origin. */
     val defaultOriginLabel: String? = null,
     val notificationCaptureEnabled: Boolean = false,
+    /** Separately permits confirmed RemoteInput replies to active KakaoTalk notifications. */
+    val kakaoNotificationReplyEnabled: Boolean = false,
+    /** Locally derives review-only commitment candidates from captured KakaoTalk posts. */
+    val commitmentProposalsEnabled: Boolean = false,
     val notificationRetentionDays: Int = DEFAULT_NOTIFICATION_RETENTION_DAYS,
     val routeLookupEnabled: Boolean = false,
     val webSearchEnabled: Boolean = false,
+    /** Allows approved cross-thread memory capture and recall. Stored memories remain when off. */
+    val memoryEnabled: Boolean = false,
+    /** Posts one deterministic, model-free morning summary. Off until explicitly enabled. */
+    val dailyBriefEnabled: Boolean = false,
+    /** Local wall-clock minute for the deterministic brief; 08:00 by default. */
+    val dailyBriefMinutesOfDay: Int = DEFAULT_DAILY_BRIEF_MINUTES_OF_DAY,
+    /** Separately permits background place transmission for a leave-by estimate. */
+    val proactiveRoutePlanningEnabled: Boolean = false,
+    val quietHoursEnabled: Boolean = false,
+    val weekendBriefEnabled: Boolean = true,
     val recentMessageWindow: Int = ConversationRepository.DEFAULT_RECENT_MESSAGES,
 ) {
     init {
         require(notificationRetentionDays in MIN_NOTIFICATION_RETENTION_DAYS..MAX_NOTIFICATION_RETENTION_DAYS)
         require(recentMessageWindow in 1..ConversationRepository.MAX_MESSAGES_PER_READ)
+        require(dailyBriefMinutesOfDay in MIN_MINUTES_OF_DAY..MAX_MINUTES_OF_DAY)
     }
 
     companion object {
         const val DEFAULT_NOTIFICATION_RETENTION_DAYS = 14
         const val MIN_NOTIFICATION_RETENTION_DAYS = 1
         const val MAX_NOTIFICATION_RETENTION_DAYS = 180
+        const val DEFAULT_DAILY_BRIEF_MINUTES_OF_DAY = 8 * 60
+        const val MIN_MINUTES_OF_DAY = 0
+        const val MAX_MINUTES_OF_DAY = 24 * 60 - 1
     }
 }
 
@@ -66,14 +79,6 @@ class SettingsRepository(
 
     suspend fun current(): AgentSettings = settings.first()
 
-    suspend fun setPreferredBackend(backend: PreferredBackend) {
-        dataStore.edit { preferences -> preferences[KEY_PREFERRED_BACKEND] = backend.name }
-    }
-
-    suspend fun setConfirmLocalWrites(confirm: Boolean) {
-        dataStore.edit { preferences -> preferences[KEY_CONFIRM_LOCAL_WRITES] = confirm }
-    }
-
     suspend fun setDefaultCalendar(calendarId: Long?, label: String?) {
         dataStore.edit { preferences ->
             if (calendarId == null) {
@@ -81,8 +86,20 @@ class SettingsRepository(
                 preferences.remove(KEY_DEFAULT_CALENDAR_LABEL)
             } else {
                 preferences[KEY_DEFAULT_CALENDAR_ID] = calendarId
-                preferences[KEY_DEFAULT_CALENDAR_LABEL] = label.orEmpty().take(MAX_LABEL_CHARACTERS)
+                preferences[KEY_DEFAULT_CALENDAR_LABEL] = label.orEmpty().takeCodePoints(MAX_LABEL_CHARACTERS)
             }
+        }
+    }
+
+    suspend fun setReadCalendarIds(calendarIds: Set<Long>) {
+        val canonical = calendarIds
+            .filter { it > 0 }
+            .take(MAX_READ_CALENDARS)
+            .map(Long::toString)
+            .toSet()
+        dataStore.edit { preferences ->
+            if (canonical.isEmpty()) preferences.remove(KEY_READ_CALENDAR_IDS)
+            else preferences[KEY_READ_CALENDAR_IDS] = canonical
         }
     }
 
@@ -104,6 +121,14 @@ class SettingsRepository(
         dataStore.edit { preferences -> preferences[KEY_NOTIFICATION_CAPTURE] = enabled }
     }
 
+    suspend fun setKakaoNotificationReplyEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[KEY_KAKAO_NOTIFICATION_REPLY] = enabled }
+    }
+
+    suspend fun setCommitmentProposalsEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[KEY_COMMITMENT_PROPOSALS] = enabled }
+    }
+
     suspend fun setNotificationRetentionDays(days: Int) {
         val bounded = days.coerceIn(
             AgentSettings.MIN_NOTIFICATION_RETENTION_DAYS,
@@ -120,6 +145,31 @@ class SettingsRepository(
         dataStore.edit { preferences -> preferences[KEY_ROUTE_LOOKUP] = enabled }
     }
 
+    suspend fun setMemoryEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[KEY_MEMORY_ENABLED] = enabled }
+    }
+
+    suspend fun setDailyBriefEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[KEY_DAILY_BRIEF_ENABLED] = enabled }
+    }
+
+    suspend fun setDailyBriefMinutesOfDay(minutesOfDay: Int) {
+        require(minutesOfDay in AgentSettings.MIN_MINUTES_OF_DAY..AgentSettings.MAX_MINUTES_OF_DAY)
+        dataStore.edit { preferences -> preferences[KEY_DAILY_BRIEF_MINUTES_OF_DAY] = minutesOfDay }
+    }
+
+    suspend fun setProactiveRoutePlanningEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[KEY_PROACTIVE_ROUTE_PLANNING] = enabled }
+    }
+
+    suspend fun setQuietHoursEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[KEY_QUIET_HOURS_ENABLED] = enabled }
+    }
+
+    suspend fun setWeekendBriefEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[KEY_WEEKEND_BRIEF_ENABLED] = enabled }
+    }
+
     suspend fun setRecentMessageWindow(messages: Int) {
         val bounded = messages.coerceIn(1, ConversationRepository.MAX_MESSAGES_PER_READ)
         dataStore.edit { preferences -> preferences[KEY_RECENT_MESSAGE_WINDOW] = bounded }
@@ -131,16 +181,20 @@ class SettingsRepository(
     }
 
     private fun readSettings(preferences: Preferences): AgentSettings = AgentSettings(
-        preferredBackend = preferences[KEY_PREFERRED_BACKEND]
-            ?.let { stored -> PreferredBackend.entries.firstOrNull { it.name == stored } }
-            ?: PreferredBackend.CPU,
-        confirmLocalWrites = preferences[KEY_CONFIRM_LOCAL_WRITES] ?: true,
         defaultCalendarId = preferences[KEY_DEFAULT_CALENDAR_ID],
         defaultCalendarLabel = preferences[KEY_DEFAULT_CALENDAR_LABEL]?.takeIf(String::isNotBlank),
+        readCalendarIds = preferences[KEY_READ_CALENDAR_IDS]
+            .orEmpty()
+            .mapNotNull(String::toLongOrNull)
+            .filter { it > 0 }
+            .take(MAX_READ_CALENDARS)
+            .toSet(),
         defaultOriginLabel = preferences[KEY_DEFAULT_ORIGIN_LABEL]
             ?.trim()
             ?.takeIf(::isSafeDefaultOrigin),
         notificationCaptureEnabled = preferences[KEY_NOTIFICATION_CAPTURE] ?: false,
+        kakaoNotificationReplyEnabled = preferences[KEY_KAKAO_NOTIFICATION_REPLY] ?: false,
+        commitmentProposalsEnabled = preferences[KEY_COMMITMENT_PROPOSALS] ?: false,
         notificationRetentionDays = (
             preferences[KEY_NOTIFICATION_RETENTION_DAYS]
                 ?: AgentSettings.DEFAULT_NOTIFICATION_RETENTION_DAYS
@@ -150,6 +204,15 @@ class SettingsRepository(
         ),
         routeLookupEnabled = preferences[KEY_ROUTE_LOOKUP] ?: false,
         webSearchEnabled = preferences[KEY_WEB_SEARCH] ?: false,
+        memoryEnabled = preferences[KEY_MEMORY_ENABLED] ?: false,
+        dailyBriefEnabled = preferences[KEY_DAILY_BRIEF_ENABLED] ?: false,
+        dailyBriefMinutesOfDay = (
+            preferences[KEY_DAILY_BRIEF_MINUTES_OF_DAY]
+                ?: AgentSettings.DEFAULT_DAILY_BRIEF_MINUTES_OF_DAY
+            ).coerceIn(AgentSettings.MIN_MINUTES_OF_DAY, AgentSettings.MAX_MINUTES_OF_DAY),
+        proactiveRoutePlanningEnabled = preferences[KEY_PROACTIVE_ROUTE_PLANNING] ?: false,
+        quietHoursEnabled = preferences[KEY_QUIET_HOURS_ENABLED] ?: false,
+        weekendBriefEnabled = preferences[KEY_WEEKEND_BRIEF_ENABLED] ?: true,
         recentMessageWindow = (
             preferences[KEY_RECENT_MESSAGE_WINDOW]
                 ?: ConversationRepository.DEFAULT_RECENT_MESSAGES
@@ -160,16 +223,25 @@ class SettingsRepository(
         const val STORE_FILE_NAME = "agent-settings.preferences_pb"
         private const val MAX_LABEL_CHARACTERS = 120
         private const val MAX_DEFAULT_ORIGIN_CODE_POINTS = 80
+        const val MAX_READ_CALENDARS = 12
 
-        private val KEY_PREFERRED_BACKEND = stringPreferencesKey("preferred_backend")
-        private val KEY_CONFIRM_LOCAL_WRITES = booleanPreferencesKey("confirm_local_writes")
         private val KEY_DEFAULT_CALENDAR_ID = longPreferencesKey("default_calendar_id")
         private val KEY_DEFAULT_CALENDAR_LABEL = stringPreferencesKey("default_calendar_label")
+        private val KEY_READ_CALENDAR_IDS = stringSetPreferencesKey("read_calendar_ids")
         private val KEY_DEFAULT_ORIGIN_LABEL = stringPreferencesKey("default_origin_label")
         private val KEY_NOTIFICATION_CAPTURE = booleanPreferencesKey("notification_capture_enabled")
+        private val KEY_KAKAO_NOTIFICATION_REPLY =
+            booleanPreferencesKey("kakao_notification_reply_enabled")
+        private val KEY_COMMITMENT_PROPOSALS = booleanPreferencesKey("commitment_proposals_enabled")
         private val KEY_NOTIFICATION_RETENTION_DAYS = intPreferencesKey("notification_retention_days")
         private val KEY_ROUTE_LOOKUP = booleanPreferencesKey("route_lookup_enabled")
         private val KEY_WEB_SEARCH = booleanPreferencesKey("web_search_enabled")
+        private val KEY_MEMORY_ENABLED = booleanPreferencesKey("memory_enabled")
+        private val KEY_DAILY_BRIEF_ENABLED = booleanPreferencesKey("daily_brief_enabled")
+        private val KEY_DAILY_BRIEF_MINUTES_OF_DAY = intPreferencesKey("daily_brief_minutes_of_day")
+        private val KEY_PROACTIVE_ROUTE_PLANNING = booleanPreferencesKey("proactive_route_planning_enabled")
+        private val KEY_QUIET_HOURS_ENABLED = booleanPreferencesKey("quiet_hours_enabled")
+        private val KEY_WEEKEND_BRIEF_ENABLED = booleanPreferencesKey("weekend_brief_enabled")
         private val KEY_RECENT_MESSAGE_WINDOW = intPreferencesKey("recent_message_window")
 
         private fun isSafeDefaultOrigin(value: String): Boolean =

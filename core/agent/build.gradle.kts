@@ -10,9 +10,22 @@ android {
         minSdk = 31
     }
 
+    buildTypes {
+        create("qwen8bLab") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+androidComponents {
+    beforeVariants(selector().withBuildType("qwen8bLab")) { variantBuilder ->
+        (variantBuilder as com.android.build.api.variant.HasUnitTestBuilder).enableUnitTest = true
     }
 }
 

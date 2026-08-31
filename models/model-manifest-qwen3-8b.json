@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "repository": "litert-community/Qwen3-8B",
+  "revision": "71ff705588319d52d374977eff3da4eee0c0d26e",
+  "file": "qwen3_8b_mixed_int4.litertlm",
+  "downloadUrl": "https://huggingface.co/litert-community/Qwen3-8B/resolve/71ff705588319d52d374977eff3da4eee0c0d26e/qwen3_8b_mixed_int4.litertlm",
+  "sizeBytes": 4887412736,
+  "sha256": "cb4e6d0de4bbf6656d177812cf0c6a983967dedd17e7f88e84b901c3a9862a42",
+  "litertLmVersion": "0.16.1",
+  "contextTokens": 2048,
+  "maxOutputTokens": 384
+}

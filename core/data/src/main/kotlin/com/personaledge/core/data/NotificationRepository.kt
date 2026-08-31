@@ -1,5 +1,8 @@
 package com.personaledge.core.data
 
+import androidx.room.withTransaction
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.UUID
 
 data class CapturedMessage(
@@ -33,7 +36,7 @@ data class CapturedNotificationDraft(
  * third parties and later enters a model prompt.
  */
 class NotificationRepository(
-    database: PersonalEdgeDatabase,
+    private val database: PersonalEdgeDatabase,
     private val clock: () -> Long = System::currentTimeMillis,
     private val idFactory: () -> String = { UUID.randomUUID().toString() },
 ) {
@@ -44,17 +47,25 @@ class NotificationRepository(
         val text = draft.text.sanitized(MAX_TEXT_CHARACTERS)
         if (text.isEmpty() || draft.sourceKey.isBlank() || draft.packageName.isBlank()) return false
 
-        dao.upsert(
-            CapturedNotificationEntity(
-                id = idFactory(),
-                sourceKey = draft.sourceKey.take(MAX_KEY_CHARACTERS),
-                packageName = draft.packageName,
-                conversationTitle = draft.conversationTitle.sanitized(MAX_LABEL_CHARACTERS),
-                sender = draft.sender.sanitized(MAX_LABEL_CHARACTERS),
-                text = text,
-                postedAtEpochMillis = draft.postedAtEpochMillis,
-            ),
-        )
+        val sourceKeyHash = sha256(draft.sourceKey)
+        database.withTransaction {
+            // Remove the legacy truncated-key representation when the same platform post appears
+            // after update, avoiding one legacy duplicate without ever retaining the full key.
+            dao.deleteBySourceKey(draft.sourceKey.takeCodePoints(LEGACY_MAX_KEY_CHARACTERS))
+            dao.upsert(
+                CapturedNotificationEntity(
+                    id = idFactory(),
+                    sourceKey = sourceKeyHash,
+                    packageName = draft.packageName,
+                    conversationTitle = draft.conversationTitle.sanitized(MAX_LABEL_CHARACTERS),
+                    sender = draft.sender.sanitized(MAX_LABEL_CHARACTERS),
+                    text = text,
+                    postedAtEpochMillis = draft.postedAtEpochMillis,
+                ),
+            )
+            // Enforce the documented hard bound on every insert, not only on an hourly cleanup.
+            dao.trimTo(MAX_STORED_ROWS)
+        }
         return true
     }
 
@@ -120,7 +131,7 @@ class NotificationRepository(
     /** Escapes the wildcards so a message containing `%` cannot widen someone else's search. */
     private fun likePattern(query: String): String {
         val escaped = query
-            .take(MAX_QUERY_CHARACTERS)
+            .takeCodePoints(MAX_QUERY_CHARACTERS)
             .replace("\\", "\\\\")
             .replace("%", "\\%")
             .replace("_", "\\_")
@@ -129,7 +140,12 @@ class NotificationRepository(
 
     private fun String.sanitized(maximumCharacters: Int): String = trim()
         .filterNot(Char::isISOControl)
-        .take(maximumCharacters)
+        .takeCodePoints(maximumCharacters)
+
+    private fun sha256(value: String): String = MessageDigest
+        .getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString(separator = "") { byte -> "%02x".format(Locale.ROOT, byte) }
 
     companion object {
         const val MAX_RESULTS = 20
@@ -137,7 +153,7 @@ class NotificationRepository(
         const val MAX_TEXT_CHARACTERS = 1_000
         const val MAX_LABEL_CHARACTERS = 120
         const val MAX_QUERY_CHARACTERS = 100
-        private const val MAX_KEY_CHARACTERS = 256
+        private const val LEGACY_MAX_KEY_CHARACTERS = 256
         private const val MILLIS_PER_DAY = 24L * 60 * 60 * 1_000
     }
 }

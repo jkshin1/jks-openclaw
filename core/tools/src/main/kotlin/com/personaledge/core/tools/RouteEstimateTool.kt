@@ -1,5 +1,7 @@
 package com.personaledge.core.tools
 
+import java.util.Locale
+
 data class RouteEstimateParams(
     val origin: String?,
     val destination: String,
@@ -15,9 +17,10 @@ data class RouteEstimateResult(
 /**
  * Driving time between two places.
  *
- * READ_ONLY because it changes no state, but confirmation-gated because it leaves the device: the
- * origin and destination are sent to NAVER. [ToolCapability.NETWORK] protects the runtime
- * precondition, while [ConfirmationRequirement.UserConfirmation] protects the disclosure itself.
+ * READ_ONLY because it changes no state. After the owner enables route lookup in settings, the
+ * origin and destination can be sent to NAVER without a per-request confirmation sheet.
+ * [ToolCapability.NETWORK] keeps the persistent consent, connectivity, and runtime preconditions
+ * fail-closed immediately before execution.
  *
  * The origin defaults to the home address stored in settings, so "강남역까지 얼마나 걸려?" works
  * without the model inventing a starting point.
@@ -31,7 +34,6 @@ class RouteEstimateTool(
         name = NAME,
         description = "Estimate driving time and distance between two places in Korea",
         risk = ToolRisk.READ_ONLY,
-        minimumConfirmation = ConfirmationRequirement.UserConfirmation,
         requiredCapabilities = setOf(ToolCapability.NETWORK),
     )
 
@@ -71,7 +73,10 @@ class RouteEstimateTool(
             return ValidationResult.Invalid("출발지와 도착지가 같습니다.")
         }
         if (!gateway.credentialsPresent()) {
-            return ValidationResult.Invalid("설정에서 네이버 지도 키를 먼저 입력하세요.")
+            return ValidationResult.Invalid(
+                reason = "설정에서 네이버 지도 키를 먼저 입력하세요.",
+                failureCode = ToolFailureCode.CREDENTIALS_MISSING,
+            )
         }
 
         return ValidationResult.Valid(
@@ -108,7 +113,7 @@ class RouteEstimateTool(
             origin = estimate.originLabel,
             destination = estimate.destinationLabel,
             durationMinutes = estimate.durationMinutes,
-            distanceKilometres = "%.1f".format(estimate.distanceMeters / 1000.0),
+            distanceKilometres = "%.1f".format(Locale.ROOT, estimate.distanceMeters / 1000.0),
         )
     }
 

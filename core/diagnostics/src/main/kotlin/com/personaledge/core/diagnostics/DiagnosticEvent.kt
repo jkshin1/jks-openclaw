@@ -2,6 +2,7 @@ package com.personaledge.core.diagnostics
 
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.Locale
 
 fun interface DiagnosticSink {
     fun record(event: DiagnosticEvent): Boolean
@@ -69,6 +70,11 @@ sealed interface DiagnosticEvent {
         val deltaByteCount: Long,
         val errorCode: DiagnosticErrorCode,
         val failure: DiagnosticFailure? = null,
+    ) : DiagnosticEvent
+
+    /** Content-free indication that one optional or required turn-context component was unavailable. */
+    data class ContextUnavailable(
+        val component: DiagnosticContextComponent,
     ) : DiagnosticEvent
 
     data class ToolPhase(
@@ -171,6 +177,14 @@ enum class DiagnosticTurnCancellationCause {
     UNKNOWN,
 }
 
+enum class DiagnosticContextComponent {
+    DEVICE_TIME,
+    SETTINGS,
+    CONVERSATION,
+    MEMORY,
+    PROMPT_BUDGET,
+}
+
 enum class DiagnosticExitReason {
     UNKNOWN,
     EXIT_SELF,
@@ -228,6 +242,61 @@ enum class DiagnosticErrorCode {
     INSPECTION_FAILED,
     IMPORT_FAILED,
     TOOL_FAILED,
+    TOOL_CREDENTIALS_MISSING,
+    TOOL_AUTHENTICATION_FAILED,
+    TOOL_PERMISSION_DENIED,
+    TOOL_API_DISABLED_OR_QUOTA_EXCEEDED,
+    TOOL_RATE_LIMITED,
+    TOOL_INVALID_REQUEST,
+    TOOL_REMINDER_INVALID_TITLE,
+    TOOL_REMINDER_INVALID_TIME_ZONE,
+    TOOL_REMINDER_INVALID_DATE_TIME,
+    TOOL_REMINDER_INVALID_DATE_TIME_FORMAT,
+    TOOL_REMINDER_INVALID_DATE_TIME_OFFSET_CONFLICT,
+    TOOL_REMINDER_INVALID_DATE_TIME_NON_ZERO_SECONDS,
+    TOOL_REMINDER_INVALID_DATE_TIME_DATE_ONLY,
+    TOOL_REMINDER_INVALID_DATE_TIME_NATURAL_LANGUAGE,
+    TOOL_REMINDER_INVALID_DATE_TIME_OTHER_FORMAT,
+    TOOL_REMINDER_INVALID_DATE_TIME_EMPTY,
+    TOOL_REMINDER_INVALID_DATE_TIME_PLACEHOLDER,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_TEXT,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_RELATIVE,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_MONTH_NAME,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_AM_PM,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_ZONE_LABEL,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_NUMERIC,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_ISO_LIKE,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_ISO_ALPHA,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_ISO_NO_COLON,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_ISO_ONE_COLON,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_ISO_ONE_COLON_SUFFIX_SYMBOLS,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_ISO_ONE_COLON_EXTRA_DIGITS,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_ISO_ONE_COLON_OTHER,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_ISO_MULTI_COLON,
+    TOOL_REMINDER_INVALID_DATE_TIME_ASCII_OTHER,
+    TOOL_REMINDER_INVALID_DATE_TIME_NON_HANGUL_UNICODE,
+    TOOL_REMINDER_INVALID_DATE_TIME_VALUE,
+    TOOL_REMINDER_INVALID_DATE_TIME_DST,
+    TOOL_REMINDER_INVALID_DATE_TIME_RANGE,
+    TOOL_REMINDER_INVALID_RECURRENCE,
+    TOOL_REMINDER_INVALID_PRECISION,
+    TOOL_REMINDER_INVALID_LEAD_TIME,
+    TOOL_REMINDER_INVALID_ESCALATION,
+    TOOL_REMINDER_INVALID_IDENTITY,
+    TOOL_REMINDER_INVALID_QUERY_LIMIT,
+    TOOL_PLACE_NOT_FOUND,
+    TOOL_SAME_LOCATION,
+    TOOL_POINT_NOT_NEAR_ROAD,
+    TOOL_NO_DRIVING_ROUTE,
+    TOOL_ROUTE_TOO_LONG,
+    TOOL_ENDPOINT_NOT_FOUND,
+    TOOL_REQUEST_TOO_LARGE,
+    TOOL_NETWORK_FAILURE,
+    TOOL_PROVIDER_TIMEOUT,
+    TOOL_PROVIDER_UNAVAILABLE,
+    TOOL_MALFORMED_RESPONSE,
+    TOOL_CLIENT_POLICY_FAILURE,
+    TOOL_OTHER_PROVIDER_ERROR,
     RESOURCE_UNAVAILABLE,
 }
 
@@ -288,7 +357,9 @@ class DiagnosticFailure private constructor(
             }
             return DiagnosticFailure(
                 throwableType = throwable.javaClass.name.take(MAX_THROWABLE_TYPE_BYTES),
-                stackFingerprintSha256 = digest.digest().joinToString("") { "%02x".format(it) },
+                stackFingerprintSha256 = digest.digest().joinToString("") {
+                    "%02x".format(Locale.ROOT, it)
+                },
             )
         }
 

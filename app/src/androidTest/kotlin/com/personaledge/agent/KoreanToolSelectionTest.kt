@@ -32,6 +32,13 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class KoreanToolSelectionTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private val requestedBackend: InferenceBackend by lazy {
+        when (InstrumentationRegistry.getArguments().getString(BACKEND_ARGUMENT)?.lowercase()) {
+            null, "", "gpu" -> InferenceBackend.GPU
+            "cpu" -> InferenceBackend.CPU
+            else -> error("$BACKEND_ARGUMENT must be either cpu or gpu.")
+        }
+    }
 
     @Before
     fun grantCalendarAccess() {
@@ -55,12 +62,17 @@ class KoreanToolSelectionTest {
             assumeTrue("The verified model is not installed on this device.", installed)
 
             if (viewModel.uiState.value.modelStatus != ModelUiStatus.READY) {
-                scenario.onActivity { viewModel.initializeRuntime(InferenceBackend.GPU) }
+                scenario.onActivity { viewModel.initializeRuntime(requestedBackend) }
                 assumeTrue(
                     "The runtime did not become ready in time.",
                     viewModel.awaitStatus(ModelUiStatus.READY, RUNTIME_TIMEOUT_MILLIS),
                 )
             }
+            assertEquals(
+                "The test must run on the explicitly requested inference backend.",
+                requestedBackend,
+                viewModel.uiState.value.activeBackend,
+            )
 
             scenario.onActivity { viewModel.refreshCalendarSetup() }
             val pinned = viewModel.awaitPinnedCalendar()
@@ -114,7 +126,12 @@ class KoreanToolSelectionTest {
         }.let { calendarSetup.value.pinnedCalendarId != null }
 
     private suspend fun PersonalEdgeViewModel.awaitConfirmation(): PendingConfirmation? {
-        awaitUntil(TURN_TIMEOUT_MILLIS) { confirmationCoordinator.pending.value != null }
+        val startedTurn = uiState.value.activeTurnId
+            ?: error("The prompt did not start a model turn.")
+        awaitUntil(TURN_TIMEOUT_MILLIS) {
+            confirmationCoordinator.pending.value != null ||
+                uiState.value.activeTurnId != startedTurn
+        }
         return confirmationCoordinator.pending.value
     }
 
@@ -128,6 +145,7 @@ class KoreanToolSelectionTest {
     }
 
     private companion object {
+        const val BACKEND_ARGUMENT = "inferenceBackend"
         const val KOREAN_REQUEST = "내일 오후 3시부터 4시까지 치과 일정 넣어줘"
         const val MODEL_TIMEOUT_MILLIS = 15_000L
         const val RUNTIME_TIMEOUT_MILLIS = 120_000L
