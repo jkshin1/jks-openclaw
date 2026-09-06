@@ -88,6 +88,23 @@ class AppContainer(application: Application) {
         CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 
+    /**
+     * OpenClaw has an additional crash-durable revocation barrier. It intentionally does not use
+     * the generic consent mutator, whose process-only pending state cannot survive a crash.
+     */
+    internal val openClawGatewayConsentManager by lazy {
+        OpenClawGatewayConsentManager(
+            interlock = ownerConsentInterlock,
+            settingsStore = SettingsRepositoryOpenClawGatewayConsentStore(settings),
+            journal = AndroidOpenClawGatewayRevocationJournal(application.noBackupFilesDir),
+            mutationScope = ownerConsentMutationScope,
+        )
+    }
+
+    internal fun startOpenClawGatewayConsentRecovery() {
+        openClawGatewayConsentManager.recoverBeforeGateway()
+    }
+
     internal val ownerConsentMutator by lazy {
         OwnerConsentMutator(
             interlock = ownerConsentInterlock,
@@ -102,6 +119,9 @@ class AppContainer(application: Application) {
                     OwnerConsentFeature.PROACTIVE_ROUTE_PLANNING ->
                         settings.setProactiveRoutePlanningEnabled(enabled)
                     OwnerConsentFeature.DAILY_BRIEF -> settings.setDailyBriefEnabled(enabled)
+                    OwnerConsentFeature.OPENCLAW_GATEWAY -> error(
+                        "OpenClaw consent requires its crash-durable feature controller",
+                    )
                 }
             },
         )

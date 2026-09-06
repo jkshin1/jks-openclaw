@@ -61,6 +61,41 @@ class TurnMediaPolicyTest {
     }
 
     @Test
+    fun `plain Korean questions about a clip are transcription requests`() {
+        // The owner asked "뭐라고 녹음되어 있어" and got "확인할 수 없습니다" back, because this
+        // wording missed the narrow 받아쓰기 vocabulary and fell through to the open question.
+        fun intent(text: String) = TurnMediaPolicy.resolveIntent(TurnMediaKind.AUDIO, text)
+
+        assertEquals(TurnMediaIntent.AUDIO_TRANSCRIBE, intent("뭐라고 녹음되어 있어"))
+        assertEquals(TurnMediaIntent.AUDIO_TRANSCRIBE, intent("뭐라고 말했어?"))
+        assertEquals(TurnMediaIntent.AUDIO_TRANSCRIBE, intent("무슨 말이야?"))
+        assertEquals(TurnMediaIntent.AUDIO_TRANSCRIBE, intent("무슨 내용인지 알려줘"))
+        assertEquals(TurnMediaIntent.AUDIO_TRANSCRIBE, intent("뭐래?"))
+    }
+
+    @Test
+    fun `no media task tells the model it might not have the attachment`() {
+        // A model that is told it may be unable to check will take that escape hatch, which is
+        // exactly the failure the owner saw with a clip that had in fact been prefilled.
+        for (intent in TurnMediaIntent.entries) {
+            val plan = requirePlan(
+                TurnMediaPolicy.planOrNull(intent.kind, ownerTextFor(intent), intent),
+            )
+
+            assertFalse(
+                "$intent invites the model to claim it cannot access the attachment.",
+                "확인할 수 없으면" in plan.prompt || "확인할 수 없다고 답하세요" in plan.prompt,
+            )
+            // Every frame states delivery; the two open tasks repeat it because they are the
+            // ones that previously offered a way out.
+            assertTrue(
+                "$intent does not tell the model the attachment was delivered.",
+                "전달" in plan.prompt,
+            )
+        }
+    }
+
+    @Test
     fun `typed wording cannot cross modality`() {
         // "번역" is an image task word; on an audio clip it must stay an audio intent.
         val resolved = TurnMediaPolicy.resolveIntent(TurnMediaKind.AUDIO, "번역해 줘")

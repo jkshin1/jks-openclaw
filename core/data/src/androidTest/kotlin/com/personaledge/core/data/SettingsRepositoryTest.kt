@@ -50,6 +50,11 @@ class SettingsRepositoryTest {
         assertFalse(settings.notificationCaptureEnabled)
         assertFalse(settings.routeLookupEnabled)
         assertFalse(settings.webSearchEnabled)
+        assertFalse(settings.openClawGateway.enabled)
+        assertNull(settings.openClawGateway.endpointUrl)
+        assertEquals(OpenClawGatewayTrustMode.SYSTEM, settings.openClawGateway.trustMode)
+        assertNull(settings.openClawGateway.leafCertificateDerSha256)
+        assertTrue(settings.openClawGateway.foregroundOnly)
         assertFalse(settings.memoryEnabled)
         assertEquals(8 * 60, settings.dailyBriefMinutesOfDay)
     }
@@ -61,6 +66,12 @@ class SettingsRepositoryTest {
         repository.setNotificationCaptureEnabled(true)
         repository.setRouteLookupEnabled(true)
         repository.setWebSearchEnabled(true)
+        repository.setOpenClawGatewayConnectionPolicy(
+            OpenClawGatewayConnectionPolicy(
+                endpointUrl = "wss://personal-edge.example.test/openclaw",
+            ),
+        )
+        repository.setOpenClawGatewayEnabled(true)
         repository.setMemoryEnabled(true)
         repository.setDailyBriefMinutesOfDay(7 * 60 + 35)
 
@@ -72,6 +83,11 @@ class SettingsRepositoryTest {
         assertTrue(settings.notificationCaptureEnabled)
         assertTrue(settings.routeLookupEnabled)
         assertTrue(settings.webSearchEnabled)
+        assertTrue(settings.openClawGateway.enabled)
+        assertEquals(
+            "wss://personal-edge.example.test/openclaw",
+            settings.openClawGateway.endpointUrl,
+        )
         assertTrue(settings.memoryEnabled)
         assertEquals(7 * 60 + 35, settings.dailyBriefMinutesOfDay)
     }
@@ -118,9 +134,103 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun gatewayConfigurationAndConsentUpdateAreAtomic() = runBlocking {
+        val fingerprint = "ab".repeat(32)
+        repository.setOpenClawGatewayConnectionPolicy(
+            OpenClawGatewayConnectionPolicy(
+                endpointUrl = "wss://personal-edge.example.test/",
+                trustMode = OpenClawGatewayTrustMode.PINNED_CERT_SHA256,
+                leafCertificateDerSha256 = fingerprint,
+            ),
+        )
+
+        repository.setOpenClawGatewayEnabled(true)
+
+        val enabled = repository.current().openClawGateway
+        assertTrue(enabled.enabled)
+        assertEquals("wss://personal-edge.example.test/", enabled.endpointUrl)
+        assertEquals(OpenClawGatewayTrustMode.PINNED_CERT_SHA256, enabled.trustMode)
+        assertEquals(fingerprint, enabled.leafCertificateDerSha256)
+        assertTrue(enabled.foregroundOnly)
+
+        repository.setOpenClawGatewayEnabled(false)
+        val disabled = repository.current().openClawGateway
+        assertFalse(disabled.enabled)
+        assertEquals(enabled.endpointUrl, disabled.endpointUrl)
+        assertEquals(enabled.trustMode, disabled.trustMode)
+        assertEquals(enabled.leafCertificateDerSha256, disabled.leafCertificateDerSha256)
+    }
+
+    @Test
+    fun gatewayCannotBeEnabledBeforeItsEndpointIsDurable() = runBlocking {
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { repository.setOpenClawGatewayEnabled(true) }
+        }
+
+        assertEquals(OpenClawGatewaySettings(), repository.current().openClawGateway)
+    }
+
+    @Test
+    fun staleConnectionPolicySnapshotCannotReenableGatewayAfterDisable() = runBlocking {
+        repository.setOpenClawGatewayConnectionPolicy(
+            OpenClawGatewayConnectionPolicy(
+                endpointUrl = "wss://personal-edge.example.test/original",
+            ),
+        )
+        repository.setOpenClawGatewayEnabled(true)
+        val staleEnabledSnapshot = repository.current().openClawGateway
+
+        repository.setOpenClawGatewayEnabled(false)
+        repository.setOpenClawGatewayConnectionPolicy(
+            OpenClawGatewayConnectionPolicy(
+                endpointUrl = "wss://personal-edge.example.test/updated",
+                trustMode = staleEnabledSnapshot.trustMode,
+                leafCertificateDerSha256 = staleEnabledSnapshot.leafCertificateDerSha256,
+                foregroundOnly = staleEnabledSnapshot.foregroundOnly,
+            ),
+        )
+
+        val updated = repository.current().openClawGateway
+        assertFalse(updated.enabled)
+        assertEquals("wss://personal-edge.example.test/updated", updated.endpointUrl)
+    }
+
+    @Test
+    fun staleConsentRequestCannotOverwriteNewerTrustPolicy() = runBlocking {
+        repository.setOpenClawGatewayConnectionPolicy(
+            OpenClawGatewayConnectionPolicy(
+                endpointUrl = "wss://personal-edge.example.test/system",
+            ),
+        )
+        val staleSystemTrustSnapshot = repository.current().openClawGateway
+        val fingerprint = "cd".repeat(32)
+
+        repository.setOpenClawGatewayConnectionPolicy(
+            OpenClawGatewayConnectionPolicy(
+                endpointUrl = "wss://personal-edge.example.test/pinned",
+                trustMode = OpenClawGatewayTrustMode.PINNED_CERT_SHA256,
+                leafCertificateDerSha256 = fingerprint,
+            ),
+        )
+        repository.setOpenClawGatewayEnabled(!staleSystemTrustSnapshot.enabled)
+
+        val enabled = repository.current().openClawGateway
+        assertTrue(enabled.enabled)
+        assertEquals("wss://personal-edge.example.test/pinned", enabled.endpointUrl)
+        assertEquals(OpenClawGatewayTrustMode.PINNED_CERT_SHA256, enabled.trustMode)
+        assertEquals(fingerprint, enabled.leafCertificateDerSha256)
+    }
+
+    @Test
     fun clearingResetsEverythingToTheSafeDefaults() = runBlocking {
         repository.setRouteLookupEnabled(true)
         repository.setWebSearchEnabled(true)
+        repository.setOpenClawGatewayConnectionPolicy(
+            OpenClawGatewayConnectionPolicy(
+                endpointUrl = "wss://personal-edge.example.test/",
+            ),
+        )
+        repository.setOpenClawGatewayEnabled(true)
         repository.setMemoryEnabled(true)
 
         repository.clear()
@@ -128,6 +238,7 @@ class SettingsRepositoryTest {
         val settings = repository.current()
         assertFalse(settings.routeLookupEnabled)
         assertFalse(settings.webSearchEnabled)
+        assertEquals(OpenClawGatewaySettings(), settings.openClawGateway)
         assertFalse(settings.memoryEnabled)
     }
 }

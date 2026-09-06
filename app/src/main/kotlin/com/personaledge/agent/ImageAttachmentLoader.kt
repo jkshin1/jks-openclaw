@@ -23,6 +23,14 @@ internal data class LoadedImageAttachment(
      * the runtime's payload accessor.
      */
     val encodedBytes: ByteArray,
+    /**
+     * A small preview of the staged photo, for the composer chip only.
+     *
+     * Bounded to [MediaAttachmentPolicy.PREVIEW_EDGE_PIXELS] on its long edge, held in memory for
+     * as long as the attachment is staged, and never written to Room, the transfer archive, or
+     * diagnostics. It is a separate, deliberately tiny derivative of the payload, not the payload.
+     */
+    val preview: Bitmap,
 ) {
     /** Content-free by construction: a loaded photo must never render its own payload. */
     override fun toString(): String =
@@ -100,6 +108,7 @@ internal class ImageAttachmentLoader(
                     pixelWidth = working.width,
                     pixelHeight = working.height,
                     encodedBytes = encoded,
+                    preview = previewOf(working),
                 )
             }
             return null
@@ -113,6 +122,21 @@ internal class ImageAttachmentLoader(
             // `working` is therefore the one and only bitmap still owned by the loader.
             working.recycle()
         }
+    }
+
+    /** A copy, because the source bitmap is recycled as soon as the encode loop finishes. */
+    private fun previewOf(source: Bitmap): Bitmap {
+        val longest = maxOf(source.width, source.height)
+        if (longest <= MediaAttachmentPolicy.PREVIEW_EDGE_PIXELS) {
+            return source.copy(Bitmap.Config.ARGB_8888, false) ?: source
+        }
+        val scale = MediaAttachmentPolicy.PREVIEW_EDGE_PIXELS.toDouble() / longest
+        return Bitmap.createScaledBitmap(
+            source,
+            (source.width * scale).toInt().coerceAtLeast(1),
+            (source.height * scale).toInt().coerceAtLeast(1),
+            true,
+        )
     }
 
     private fun scaled(source: Bitmap, plan: ImageDecodePlan): Bitmap {

@@ -3,6 +3,7 @@ package com.personaledge.agent
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.content.res.Configuration
 import android.os.Bundle
 import android.os.Build
@@ -24,6 +25,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.personaledge.agent.ui.PersonalEdgeScreen
+import com.personaledge.agent.ui.OpenClawRemoteActions
 import com.personaledge.agent.ui.WorkspaceFoldingSnapshot
 import com.personaledge.agent.ui.WorkspaceHardwareKey
 import com.personaledge.agent.ui.WorkspaceHingeOrientation
@@ -158,6 +160,34 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Receives one shared photo from another app's share sheet.
+     *
+     * The intent is consumed once. Without that, a rotation or any other configuration change
+     * would re-deliver the same share and re-stage the photo behind the owner's back.
+     */
+    private fun handleSharedContent(intent: Intent?) {
+        if (intent == null || intent.getBooleanExtra(EXTRA_SHARE_CONSUMED, false)) return
+        val stream: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        }
+        val action = intent.action
+        val mimeType = intent.type
+        if (SharedImageIntentPolicy.acceptsSharedImage(action, mimeType, stream != null)) {
+            intent.putExtra(EXTRA_SHARE_CONSUMED, true)
+            viewModel.onSharedImageReceived(stream)
+            return
+        }
+        SharedImageIntentPolicy.refusalMessageOrNull(action, mimeType, stream != null)
+            ?.let { message ->
+                intent.putExtra(EXTRA_SHARE_CONSUMED, true)
+                viewModel.onSharedContentRefused(message)
+            }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // The transcript scrolls under the status bar and the composer sits on the gesture bar, so
         // the window draws edge to edge and the insets are consumed by the screen itself.
@@ -175,6 +205,7 @@ class MainActivity : ComponentActivity() {
                     }
             }
         }
+        handleSharedContent(intent)
         setContent {
             PersonalEdgeAgentTheme {
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -190,6 +221,8 @@ class MainActivity : ComponentActivity() {
                 val userDataTransfer by viewModel.userDataTransfer.collectAsStateWithLifecycle()
                 val openReminderSourceId by reminderOpenRequest.collectAsStateWithLifecycle()
                 val windowState by workspaceWindowState.collectAsStateWithLifecycle()
+                val attachmentPreview by viewModel.attachmentPreview.collectAsStateWithLifecycle()
+                val remoteState by viewModel.remoteState.collectAsStateWithLifecycle()
 
                 // Calendar access and synced accounts can change while the app is backgrounded.
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -198,6 +231,22 @@ class MainActivity : ComponentActivity() {
 
                 PersonalEdgeScreen(
                     state = state,
+                    remoteState = remoteState,
+                    remoteActions = OpenClawRemoteActions(
+                        select = viewModel::selectRemote,
+                        configure = viewModel::configureRemote,
+                        connect = viewModel::connectRemote,
+                        disconnect = viewModel::disconnectRemote,
+                        forget = viewModel::forgetRemote,
+                        updatePrompt = viewModel::updateRemotePrompt,
+                        send = viewModel::sendRemotePrompt,
+                        cancel = viewModel::cancelRemoteTurn,
+                        loadContext = viewModel::loadRemoteContext,
+                        selectContext = viewModel::selectRemoteContext,
+                        finishContextSelection = viewModel::finishRemoteContextSelection,
+                        clearContext = viewModel::clearRemoteContext,
+                        readHealth = viewModel::readRemoteMacHealth,
+                    ),
                     calendarSetup = calendarSetup,
                     chatHistory = chatHistory,
                     notificationSetup = notificationSetup,
@@ -327,11 +376,22 @@ class MainActivity : ComponentActivity() {
                     onCancelRecording = viewModel::cancelVoiceRecording,
                     onRemoveAttachment = viewModel::removeAttachment,
                     onDismissMediaNotice = viewModel::dismissMediaNotice,
+                    attachmentPreview = attachmentPreview,
                     onTurnRecovery = viewModel::resolveTurnRecovery,
                     onConfirmation = viewModel::resolveConfirmation,
                 )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        viewModel.setRemoteForeground(true)
+    }
+
+    override fun onStop() {
+        viewModel.setRemoteForeground(false)
+        super.onStop()
     }
 
     private fun startVoiceRecordingOrRequestPermission(
@@ -387,6 +447,8 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         reminderOpenRequest.value = reminderIdFromIntent(intent)
+        // singleTop means a share into the already-running app arrives here, not in onCreate.
+        handleSharedContent(intent)
     }
 
     private fun reminderIdFromIntent(intent: Intent?): String? {
@@ -453,4 +515,9 @@ class MainActivity : ComponentActivity() {
         val selection: UserDataSelection,
         val passphrase: String,
     )
+
+    private companion object {
+        /** Marks a share this Activity already staged, so a rotation cannot re-deliver it. */
+        const val EXTRA_SHARE_CONSUMED = "com.personaledge.agent.SHARE_CONSUMED"
+    }
 }

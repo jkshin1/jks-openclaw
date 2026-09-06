@@ -1,13 +1,92 @@
 # Personal Edge handoff
 
-Updated 2026-09-01 for the current rc11 working tree. Read this first, then
+> **2026-09-06 — retired. Do not pick this up as active work.** The owner stopped development and
+> retired the app together with its schedule/reminder/alarm/notification purpose. Assistant work
+> moved to the macOS OpenClaw Gateway over Telegram. The final state is tagged `rc11-final`; see the
+> stop notice at the top of [PROJECT_STATUS.md](PROJECT_STATUS.md). Everything below describes that
+> frozen state and stays accurate for it.
+
+Updated 2026-09-05 for the current rc11 working tree. Read this first, then
 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the evidence ledger and [`../AGENTS.md`](../AGENTS.md)
 before any device work.
 
 ## Current truth
 
+**Owner-selected stop:** one real Fold8 Korean answer passed after HTTPS/device pairing. Further
+work is paused to conserve usage. Read [REMOTE_AGENT_RESUME.md](REMOTE_AGENT_RESUME.md) before
+continuing; it distinguishes the installed APK from later unintegrated proposal source.
+
 - Source identity remains `versionCode=11`, `versionName=1.0.0-rc11`.
 - The app Room database is schema 11.
+- **OpenClaw/GLM is an optional, default-off remote mode.** The new
+  `core:openclaw` protocol-v4 client and app foreground coordinator implement endpoint-bound
+  Keystore records, typed nested connect failures, bounded reconnect, one-shot tool-free model
+  runs, progress/status/wait/cancel, and close-time best-effort abort queueing. They pass focused
+  unit/lint plus app release-Kotlin compilation. The current update wires an explicit local/remote
+  selector, consent, masked connection setup, progress, answer and cancellation into the product UI.
+  Full host test/lint/debug/release assembly passed, AVD remote UI 3/3 passed, and the signed
+  Fold8 update preserved all content-free owner snapshots. The Fold8 remote surface test passed;
+  actual pairing/inference remains a separate gate. See `REMOTE_AGENT_ACCEPTANCE.md`.
+  The existing local memory/history are retained; see `FEATURE_REUSE_AUDIT.md`.
+- **The current Mac Gateway is hardened and managed adoption passed on 2026-09-05.** Exact OpenClaw
+  2026.8.1 / Node 26 runs as `personaledge`, KeepAlive and loopback-only on port 18789, with token
+  auth, wildcard Tool denial, GLM-5.3 Flash-only model policy, and clean SecretRefs. The approved
+  plaintext migration is complete. The owner-approved reapplication published the schema-4 final
+  manifest and proved live `tools.effective=0` with its incognito probe deleted. The watchdog's
+  first scheduled execution exited 0 and reported healthy policy, secrets, and live plugins.
+  The verified backup and previous workspace are retained under `adoption-20260905T120932Z` and
+  `quarantine/adopt-20260905T120932Z/workspace-before-adopt`. The prior local-CLI probe incompatibility
+  was fixed using the supported canonical incognito key and one-shot exact-key cleanup.
+  The owner-approved GLM smoke sent one actual OpenRouter POST, which returned HTTP 404:
+  `No endpoints found that can handle the requested parameters`. It did not produce an answer;
+  the initial Gateway inference did not succeed. A later owner-authorized direct-provider
+  differential succeeded with `max_tokens` and reproduced 404 by changing only that field to
+  `max_completion_tokens`; see `REMOTE_AGENT_ACCEPTANCE.md`. The owner now authorizes bounded
+  test calls without repeated per-call approval. The 13:39 UTC Gateway smoke now passes exact model/reply, zero tools and zero run-owned residue. Fold8 inference remains separate.
+  An earlier attempt stopped before provider dispatch because Docker was absent. That prerequisite
+  is now supplied by a dedicated Colima `personaledge` VM and login LaunchAgent, with only the
+  sandbox directory mounted. Both attempts' exact run-owned logical SQLite row counts are zero.
+  The locally patched 2026.8.1 runtime and Docker-aware watchdog passed live deployment checks.
+  Schema-2 soak now checks Docker/VM/daemon continuity, but no 24-hour window has completed.
+  A real Colima recovery drill exposed a default-context transition; its correction is in progress.
+  The owner has since installed/logged in Tailscale on Mac and Fold8, with both online in one
+  tailnet, and enabled `pmset autorestart=1` (read back with sleep=0 and standby=0). HTTPS Serve,
+  full pairing and observation are recorded separately below as they complete. FileVault still
+  requires owner login after a cold boot.
+- **2026-09-06: the remote engine no longer asks per question, and stores its turns.** The owner
+  asked for both. The per-question external-disclosure dialog is gone: remote mode plus connection
+  consent is the standing decision, and the send control dispatches the visible question. Every
+  other send check stays — exact typed question, only the ticked quotes, revalidation against
+  current storage and memory consent immediately before dispatch, and a hard stop when the prompt,
+  endpoint, consent or foreground changes mid-send. The trade the owner accepted is losing the last
+  look at the composed outbound text; the connection-consent dialog says so. Remote turns are now
+  written to the same Room conversation as local ones through `OpenClawRemoteTranscript`
+  (`PersonalEdgeViewModel.RemoteConversationTranscript`): question before the run starts, answer at
+  any terminal including a cancelled or connection-lost partial, only the typed question and never
+  the quotes, and a failed write reported rather than claimed. The remote pane renders that shared
+  conversation with the local `ChatTranscript`. **Accepted on the Fold8 the same day**: signed
+  same-certificate update with the pulled-back hash matching and `firstInstallTime` preserved, the
+  provider-free surface test 1/1, and the new opt-in
+  `Fold8OpenClawLiveAcceptanceTest#oneSendNeedsNoApprovalAndIsStoredInTheSharedConversation` 1/1
+  in 8.767 s on the stored credential — one send, no approval, a useful Korean answer, and exactly
+  two rows read back from Room that survived a force-stop (104 to 106 messages). See
+  `PROJECT_STATUS.md` for the full receipt. **Cancellation and two related defects were then fixed
+  and accepted on the phone.** (1) The Gateway takes its per-run timeout from the value this app
+  sends, so the old 60 s was why a long answer produced nothing; it is now 180 s and the 40-item
+  question completes in 120.8 s. No Mac configuration was changed. (2) OpenClaw 2026.8.1
+  deliberately surfaces an externally aborted run as an *error* (`action: "surface_error"`), so a
+  cancelled run was reported as failed; the client now reads a `FAILED` terminal as `CANCELLED`
+  only when the Gateway's own `chat.abort` acknowledgement named this exact live run — never from
+  the error frame, never for a timeout, and never without that acknowledgement. Cancel to terminal
+  measured 102 ms. (3) A cancel tapped before the run id exists is now held and sent when start
+  returns, instead of sealing the socket and leaving the run to cost until its timeout. There is
+  still no live token streaming in this mode, and that stays deliberate: internal session effects
+  are what keep session residue off the Mac. **The last three open remote gates then passed on the
+  phone too**: network loss during a live run seals it with the uncertainty terminal and no invented
+  answer (radios dropped by the host and verified restored afterwards); an actual process death with
+  a run in flight leaves the question as the last row, reconnects nothing and restores no remote
+  text; and the context picker was proved by transmission, with a planted nonce appearing in the
+  answer to a question that did not contain it. See `PROJECT_STATUS.md`.
 - **Newest delta: photo and voice input.** See [`MULTIMODAL_INPUT.md`](MULTIMODAL_INPUT.md) for the
   design and the open acceptance list. The one thing to internalise before touching it: a turn
   carrying media is given no Tool schema at all, enforced in three independent places. Voice
@@ -132,13 +211,14 @@ before any device work.
   to 31,534 ms on CPU, with PSS at 6.21 GB — so encoders now load only for the modalities the owner
   enabled, and that setting applies from the next app start, exactly like the backend choice. See
   [`MULTIMODAL_INPUT.md`](MULTIMODAL_INPUT.md) for the native logs and the full table.
-- **A corrected current-source media measurement is still owed.** The first receipt compared
-  accumulated totals in one shared conversation and materially different prompts. Its audio number
-  is discarded and its ~220-token image number is not an exact cost. The corrected gate gives every
-  control/media observation a new runtime and exactly one turn, compares before/after per-turn
-  increments for identical prompts, and caps decode at 32 tokens below either required delta. It
-  compiles but has not run — reconnect the phone and run
-  `Fold8MediaTurnAcceptanceTest` with `-e liveMediaTurn true`.
+- **The corrected media measurement is done, and both documented figures held.** On 2026-09-01
+  `Fold8MediaTurnAcceptanceTest` passed on the phone, 1 case in 82.714 s on CPU. With a fresh
+  runtime and exactly one turn per observation, and decode capped at 32 tokens, one image cost
+  **258 context tokens** (documented 256) and a 15-second clip cost **374** (24.93/s against a
+  documented 25/s). The image turn returned exactly the six digits rendered on the synthetic card
+  and no turn produced a Tool call. The earlier ~220-token figure came from an invalid comparison
+  and is superseded. Preservation snapshots before and after were identical and `firstInstallTime`
+  was preserved.
 
 Do not promote rc11 or reuse an older APK hash for this changed source. Host implementation work is
 complete, but clean-source, device, provider, and owner-controlled acceptance gates remain below.

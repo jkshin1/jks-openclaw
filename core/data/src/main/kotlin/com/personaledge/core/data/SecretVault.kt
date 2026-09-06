@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import java.io.File
 import java.security.GeneralSecurityException
 import java.security.KeyStore
+import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -25,6 +26,11 @@ enum class SecretKeyName(internal val fileName: String) {
     NAVER_SEARCH_CLIENT_ID("naver-search-client-id.bin"),
     NAVER_SEARCH_CLIENT_SECRET("naver-search-client-secret.bin"),
     TAVILY_API_KEY("tavily-api-key.bin"),
+    // The Gateway credential is serialized together with its validated origin. Never downgrade
+    // this to a reusable token-only slot.
+    OPENCLAW_GATEWAY_CREDENTIAL_RECORD("openclaw-gateway-credential-record.bin"),
+    // Device identity has its own lifecycle and must not alias the Gateway bearer credential.
+    OPENCLAW_DEVICE_IDENTITY_RECORD("openclaw-device-identity-record.bin"),
 }
 
 enum class SecretHealth {
@@ -54,25 +60,56 @@ class SecretVault internal constructor(
     private val mutex = Mutex()
 
     suspend fun store(name: SecretKeyName, value: String) {
-        require(value.isNotBlank()) { "A blank secret would silently disable the feature." }
-        require(value.length <= MAX_SECRET_CHARACTERS)
+        validateSecret(value)
 
         mutex.withLock {
             withContext(ioDispatcher) {
-                val key = keyStoreProvider()
-                val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
-                val initializationVector = cipher.iv
-                check(initializationVector.size == GCM_IV_BYTES) { "Unexpected GCM IV length." }
-                val ciphertext = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+                encryptAndReplace(name, value)
+            }
+        }
+    }
 
+    /**
+     * Atomically replaces [name] only when its decrypted value still equals [expectedValue].
+     *
+     * A null expectation means the slot must be absent, not merely unreadable. This narrow CAS is
+     * used when a remote handshake finishes after its originating endpoint epoch may have changed;
+     * it prevents that stale result from overwriting a newer origin-bound record.
+     */
+    suspend fun compareAndStore(
+        name: SecretKeyName,
+        expectedValue: String?,
+        value: String,
+    ): Boolean {
+        expectedValue?.let(::validateSecret)
+        validateSecret(value)
+
+        return mutex.withLock {
+            withContext(ioDispatcher) {
                 val target = secretFile(name)
-                val temporary = File(directory, ".${name.fileName}.tmp")
-                fileSystem.atomicReplace(
-                    target = target,
-                    temporary = temporary,
-                    bytes = initializationVector + ciphertext,
-                    maxBytes = MAX_SECRET_FILE_BYTES,
-                )
+                val matches = if (expectedValue == null) {
+                    !fileSystem.exists(target)
+                } else {
+                    decryptOrNull(target)?.let { current ->
+                        constantTimeEquals(current, expectedValue)
+                    } ?: false
+                }
+                if (!matches) return@withContext false
+                encryptAndReplace(name, value)
+                true
+            }
+        }
+    }
+
+    /** Removes [name] only while its decrypted value is still [expectedValue]. */
+    suspend fun compareAndRemove(name: SecretKeyName, expectedValue: String): Boolean {
+        validateSecret(expectedValue)
+        return mutex.withLock {
+            withContext(ioDispatcher) {
+                val target = secretFile(name)
+                val current = decryptOrNull(target) ?: return@withContext false
+                if (!constantTimeEquals(current, expectedValue)) return@withContext false
+                fileSystem.remove(target)
             }
         }
     }
@@ -118,6 +155,42 @@ class SecretVault internal constructor(
     }
 
     private fun secretFile(name: SecretKeyName) = File(directory, name.fileName)
+
+    private fun encryptAndReplace(name: SecretKeyName, value: String) {
+        val key = keyStoreProvider()
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
+        val initializationVector = cipher.iv
+        check(initializationVector.size == GCM_IV_BYTES) { "Unexpected GCM IV length." }
+        val plaintext = value.toByteArray(Charsets.UTF_8)
+        val ciphertext = try {
+            cipher.doFinal(plaintext)
+        } finally {
+            plaintext.fill(0)
+        }
+
+        fileSystem.atomicReplace(
+            target = secretFile(name),
+            temporary = File(directory, ".${name.fileName}.tmp"),
+            bytes = initializationVector + ciphertext,
+            maxBytes = MAX_SECRET_FILE_BYTES,
+        )
+    }
+
+    private fun validateSecret(value: String) {
+        require(value.isNotBlank()) { "A blank secret would silently disable the feature." }
+        require(value.length <= MAX_SECRET_CHARACTERS)
+    }
+
+    private fun constantTimeEquals(left: String, right: String): Boolean {
+        val leftBytes = left.toByteArray(Charsets.UTF_8)
+        val rightBytes = right.toByteArray(Charsets.UTF_8)
+        return try {
+            MessageDigest.isEqual(leftBytes, rightBytes)
+        } finally {
+            leftBytes.fill(0)
+            rightBytes.fill(0)
+        }
+    }
 
     private fun decryptOrNull(file: File): String? {
         return try {

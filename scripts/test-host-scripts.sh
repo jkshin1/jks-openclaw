@@ -232,7 +232,7 @@ new_avd_regression_fixture() {
 
     local source_root source_count source_index source_root_and_count
     for source_root_and_count in \
-        "$fixture/app/src/androidTest:39" \
+        "$fixture/app/src/androidTest:42" \
         "$fixture/core/data/src/androidTest:12" \
         "$fixture/core/diagnostics/src/androidTest:1" \
         "$fixture/core/llm/src/androidTest:3" \
@@ -333,9 +333,9 @@ case "$command_name" in
             fi
             case "$component" in
                 com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner)
-                    expected_classes='com.personaledge.agent.AlarmForegroundRequestTest,com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.ChatHistoryCoordinatorTest,com.personaledge.agent.ConversationSummarizerTest,com.personaledge.agent.CredentialSettingsTest,com.personaledge.agent.DeviceExecutionInterlockTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8MediaTurnAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.GroundedWebSearchJourneyTest,com.personaledge.agent.ImageAttachmentLoaderTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KakaoReplySettingsTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.MediaCaptureStagingTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.NotificationCaptureCoordinatorTest,com.personaledge.agent.NotificationCaptureSinkTest,com.personaledge.agent.NotificationPostReaderTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.StoredNotificationGatewayTest,com.personaledge.agent.ThermalStatusMonitorInstrumentedTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
+                    expected_classes='com.personaledge.agent.AlarmForegroundRequestTest,com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.ChatHistoryCoordinatorTest,com.personaledge.agent.ConversationSummarizerTest,com.personaledge.agent.CredentialSettingsTest,com.personaledge.agent.DeviceExecutionInterlockTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8MediaTurnAcceptanceTest,com.personaledge.agent.Fold8OpenClawLiveAcceptanceTest,com.personaledge.agent.Fold8OpenClawSurfaceAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.GroundedWebSearchJourneyTest,com.personaledge.agent.ImageAttachmentLoaderTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KakaoReplySettingsTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.MediaCaptureStagingTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.NotificationCaptureCoordinatorTest,com.personaledge.agent.NotificationCaptureSinkTest,com.personaledge.agent.NotificationPostReaderTest,com.personaledge.agent.OpenClawRemoteUiAcceptanceTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.StoredNotificationGatewayTest,com.personaledge.agent.ThermalStatusMonitorInstrumentedTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
                     [[ " $* " == *" -e class $expected_classes "* ]] || exit 94
-                    emit_success 151 121 30
+                    emit_success 160 124 36
                     ;;
                 com.personaledge.core.data.test/androidx.test.runner.AndroidJUnitRunner)
                     [[ " $* " == *" -e class "* ]] || exit 94
@@ -386,7 +386,7 @@ new_avd_release_readiness_fixture() {
     release_fixture_certificate="e0f66d4b4c8064db6a9d46097d77903cf13fbccacbdfc6e49e9f7c380b8e457a"
 
     local source_index=1
-    while (( source_index <= 39 )); do
+    while (( source_index <= 42 )); do
         : > "$fixture/app/src/androidTest/Fixture${source_index}Test.kt"
         source_index=$((source_index + 1))
     done
@@ -500,7 +500,7 @@ case "$command_name" in
             all_arguments=" $* "
             abi_method='com.personaledge.agent.ReleasePhysicalAbiLinkageTest#boundedPostGuardEntrypointsResolveFromTheMinifiedTarget'
             canary_classes='com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KoreanToolSelectionTest,com.personaledge.agent.PastedMailScheduleAcceptanceTest'
-            physical_classes='com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8MediaTurnAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
+            physical_classes='com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8MediaTurnAcceptanceTest,com.personaledge.agent.Fold8OpenClawLiveAcceptanceTest,com.personaledge.agent.Fold8OpenClawSurfaceAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest'
             if [[ "$all_arguments" == *" -e class $abi_method "* ]]; then
                 suite=abi
             elif [[ "$all_arguments" == *" -e class $canary_classes "* ]]; then
@@ -525,7 +525,7 @@ case "$command_name" in
                     emit_result 1 1 0
                     ;;
                 canary) emit_result 5 0 5 ;;
-                physical) emit_result 29 0 29 ;;
+                physical) emit_result 35 0 35 ;;
             esac
         else
             exit 98
@@ -1417,11 +1417,11 @@ test_avd_regression_runs_scoped_suites_and_owner_exclusions() {
     if grep -F -- $'\t-e\tnotClass\t' "$adb_log" >/dev/null; then
         fail "AVD runner used a future-open negative class filter"
     fi
-    grep -F 'tests.selected=279' "$fixture/success.log" >/dev/null ||
+    grep -F 'tests.selected=288' "$fixture/success.log" >/dev/null ||
         fail "AVD runner did not account for every selected test"
-    grep -F 'tests.passed=248' "$fixture/success.log" >/dev/null ||
+    grep -F 'tests.passed=251' "$fixture/success.log" >/dev/null ||
         fail "AVD runner pass accounting is wrong"
-    grep -F 'tests.guardedSkip=31' "$fixture/success.log" >/dev/null ||
+    grep -F 'tests.guardedSkip=37' "$fixture/success.log" >/dev/null ||
         fail "AVD runner guarded-skip accounting is wrong"
     grep -F 'tests.failed=0' "$fixture/success.log" >/dev/null ||
         fail "AVD runner did not emit a zero-failure receipt"
@@ -1532,11 +1532,11 @@ test_avd_release_readiness_runs_exact_paired_release_lane() {
     if grep -F 'GroundedWebSearchJourneyTest' "$adb_log" >/dev/null; then
         fail "release AVD runner selected the unverified minified web journey"
     fi
-    grep -F 'tests.selected=35' "$fixture/success.log" >/dev/null ||
+    grep -F 'tests.selected=41' "$fixture/success.log" >/dev/null ||
         fail "release AVD runner selected-count receipt is wrong"
     grep -F 'tests.passed=1' "$fixture/success.log" >/dev/null ||
         fail "release AVD runner pass receipt is wrong"
-    grep -F 'tests.guardedSkip=34' "$fixture/success.log" >/dev/null ||
+    grep -F 'tests.guardedSkip=40' "$fixture/success.log" >/dev/null ||
         fail "release AVD runner guard receipt is wrong"
     grep -F "release.certificateSha256=$release_fixture_certificate" \
         "$fixture/success.log" >/dev/null || fail "release certificate was not bound to the receipt"
@@ -1996,6 +1996,24 @@ test_dialogue_quality_eval() {
     pass "dialogue quality lexical screen, human rubric, and strict fixtures stay independent"
 }
 
+test_openclaw_deployment_assets() {
+    local deployment_log
+    deployment_log="$(mktemp "${TMPDIR:-/tmp}/personal-edge-openclaw-host-gate.XXXXXX")"
+    if ! bash "$project_root/scripts/openclaw/test-deployment-assets.sh" > "$deployment_log" 2>&1; then
+        cat "$deployment_log" >&2
+        echo "OpenClaw deployment diagnostics retained: $deployment_log" >&2
+        fail "OpenClaw deployment asset tests failed"
+    fi
+    rm -f -- "$deployment_log"
+    pass "OpenClaw deployment stays pinned, secret-free, tool-free, and fail-closed"
+}
+
+test_openrouter_diagnostic_boundary() {
+    node --test "$project_root/scripts/openclaw/test-openrouter-diagnostic.mjs" >/dev/null ||
+        fail "OpenRouter diagnostic boundary tests failed"
+    pass "OpenRouter diagnostic defaults to zero calls and bounds acknowledged provider requests"
+}
+
 test_verified_download_and_protocol_policy
 test_verify_rejects_aliases_and_unsafe_mode
 test_space_preflight_stops_before_curl
@@ -2028,5 +2046,7 @@ test_model_eval_corpus_and_scorer
 test_model_eval_threshold_gate
 test_model_eval_host_harness
 test_dialogue_quality_eval
+test_openclaw_deployment_assets
+test_openrouter_diagnostic_boundary
 
 echo "All $tests_run host script tests passed."

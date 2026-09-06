@@ -20,6 +20,8 @@ import com.personaledge.core.agent.ReminderDateTimeHint
 import com.personaledge.core.agent.SideEffectTurnGate
 import com.personaledge.core.agent.ToolFailureDetail
 import com.personaledge.core.agent.TurnExecutionContract
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import com.personaledge.core.agent.TurnMediaIntent
 import com.personaledge.core.agent.TurnMediaPolicy
 import com.personaledge.core.data.AgentSettings
@@ -346,6 +348,87 @@ class PersonalEdgeViewModel(
         cpuThreadCount = Runtime.getRuntime().availableProcessors().coerceIn(1, 4),
     )
     private val container = application.appContainer()
+    private val remoteConversation = OpenClawRemoteConversation(
+        backend = AppOpenClawRemoteBackend(container, viewModelScope),
+        scope = viewModelScope,
+        contextSource = AppOpenClawRemoteContextSource(container) { _chatHistory.value.activeConversationId },
+        transcript = RemoteConversationTranscript(),
+    )
+    val remoteState: StateFlow<OpenClawRemoteUiState> = remoteConversation.state
+    fun setRemoteForeground(visible: Boolean) = remoteConversation.setForeground(visible)
+    fun selectRemote(selected: Boolean) {
+        if (_uiState.value.activeTurnId != null || _uiState.value.voiceRecording != null ||
+            _uiState.value.transcribing || _uiState.value.pendingAttachment != null
+        ) return
+        remoteConversation.selectRemote(selected)
+    }
+    fun configureRemote(endpoint: String, token: String, pin: String) =
+        remoteConversation.configure(endpoint, token, pin)
+    fun connectRemote() = remoteConversation.connect()
+    fun disconnectRemote() { remoteConversation.disconnect() }
+    fun forgetRemote() = remoteConversation.forget()
+    fun updateRemotePrompt(prompt: String) = remoteConversation.updatePrompt(prompt)
+    fun sendRemotePrompt() = remoteConversation.send()
+    fun cancelRemoteTurn() = remoteConversation.cancel()
+    fun loadRemoteContext() = remoteConversation.loadContextOptions()
+    fun selectRemoteContext(key: String, selected: Boolean) = remoteConversation.selectContextItem(key, selected)
+    fun finishRemoteContextSelection() = remoteConversation.finishContextSelection()
+    fun clearRemoteContext() = remoteConversation.invalidateContext()
+    fun readRemoteMacHealth() = remoteConversation.readMacHealth()
+
+    /**
+     * Stores a remote turn in the same conversation the local model writes to.
+     *
+     * The engine that answered is not a storage boundary: the owner's question and the answer are
+     * appended as ordinary USER and ASSISTANT rows, so history, restore, transfer, context, and
+     * later summarization treat both engines identically. Only the typed question is stored, never
+     * the composed outbound text, because the quotes it may carry are already rows of their own.
+     */
+    private inner class RemoteConversationTranscript : OpenClawRemoteTranscript {
+        override suspend fun recordQuestion(question: String): String? {
+            val conversationId = history.ensureConversation(
+                activeConversationId = _chatHistory.value.activeConversationId,
+                firstPrompt = question,
+            )
+            // Adopted before the row is written, exactly as a local turn does it: a conversation
+            // this turn had to create must not be left orphaned by a failed message write.
+            if (conversationId != null) {
+                _chatHistory.update { state -> state.copy(activeConversationId = conversationId) }
+            }
+            if (conversationId == null || history.recordOrdinal(
+                    conversationId = conversationId,
+                    role = MessageRole.USER,
+                    text = question,
+                ) == null
+            ) {
+                reportRemoteStorageFailure()
+                return null
+            }
+            appendRemoteEntry(conversationId, ChatRole.USER, question)
+            return conversationId
+        }
+
+        override suspend fun recordAnswer(conversationId: String, answer: String): Boolean {
+            if (!history.record(conversationId, MessageRole.ASSISTANT, answer)) {
+                reportRemoteStorageFailure()
+                return false
+            }
+            appendRemoteEntry(conversationId, ChatRole.ASSISTANT, answer)
+            return true
+        }
+    }
+
+    /** A remote row joins the visible transcript only while its own conversation is still active. */
+    private fun appendRemoteEntry(conversationId: String, role: ChatRole, text: String) {
+        if (_chatHistory.value.activeConversationId != conversationId) return
+        addMessage(role, text)
+    }
+
+    private fun reportRemoteStorageFailure() {
+        _chatHistory.update { state ->
+            state.copy(error = "이 대화는 현재 기기에 저장되지 않고 있습니다.")
+        }
+    }
     private val reminderCoordinator = ReminderCoordinator(application, container, viewModelScope)
     val reminderSetup: StateFlow<ReminderSetupState> = reminderCoordinator.state
     private val registry = ManualToolRegistry.forDeviceTools(
@@ -476,6 +559,16 @@ class PersonalEdgeViewModel(
      */
     /** Modalities the live runtime actually loaded; empty until it is initialized. */
     private var initializedMediaModalities: Set<TurnMediaKind> = emptySet()
+    /**
+     * The staged photo's composer thumbnail.
+     *
+     * Deliberately its own flow rather than a field of [PersonalEdgeUiState]: the turn payload
+     * still never enters UI state, and this bounded 128 px derivative exists only so the composer
+     * can show which photo is attached. It is cleared with the attachment and never persisted.
+     */
+    private val _attachmentPreview = MutableStateFlow<ImageBitmap?>(null)
+    val attachmentPreview: StateFlow<ImageBitmap?> = _attachmentPreview.asStateFlow()
+
     private var stagedMedia: TurnMediaAttachment? = null
     private var stagedMediaIntent: TurnMediaIntent? = null
     private var voiceJob: Job? = null
@@ -930,6 +1023,7 @@ class PersonalEdgeViewModel(
 
     /** Leaves the stored thread untouched; the next message creates a new one. */
     fun startNewConversation() {
+        remoteConversation.invalidateContext()
         val mutationLease = conversationMutationGate.tryAcquire() ?: return
         // The visible conversation is changing, so the previous request may no longer be
         // on screen. Drop the follow-up carry-over rather than letting a reply in a
@@ -957,6 +1051,7 @@ class PersonalEdgeViewModel(
     }
 
     fun switchConversation(conversationId: String) {
+        remoteConversation.invalidateContext()
         val mutationLease = conversationMutationGate.tryAcquire() ?: return
         // The visible conversation is changing, so the previous request may no longer be
         // on screen. Drop the follow-up carry-over rather than letting a reply in a
@@ -1006,6 +1101,7 @@ class PersonalEdgeViewModel(
     }
 
     fun deleteConversation(conversationId: String) {
+        remoteConversation.invalidateContext()
         val mutationLease = conversationMutationGate.tryAcquire() ?: return
         // The visible conversation is changing, so the previous request may no longer be
         // on screen. Drop the follow-up carry-over rather than letting a reply in a
@@ -1051,6 +1147,7 @@ class PersonalEdgeViewModel(
      * deliberately untouched, so this cannot re-enable an already-executed side effect.
      */
     fun deleteAllConversations() {
+        remoteConversation.invalidateContext()
         val mutationLease = conversationMutationGate.tryAcquire() ?: return
         // The visible conversation is changing, so the previous request may no longer be
         // on screen. Drop the follow-up carry-over rather than letting a reply in a
@@ -1230,26 +1327,44 @@ class PersonalEdgeViewModel(
 
     fun refreshMemorySetup() = memoryCoordinator.refresh()
 
-    fun setMemoryEnabled(enabled: Boolean) = memoryCoordinator.setEnabled(enabled)
+    fun setMemoryEnabled(enabled: Boolean) {
+        remoteConversation.invalidateContext()
+        memoryCoordinator.setEnabled(enabled)
+    }
 
     fun storeMemory(
         rawContent: String,
         category: MemoryCategory = MemoryCategory.FACT,
         rawValidUntil: String? = null,
-    ) = memoryCoordinator.store(rawContent, category, rawValidUntil)
+    ) {
+        remoteConversation.invalidateContext()
+        memoryCoordinator.store(rawContent, category, rawValidUntil)
+    }
 
     fun replaceMemory(
         memoryId: String,
         rawContent: String,
         category: MemoryCategory,
         rawValidUntil: String? = null,
-    ) = memoryCoordinator.replace(memoryId, rawContent, category, rawValidUntil)
+    ) {
+        remoteConversation.invalidateContext()
+        memoryCoordinator.replace(memoryId, rawContent, category, rawValidUntil)
+    }
 
-    fun reconfirmMemory(memoryId: String) = memoryCoordinator.reconfirm(memoryId)
+    fun reconfirmMemory(memoryId: String) {
+        remoteConversation.invalidateContext()
+        memoryCoordinator.reconfirm(memoryId)
+    }
 
-    fun deleteMemory(memoryId: String) = memoryCoordinator.delete(memoryId)
+    fun deleteMemory(memoryId: String) {
+        remoteConversation.invalidateContext()
+        memoryCoordinator.delete(memoryId)
+    }
 
-    fun deleteAllMemories() = memoryCoordinator.deleteAll()
+    fun deleteAllMemories() {
+        remoteConversation.invalidateContext()
+        memoryCoordinator.deleteAll()
+    }
 
     private val _diagnosticExport = MutableStateFlow(DiagnosticExportState())
     val diagnosticExport: StateFlow<DiagnosticExportState> = _diagnosticExport.asStateFlow()
@@ -1342,6 +1457,7 @@ class PersonalEdgeViewModel(
     }
 
     fun importUserData(passphrase: String) {
+        remoteConversation.invalidateContext()
         val source = selectedImportArchive ?: return
         if (_userDataTransfer.value.inProgress || _userDataTransfer.value.importPreview == null) return
         viewModelScope.launch {
@@ -1708,6 +1824,48 @@ class PersonalEdgeViewModel(
         }
     }
 
+    /**
+     * Stages a photo shared from another app.
+     *
+     * Read immediately, never deferred. A share grants read access for as long as the receiving
+     * activity holds the intent, and holding the URI until the model finished loading lost that
+     * grant: the deferred read came back `SecurityException ... no access to content://…` and the
+     * photo was gone. Staging needs no model anyway — only sending does — so the bytes are taken
+     * while the grant is certainly alive and the owner waits for the runtime with the photo
+     * already attached.
+     */
+    fun onSharedImageReceived(uri: Uri?) {
+        if (uri == null) return
+        viewModelScope.launch {
+            // A share arrives during cold launch, before the settings flow has emitted even once,
+            // so the durable value is read directly rather than from the cached UI state.
+            val enabled = runCatching { container.settings.current().mediaInputEnabled }
+                .getOrDefault(false)
+            val state = _uiState.value
+            val reason = when {
+                !enabled -> MediaUnavailableReason.DISABLED
+                !modelManifest.supportsModality(TurnMediaKind.IMAGE) ->
+                    MediaUnavailableReason.UNSUPPORTED_BY_MODEL
+
+                state.pendingAttachment != null -> MediaUnavailableReason.ALREADY_ATTACHED
+                state.activeTurnId != null || state.transcribing ||
+                    state.voiceRecording != null -> MediaUnavailableReason.BUSY
+
+                else -> null
+            }
+            if (reason != null) {
+                showMediaNotice(MediaComposerPolicy.message(reason))
+                return@launch
+            }
+            stageImage(imageLoader.loadOrNull(uri), MediaAttachmentSource.SHARE)
+        }
+    }
+
+    /** Reports a share this app declined to stage, so the owner is not left guessing. */
+    fun onSharedContentRefused(message: String) {
+        showMediaNotice(message)
+    }
+
     fun onImageSelected(uri: Uri?) {
         if (uri == null) return
         val reason = mediaUnavailableReason(TurnMediaKind.IMAGE)
@@ -1808,11 +1966,14 @@ class PersonalEdgeViewModel(
         clearStagedMedia(DiagnosticMediaStage.DISCARDED)
     }
 
-    private fun mediaUnavailableReason(kind: TurnMediaKind): MediaUnavailableReason? {
+    private fun mediaUnavailableReason(
+        kind: TurnMediaKind,
+        enabledOverride: Boolean? = null,
+    ): MediaUnavailableReason? {
         val state = _uiState.value
         return MediaComposerPolicy.unavailableReason(
             kind = kind,
-            enabled = state.mediaInputEnabled,
+            enabled = enabledOverride ?: state.mediaInputEnabled,
             modelSupportsKind = when (kind) {
                 TurnMediaKind.IMAGE -> modelManifest.supportsImageInput
                 TurnMediaKind.AUDIO -> modelManifest.supportsAudioInput
@@ -1836,6 +1997,7 @@ class PersonalEdgeViewModel(
         // silently winning or silently losing.
         stagedMedia = loaded.attachment
         stagedMediaIntent = null
+        _attachmentPreview.value = loaded.preview.asImageBitmap()
         recordMediaDiagnostic(
             kind = TurnMediaKind.IMAGE,
             stage = DiagnosticMediaStage.STAGED,
@@ -1859,6 +2021,7 @@ class PersonalEdgeViewModel(
     private fun stageVoiceAttachment(attachment: TurnMediaAttachment, durationMillis: Int) {
         stagedMedia = attachment
         stagedMediaIntent = null
+        _attachmentPreview.value = null
         _uiState.update { state ->
             state.copy(
                 mediaNotice = null,
@@ -1885,6 +2048,7 @@ class PersonalEdgeViewModel(
         }
         stagedMedia = null
         stagedMediaIntent = null
+        _attachmentPreview.value = null
         _uiState.update { state -> state.copy(pendingAttachment = null) }
     }
 
@@ -1978,6 +2142,7 @@ class PersonalEdgeViewModel(
             )
             stagedMedia = null
             stagedMediaIntent = null
+            _attachmentPreview.value = null
             _uiState.update { state ->
                 state.copy(
                     prompt = "",
@@ -2337,6 +2502,7 @@ class PersonalEdgeViewModel(
     }
 
     fun sendPrompt() {
+        if (remoteState.value.selected) return
         if (stagedMedia != null) {
             startMediaTurn()
             return
@@ -3228,6 +3394,7 @@ class PersonalEdgeViewModel(
         if (Long.MAX_VALUE - first < second) Long.MAX_VALUE else first + second
 
     override fun onCleared() {
+        remoteConversation.close()
         runCatching(thermalDirectiveSubscription::close)
         thermalMonitor.close()
         confirmationCoordinator.denyPending()

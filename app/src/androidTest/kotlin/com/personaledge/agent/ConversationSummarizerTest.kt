@@ -63,10 +63,12 @@ class ConversationSummarizerTest {
     @Test
     fun aFewLargeMessagesTriggerCompactionBeforeTheByteWindowFills() = runBlocking {
         val id = repository.createConversation("바이트 압축")
+        val middleConstraint = "핵심 제약은 개인정보 포함 항목 제외입니다."
         repository.appendMessage(
             id,
             MessageRole.USER,
-            "요청 시작|${"가".repeat(280)}|핵심 요청은 마지막 조건입니다.",
+            "요청 시작|${"가".repeat(280)}|$middleConstraint|" +
+                "${"다".repeat(280)}|핵심 요청은 마지막 조건입니다.",
         )
         repository.appendMessage(
             id,
@@ -79,6 +81,7 @@ class ConversationSummarizerTest {
         assertNotNull(request)
         assertEquals(2L, request!!.throughOrdinal)
         assertTrue(request.prompt.contains("요청 시작"))
+        assertTrue(request.prompt.contains(middleConstraint))
         assertTrue(request.prompt.contains("핵심 요청은 마지막 조건입니다."))
         assertTrue(request.prompt.contains(" … "))
     }

@@ -1,0 +1,311 @@
+{
+    "gateway": {
+        "mode": "local",
+        "port": 18789,
+        "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": {
+        "source": "store",
+        "provider": "default",
+        "id": "OPENCLAW_GATEWAY_TOKEN"
+      },
+      "allowTailscale": false,
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000,
+        "exemptLoopback": false
+      }
+        },
+        "tailscale": {
+            "mode": "off"
+        },
+        "controlUi": {
+      "enabled": false,
+      "toolTitles": false,
+      "sessionObserver": false,
+      "automaticallyFetchFavicons": false,
+      "allowExternalEmbedUrls": false,
+      "allowedOrigins": [],
+      "dangerouslyAllowHostHeaderOriginFallback": false
+        },
+        "cliAgents": {
+            "enabled": false
+        },
+        "terminal": {
+            "enabled": false
+        },
+    "http": {
+            "endpoints": {
+                "chatCompletions": {
+                    "enabled": false
+                },
+                "responses": {
+                    "enabled": false
+        }
+      }
+    },
+    "nodes": {
+      "browser": {
+        "mode": "off"
+      },
+      "pairing": {
+        "autoApproveLocal": false,
+        "sshVerify": false
+      },
+      "commands": {
+        "allow": [],
+        "deny": [
+          "system.run",
+          "system.which",
+          "browser.proxy",
+          "camera.snap",
+          "camera.clip",
+          "screen.record",
+          "desktop.stream",
+          "sms.search",
+          "sms.send",
+          "health.summary"
+        ]
+      },
+      "pluginTools": {
+        "enabled": false
+      },
+      "allowSkills": false
+    },
+    "tools": {
+      "allow": [],
+      "deny": [
+        "*",
+        "session_status",
+        "exec",
+        "process",
+        "code_execution",
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+        "web_search",
+        "web_fetch",
+        "browser",
+        "terminal",
+        "memory_search",
+        "memory_get",
+        "message",
+        "sessions_spawn",
+        "sessions_send",
+        "cron",
+        "gateway",
+        "nodes",
+        "computer"
+      ]
+    }
+    },
+    "session": {
+        "dmScope": "per-channel-peer",
+        "maintenance": {
+            "mode": "warn",
+            "pruneAfter": "24h",
+            "archiveDashboardAfter": false,
+            "maxEntries": 64,
+            "preserveRecent": false,
+            "resetArchiveRetention": "24h",
+            "maxDiskBytes": "100mb",
+            "highWaterBytes": "80mb"
+        }
+    },
+    "agents": {
+        "defaults": {
+            "workspace": "__PERSONAL_EDGE_OPENCLAW_WORKSPACE__",
+            "skipBootstrap": true,
+            "contextInjection": "never",
+            "model": {
+                "primary": "openrouter/z-ai/glm-5.3-flash",
+                "fallbacks": []
+            },
+            "modelPolicy": {
+                "allow": [
+                    "openrouter/z-ai/glm-5.3-flash"
+                ]
+            },
+      "utilityModel": "",
+      "thinkingDefault": "low",
+      "reasoningDefault": "off",
+            "models": {
+                "openrouter/z-ai/glm-5.3-flash": {
+                    "params": {
+                        "maxTokens": 2048
+                    }
+                }
+            },
+            "skills": [],
+            "startupContext": {
+                "enabled": false
+            },
+            "compaction": {
+                "memoryFlush": {
+                    "enabled": false
+                },
+                "postCompactionSections": []
+            },
+            "sandbox": {
+                "mode": "non-main",
+                "scope": "agent"
+            }
+        }
+    },
+    "models": {
+        "providers": {
+            "openrouter": {
+                "apiKey": {
+                    "source": "store",
+                    "provider": "default",
+                    "id": "OPENROUTER_API_KEY"
+                },
+                "params": {
+                    "provider": {
+                        "allow_fallbacks": true,
+                        "require_parameters": true,
+                        "data_collection": "deny",
+                        "zdr": true,
+                        "sort": "latency"
+                    }
+                }
+            }
+        }
+    },
+    "tools": {
+        "profile": "minimal",
+    "deny": [
+      "*",
+      "session_status",
+            "group:automation",
+            "group:runtime",
+            "group:fs",
+            "group:web",
+            "group:ui",
+            "group:memory",
+            "group:messaging",
+            "group:sessions",
+            "group:nodes",
+            "group:agents",
+            "group:media",
+            "group:plugins",
+            "exec",
+            "process",
+            "code_execution",
+            "read",
+            "write",
+            "edit",
+            "apply_patch",
+            "web_search",
+            "web_fetch",
+            "browser",
+            "terminal",
+            "portal",
+            "canvas",
+            "memory_search",
+            "memory_get",
+            "message",
+            "sessions_spawn",
+            "sessions_send",
+            "subagents",
+            "cron",
+            "gateway",
+            "nodes",
+            "computer",
+            "skill_workshop"
+        ],
+        "fs": {
+            "workspaceOnly": true
+        },
+        "exec": {
+            "security": "deny",
+            "ask": "always"
+        },
+        "elevated": {
+            "enabled": false
+        },
+        "sessions": {
+            "visibility": "agent"
+        },
+        "agentToAgent": {
+            "enabled": false
+        },
+        "codeMode": {
+            "enabled": false
+        }
+    },
+    "browser": {
+        "enabled": false,
+        "evaluateEnabled": false
+    },
+    "cron": {
+        "enabled": false,
+        "triggers": {
+            "enabled": false
+        }
+    },
+    "hooks": {
+        "enabled": false,
+        "internal": {
+            "enabled": false
+        }
+    },
+    "acp": {
+        "enabled": false
+    },
+    "discovery": {
+        "mdns": {
+            "mode": "off"
+        }
+    },
+    "telemetry": {
+        "enabled": false
+    },
+    "update": {
+        "checkOnStart": false,
+        "auto": {
+            "enabled": false
+        }
+    },
+  "plugins": {
+        "enabled": true,
+        "allow": [
+            "openrouter",
+            "device-pair"
+        ],
+        "entries": {
+            "openrouter": {
+                "enabled": true
+            },
+            "device-pair": {
+                "enabled": true
+            }
+        },
+        "slots": {
+            "memory": "none"
+        }
+  },
+  "nodeHost": {
+    "agentRuns": {
+      "claude": {
+        "enabled": false
+      }
+    },
+    "workerRuns": {
+      "enabled": false
+    },
+    "browserProxy": {
+      "enabled": false
+    },
+    "mcp": {
+      "servers": {}
+    },
+    "skills": {
+      "enabled": false
+    }
+  },
+  "channels": {}
+}

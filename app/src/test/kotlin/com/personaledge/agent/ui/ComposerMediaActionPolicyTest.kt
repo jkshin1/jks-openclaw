@@ -10,35 +10,38 @@ class ComposerMediaActionPolicyTest {
         val dictation = ComposerMediaAction.START_DICTATION
         val attachment = ComposerMediaAction.ATTACH_AUDIO
 
-        assertTrue("받아쓰기" in dictation.visibleLabel)
+        assertTrue("받아쓰기" in dictation.menuLabel)
         assertTrue("받아쓰기" in dictation.contentDescription)
-        assertTrue("첨부" in attachment.visibleLabel)
+        assertTrue("첨부" in attachment.menuLabel)
         assertTrue("첨부" in attachment.contentDescription)
-        assertTrue(dictation.visibleLabel != attachment.visibleLabel)
+        assertTrue(dictation.menuLabel != attachment.menuLabel)
         assertTrue(dictation.contentDescription != attachment.contentDescription)
-        assertEquals(4, ComposerMediaAction.entries.map { it.visibleLabel }.distinct().size)
+        assertEquals(4, ComposerMediaAction.entries.map { it.menuLabel }.distinct().size)
         assertEquals(4, ComposerMediaAction.entries.map { it.contentDescription }.distinct().size)
     }
 
     @Test
-    fun `fold cover width keeps all four actions in one compact row`() {
-        assertEquals(4, ComposerMediaActionLayoutPolicy.columnsForWidth(320f))
-        assertEquals(4, ComposerMediaActionLayoutPolicy.columnsForWidth(400f))
+    fun `dictation is not buried in the attachment menu`() {
+        // Both are voice actions with very different consequences: one edits the composer, the
+        // other attaches a recording to the turn. Sharing one menu is how they get confused.
         assertEquals(
-            4,
-            ComposerMediaActionLayoutPolicy.columnsForWidth(
-                ComposerMediaActionLayoutPolicy.FOUR_COLUMN_MIN_WIDTH_DP,
+            listOf(
+                ComposerMediaAction.TAKE_PHOTO,
+                ComposerMediaAction.PICK_IMAGE,
+                ComposerMediaAction.ATTACH_AUDIO,
             ),
+            ComposerMediaAction.menuActions,
         )
+        assertTrue(ComposerMediaAction.START_DICTATION !in ComposerMediaAction.menuActions)
     }
 
     @Test
-    fun `narrower panes wrap actions instead of crushing their labels`() {
-        assertEquals(
-            2,
-            ComposerMediaActionLayoutPolicy.columnsForWidth(
-                ComposerMediaActionLayoutPolicy.FOUR_COLUMN_MIN_WIDTH_DP - 1f,
-            ),
-        )
+    fun `every menu action carries its own icon and description`() {
+        for (action in ComposerMediaAction.menuActions) {
+            assertTrue(action.menuLabel.isNotBlank())
+            assertTrue(action.contentDescription.isNotBlank())
+            assertTrue(action.iconRes != 0)
+        }
     }
+
 }

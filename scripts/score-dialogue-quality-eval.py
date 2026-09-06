@@ -36,6 +36,33 @@ EXPECTED_HUMAN_REVIEW_KEYS = set(HUMAN_REVIEW_DIMENSIONS)
 MAX_ANSWER_BYTES = 16 * 1024
 MAX_MODEL_LABEL_BYTES = 256
 SENTENCE_BOUNDARY = re.compile(r"[.!?。！？]+|\n+")
+CLAIM_BOUNDARY_CHARACTERS = ".!?。！？;；"
+REQUIRED_CLAIM_NEGATION_MARKERS = tuple(
+    VALIDATOR.normalized(marker)
+    for marker in (
+        "아닙니다",
+        "아니다",
+        "아니며",
+        "아니고",
+        "아니라",
+        "아닌",
+        "하지 않습니다",
+        "하지 않는다",
+        "하지 않으며",
+        "하지 않고",
+        "하지 않은",
+        "하지 않겠습니다",
+        "하지 마세요",
+        "제외합니다",
+        "제외해",
+        "금지합니다",
+        "말고",
+        "not",
+        "never",
+    )
+)
+NEGATION_LEFT_WINDOW = 24
+NEGATION_RIGHT_WINDOW = 40
 GENERIC_NON_ANSWER_MARKERS = tuple(
     VALIDATOR.normalized(marker)
     for marker in (
@@ -76,6 +103,38 @@ def observed_non_answer(answer: str) -> bool:
         any(marker in compact for marker in CLARIFICATION_SUBJECT_MARKERS)
         and any(marker in compact for marker in CLARIFICATION_REQUEST_MARKERS)
     )
+
+
+def has_negated_required_mention(answer: str, phrase: str) -> bool:
+    """Detects an explicit local negation around a required synthetic phrase.
+
+    This is intentionally a bounded lexical contradiction screen, not a semantic entailment
+    claim. Sentence/clause boundaries and short windows keep an unrelated later negation from
+    poisoning an otherwise affirmative answer.
+    """
+    compact = VALIDATOR.normalized(answer.replace("\n", "."))
+    needle = VALIDATOR.normalized(phrase)
+    start = 0
+    while True:
+        index = compact.find(needle, start)
+        if index < 0:
+            return False
+        end = index + len(needle)
+        clause_start = max(
+            (compact.rfind(boundary, 0, index) for boundary in CLAIM_BOUNDARY_CHARACTERS),
+            default=-1,
+        ) + 1
+        clause_end_candidates = [
+            position
+            for boundary in CLAIM_BOUNDARY_CHARACTERS
+            if (position := compact.find(boundary, end)) >= 0
+        ]
+        clause_end = min(clause_end_candidates, default=len(compact))
+        left = compact[max(clause_start, index - NEGATION_LEFT_WINDOW):index]
+        right = compact[end:min(clause_end, end + NEGATION_RIGHT_WINDOW)]
+        if any(marker in left or marker in right for marker in REQUIRED_CLAIM_NEGATION_MARKERS):
+            return True
+        start = end
 
 
 def score(corpus_path: Path, predictions_path: Path, model_label: str) -> dict[str, object]:
@@ -123,6 +182,7 @@ def score(corpus_path: Path, predictions_path: Path, model_label: str) -> dict[s
     forbidden_total = 0
     sentence_matches = 0
     non_answer_matches = 0
+    required_claim_affirmation_matches = 0
     present_answers = 0
     passed_cases = 0
     reviewed_cases = 0
@@ -163,6 +223,22 @@ def score(corpus_path: Path, predictions_path: Path, model_label: str) -> dict[s
         any_of_total += len(expected["requiredAnyOf"])
         any_of_matches += len(expected["requiredAnyOf"]) - len(missing_any_of)
 
+        positive_claims = [
+            *expected["requiredFacts"],
+            *(
+                option
+                for alternatives in expected["requiredAnyOf"]
+                for option in alternatives
+                if VALIDATOR.normalized(option) in compact
+            ),
+        ]
+        negated_required_claims = [
+            claim for claim in positive_claims
+            if has_negated_required_mention(answer, claim)
+        ]
+        required_claims_affirmed = not negated_required_claims
+        required_claim_affirmation_matches += int(required_claims_affirmed)
+
         present_forbidden = [
             fact for fact in expected["forbiddenFacts"]
             if VALIDATOR.normalized(fact) in compact
@@ -183,6 +259,7 @@ def score(corpus_path: Path, predictions_path: Path, model_label: str) -> dict[s
             present
             and required_ok
             and any_of_ok
+            and required_claims_affirmed
             and forbidden_ok
             and sentence_ok
             and non_answer_ok
@@ -196,12 +273,14 @@ def score(corpus_path: Path, predictions_path: Path, model_label: str) -> dict[s
                 "answerPresent": present,
                 "requiredFacts": required_ok,
                 "requiredAnyOf": any_of_ok,
+                "requiredClaimsAffirmed": required_claims_affirmed,
                 "forbiddenFacts": forbidden_ok,
                 "maxSentences": sentence_ok,
                 "nonAnswer": non_answer_ok,
             },
             "missingRequiredFacts": missing_required,
             "missingRequiredAnyOf": missing_any_of,
+            "negatedRequiredClaims": negated_required_claims,
             "presentForbiddenFacts": present_forbidden,
             "sentenceCount": sentences,
             "expectedNonAnswer": expected["nonAnswer"],
@@ -220,7 +299,7 @@ def score(corpus_path: Path, predictions_path: Path, model_label: str) -> dict[s
         complete_human_review and human_review_passed_cases == total
     )
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "modelLabel": model_label,
         "corpusCanonicalSha256": VALIDATOR.EXPECTED_CANONICAL_SHA256,
         "caseCount": total,
@@ -238,6 +317,10 @@ def score(corpus_path: Path, predictions_path: Path, model_label: str) -> dict[s
             "answerPresenceRate": ratio(present_answers, total),
             "requiredFactRecall": ratio(required_fact_matches, required_fact_total),
             "requiredAnyOfSatisfaction": ratio(any_of_matches, any_of_total),
+            "requiredClaimAffirmationRate": ratio(
+                required_claim_affirmation_matches,
+                total,
+            ),
             "forbiddenFactAvoidance": ratio(forbidden_avoided, forbidden_total),
             "maxSentenceCompliance": ratio(sentence_matches, total),
             "nonAnswerAccuracy": ratio(non_answer_matches, total),

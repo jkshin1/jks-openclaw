@@ -197,20 +197,23 @@ object TurnMediaPolicy {
                 "그 언어로 번역하고, 원문에 없는 문장은 만들지 마세요."
 
         TurnMediaIntent.IMAGE_QUESTION ->
-            "[작업] 사진을 근거로 아래 질문에 한국어로 답하세요. 사진에서 확인할 수 없으면 " +
-                "확인할 수 없다고 답하세요."
+            "[작업] 첨부된 사진은 이미 전달되어 볼 수 있습니다. 사진에서 보이는 것을 근거로 아래 " +
+                "질문에 한국어로 답하세요. 사진을 열 수 없다거나 확인할 방법이 없다고 말하지 말고, " +
+                "사진에 그 정보가 담겨 있지 않을 때만 그 사실을 밝히세요."
 
         TurnMediaIntent.AUDIO_TRANSCRIBE ->
-            "[작업] 녹음된 말을 들리는 그대로 한국어 문장으로 받아쓰세요. 답변, 요약, 설명, 인사말을 " +
-                "덧붙이지 말고 받아쓴 문장만 출력하세요. 들리지 않는 부분은 '[안 들림]'으로 쓰세요."
+            "[작업] 첨부된 녹음은 이미 전달되어 들을 수 있습니다. 들리는 그대로 한국어 문장으로 " +
+                "받아쓰세요. 답변, 요약, 설명, 인사말을 덧붙이지 말고 받아쓴 문장만 출력하세요. " +
+                "녹음을 확인할 수 없다고 답하지 말고, 알아듣기 어려운 구간만 '[안 들림]'으로 쓰세요."
 
         TurnMediaIntent.AUDIO_SUMMARIZE ->
             "[작업] 녹음된 내용을 한국어로 정리하세요. 말한 사람이 실제로 말한 요점, 결정, 남은 일만 " +
                 "쓰고 없는 내용을 채우지 마세요."
 
         TurnMediaIntent.AUDIO_QUESTION ->
-            "[작업] 녹음된 말을 듣고 한국어로 답하세요. 녹음에서 확인할 수 없으면 확인할 수 없다고 " +
-                "답하세요."
+            "[작업] 첨부된 녹음은 이미 전달되어 들을 수 있습니다. 들리는 말을 근거로 한국어로 " +
+                "답하세요. 녹음을 재생할 수 없다거나 확인할 방법이 없다고 말하지 말고, 녹음에 그 " +
+                "정보가 담겨 있지 않을 때만 그 사실을 밝히세요."
     }
 
     /**
@@ -247,8 +250,17 @@ object TurnMediaPolicy {
     private val DESCRIBE_TERMS = listOf(
         "설명", "뭐야", "뭔가요", "무엇", "어떤 사진", "describe", "what is this",
     )
+    /**
+     * Wording that asks what the recording actually contains.
+     *
+     * The narrow "받아쓰기" vocabulary was not how the owner asked. "뭐라고 녹음되어 있어" is a
+     * transcription request in ordinary Korean, and routing it to the open-question task let the
+     * model answer that it could not check the recording — while the clip was in fact prefilled.
+     */
     private val TRANSCRIBE_TERMS = listOf(
         "받아쓰", "받아 쓰", "그대로 적", "그대로 써", "전사", "transcribe", "dictate",
+        "뭐라고", "뭐라 ", "뭐래", "무슨 말", "무슨 내용", "어떤 내용", "내용이 뭐",
+        "뭐라는", "말했", "말한 내용", "what did", "what does it say", "what is recorded",
     )
     private val SUMMARIZE_TERMS = listOf(
         "요약", "정리해", "핵심", "무슨 얘기", "무슨 이야기", "summarize", "summary",

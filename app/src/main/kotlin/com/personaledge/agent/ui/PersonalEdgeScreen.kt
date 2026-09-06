@@ -73,7 +73,9 @@ import com.personaledge.agent.MemorySetupState
 import com.personaledge.agent.NotificationSetupState
 import com.personaledge.agent.ReminderSetupState
 import com.personaledge.agent.PendingConfirmation
+import androidx.compose.ui.graphics.ImageBitmap
 import com.personaledge.agent.ModelUiStatus
+import com.personaledge.agent.OpenClawRemoteUiState
 import com.personaledge.agent.PersonalEdgeUiState
 import com.personaledge.agent.R
 import com.personaledge.agent.ui.components.StatusPill
@@ -101,6 +103,8 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun PersonalEdgeScreen(
     state: PersonalEdgeUiState,
+    remoteState: OpenClawRemoteUiState = OpenClawRemoteUiState(),
+    remoteActions: OpenClawRemoteActions = OpenClawRemoteActions(),
     calendarSetup: CalendarSetupState,
     chatHistory: ChatHistoryState,
     notificationSetup: NotificationSetupState,
@@ -179,6 +183,7 @@ internal fun PersonalEdgeScreen(
     onCancelRecording: () -> Unit = {},
     onRemoveAttachment: () -> Unit = {},
     onDismissMediaNotice: () -> Unit = {},
+    attachmentPreview: ImageBitmap? = null,
     onTurnRecovery: (ChatRecoveryAction) -> Unit = {},
     onConfirmation: (String, Boolean) -> Unit,
 ) {
@@ -191,7 +196,7 @@ internal fun PersonalEdgeScreen(
     val previewShortcutCommands = remember {
         MutableSharedFlow<WorkspaceShortcutCommand>(extraBufferCapacity = 8)
     }
-    val turnActive = state.activeTurnId != null
+    val turnActive = state.activeTurnId != null || remoteState.running
     val composerMedia = ComposerMediaState(
         visible = state.mediaInputEnabled,
         // Shown but refusing is deliberate: a control that disappears mid-turn moves the other
@@ -200,6 +205,7 @@ internal fun PersonalEdgeScreen(
             state.voiceRecording == null && state.pendingAttachment == null &&
             state.modelStatus == ModelUiStatus.READY,
         attachment = state.pendingAttachment,
+        preview = attachmentPreview,
         recording = state.voiceRecording,
         onTakePhoto = onTakePhoto,
         onPickImage = onPickImage,
@@ -281,25 +287,26 @@ internal fun PersonalEdgeScreen(
         shortcutCommands,
         previewShortcutCommands,
         turnActive,
+        remoteState.selected,
         openOverlay,
         pendingConfirmation?.actionId,
     ) {
         merge(shortcutCommands, previewShortcutCommands).collect { command ->
             when (WorkspaceShortcutPolicy.resolve(command, turnActive, openOverlay)) {
-                WorkspaceShortcutAction.FOCUS_COMPOSER -> {
+                WorkspaceShortcutAction.FOCUS_COMPOSER -> if (!remoteState.selected) {
                     settingsVisible = false
                     remindersVisible = false
                     if (chatHistory.visible) onCloseHistory()
                     focusComposerRequest++
                 }
-                WorkspaceShortcutAction.START_NEW_CONVERSATION -> {
+                WorkspaceShortcutAction.START_NEW_CONVERSATION -> if (!remoteState.selected) {
                     settingsVisible = false
                     remindersVisible = false
                     if (chatHistory.visible) onCloseHistory()
                     onNewConversation()
                 }
                 WorkspaceShortcutAction.REJECT_NEW_CONVERSATION -> Unit
-                WorkspaceShortcutAction.CANCEL_ACTIVE_TURN -> onCancel()
+                WorkspaceShortcutAction.CANCEL_ACTIVE_TURN -> if (remoteState.selected) remoteActions.cancel() else onCancel()
                 WorkspaceShortcutAction.CLOSE_OVERLAY -> when (openOverlay) {
                     WorkspaceOverlay.SETTINGS -> settingsVisible = false
                     WorkspaceOverlay.REMINDERS -> remindersVisible = false
@@ -318,11 +325,13 @@ internal fun PersonalEdgeScreen(
         settingsVisible,
         remindersVisible,
         chatHistory.visible,
+        remoteState.selected,
     ) {
         if (focusComposerRequest > 0 &&
             !settingsVisible &&
             !remindersVisible &&
-            !chatHistory.visible
+            !chatHistory.visible &&
+            !remoteState.selected
         ) {
             composerFocusRequester.requestFocus()
         }
@@ -352,15 +361,30 @@ internal fun PersonalEdgeScreen(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
-            WorkspaceTopBar(
-                state = state,
-                turnActive = turnActive,
-                windowPlan = WorkspaceLayoutPolicy.forWindow(workspaceWindowState),
-                onNewConversation = onNewConversation,
-                onOpenReminders = { remindersVisible = true },
-                onOpenHistory = onOpenHistory,
-                onOpenSettings = openSettings,
-            )
+            Column {
+                if (remoteState.selected) {
+                    CenterAlignedTopAppBar(
+                        title = { Text("Personal Edge · 원격", style = MaterialTheme.typography.titleMedium) },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                    )
+                } else {
+                    WorkspaceTopBar(
+                        state = state,
+                        turnActive = turnActive,
+                        windowPlan = WorkspaceLayoutPolicy.forWindow(workspaceWindowState),
+                        onNewConversation = onNewConversation,
+                        onOpenReminders = { remindersVisible = true },
+                        onOpenHistory = onOpenHistory,
+                        onOpenSettings = openSettings,
+                    )
+                }
+                AgentModeSelector(
+                    remote = remoteState,
+                    localBusy = state.activeTurnId != null || state.voiceRecording != null ||
+                        state.transcribing || state.pendingAttachment != null,
+                    actions = remoteActions,
+                )
+            }
         },
     ) { innerPadding ->
         BoxWithConstraints(
@@ -376,7 +400,14 @@ internal fun PersonalEdgeScreen(
                     contentTopInsetDp = contentTopOffsetDp,
                 ),
             )
-            when (windowPlan.layout) {
+            if (remoteState.selected) {
+                // The same transcript the local model appends to; the engine is not a boundary.
+                OpenClawRemotePane(
+                    state = remoteState,
+                    actions = remoteActions,
+                    messages = state.messages,
+                )
+            } else when (windowPlan.layout) {
                 WorkspaceLayout.COVER -> Column(Modifier.fillMaxSize()) {
                     SetupBanners(
                         state = state,

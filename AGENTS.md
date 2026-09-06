@@ -55,8 +55,10 @@ Read this before running anything against the phone. Each item cost real damage 
   session did run a synthetic-card image through LiteRT-LM and observed the audio front end, but
   its shared-conversation token comparison was invalid. The corrected gate uses a fresh runtime and
   one turn per control/media observation, plus a 32-token decode cap below the required deltas; its
-  source compiles but has not run on the Fold8. The fp32 encoders add substantial prefill and force
-  CPU fallback there, so watch thermal and PSS. Camera capture necessarily uses one temporary
+  source ran and passed on the Fold8 on 2026-09-01: one image costs 258 context tokens and a
+  15-second clip 374, both matching the published per-modality figures. The fp32 encoders add
+  roughly 7-10 s of CPU prefill and force CPU fallback for the whole engine, which is why they load
+  only for the modalities the owner enabled; watch thermal and PSS on longer sessions. Camera capture necessarily uses one temporary
   app-cache file and makes best-effort deletion after read, with stale-start and next-prepare sweeps;
   audio stays in memory. Raw payload never enters Room, transfer, or diagnostics. Room/transfer keep
   only an app-authored kind/source/whole-second summary, and diagnostics keep content-free counts.

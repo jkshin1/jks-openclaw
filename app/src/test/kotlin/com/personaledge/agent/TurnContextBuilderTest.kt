@@ -188,6 +188,7 @@ class TurnContextBuilderTest {
     @Test
     fun `near limit prompt keeps latest user and assistant together with both user edges`() {
         val userHead = "LATEST-USER-HEAD"
+        val middleConstraint = "MIDDLE-CONSTRAINT 개인정보 포함 후보는 제외"
         val userTail = "LATEST-USER-TAIL"
         val assistantMarker = "LATEST-ASSISTANT"
         val built = TurnContextBuilder.build(
@@ -201,7 +202,8 @@ class TurnContextBuilderTest {
                     message(
                         2,
                         MessageRole.USER,
-                        "$userHead ${"중간".repeat(120)} $userTail",
+                        "$userHead ${"앞부분".repeat(80)} $middleConstraint " +
+                            "${"뒷부분".repeat(80)} $userTail",
                     ),
                     message(3, MessageRole.ASSISTANT, assistantMarker),
                 ),
@@ -211,6 +213,7 @@ class TurnContextBuilderTest {
 
         assertTrue(built.toByteArray(Charsets.UTF_8).size <= 2_048)
         assertTrue(built.contains(userHead))
+        assertTrue(built.contains(middleConstraint))
         assertTrue(built.contains(userTail))
         assertTrue(built.contains(assistantMarker))
         assertFalse(built.contains("OLD-CONTEXT"))

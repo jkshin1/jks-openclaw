@@ -135,6 +135,21 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+                Share target for one photo. The gallery and camera share sheets are where an owner
+                reaches for a photo, and without this the app simply is not offered there.
+
+                Only ACTION_SEND with a single image is accepted: a turn carries at most one
+                attachment, so declaring ACTION_SEND_MULTIPLE would advertise a capability the
+                turn policy refuses. The shared URI is read-only, untrusted, and goes through the
+                same decode, downscale and EXIF-stripping path as the picker.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
     </application>
 

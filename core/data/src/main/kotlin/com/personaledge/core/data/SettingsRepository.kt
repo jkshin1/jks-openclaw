@@ -17,10 +17,11 @@ import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.retryWhen
 
 /**
  * Every field has a safe default, so a missing or unreadable store degrades to the most
@@ -41,6 +42,8 @@ data class AgentSettings(
     val notificationRetentionDays: Int = DEFAULT_NOTIFICATION_RETENTION_DAYS,
     val routeLookupEnabled: Boolean = false,
     val webSearchEnabled: Boolean = false,
+    /** Explicit, default-off consent and trust policy for remote OpenClaw Gateway turns. */
+    val openClawGateway: OpenClawGatewaySettings = OpenClawGatewaySettings(),
     /** Allows approved cross-thread memory capture and recall. Stored memories remain when off. */
     val memoryEnabled: Boolean = false,
     /**
@@ -82,11 +85,27 @@ class SettingsRepository(
     private val dataStore: DataStore<Preferences>,
 ) {
     val settings: Flow<AgentSettings> = dataStore.data
-        // A corrupt or unreadable store must not stop the app from launching into a safe state.
-        .catch { failure -> if (failure is IOException) emit(emptyPreferences()) else throw failure }
+        // A transient I/O failure emits safe defaults immediately, then resubscribes with bounded
+        // backoff so later durable updates are not lost. Non-I/O failures remain fatal.
+        .retryWhen { failure, attempt ->
+            if (failure !is IOException) return@retryWhen false
+            emit(emptyPreferences())
+            delay(settingsIoRetryDelayMillis(attempt))
+            true
+        }
         .map(::readSettings)
 
     suspend fun current(): AgentSettings = settings.first()
+
+    /**
+     * Reads OpenClaw consent without the normal safe-default I/O recovery emission.
+     *
+     * Startup revocation recovery must distinguish a durably stored `false` from an unreadable
+     * DataStore. Treating a transient read failure as the public flow's default `false` could
+     * remove a crash tombstone while a stale `true` remains on disk.
+     */
+    suspend fun currentOpenClawGatewayEnabledForRecovery(): Boolean =
+        readOpenClawGatewaySettingsStrict(dataStore.data.first()).enabled
 
     suspend fun setDefaultCalendar(calendarId: Long?, label: String?) {
         dataStore.edit { preferences ->
@@ -154,6 +173,33 @@ class SettingsRepository(
         dataStore.edit { preferences -> preferences[KEY_ROUTE_LOOKUP] = enabled }
     }
 
+    /**
+     * Updates connection policy while preserving the latest durable owner consent.
+     *
+     * The policy value intentionally has no `enabled` field, so a stale settings-screen snapshot
+     * cannot silently reopen a Gateway the owner disabled in the meantime.
+     */
+    suspend fun setOpenClawGatewayConnectionPolicy(
+        policy: OpenClawGatewayConnectionPolicy,
+    ) {
+        dataStore.edit { preferences ->
+            val current = readOpenClawGatewaySettings(preferences)
+            preferences.writeOpenClawGateway(current.withConnectionPolicy(policy))
+        }
+    }
+
+    /**
+     * Updates consent without a read-then-write race against endpoint or trust configuration.
+     * Enabling an incomplete or corrupt configuration is rejected before DataStore commits.
+     * App code must call this only through its OpenClaw crash-durable consent controller.
+     */
+    suspend fun setOpenClawGatewayEnabled(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            val current = readOpenClawGatewaySettings(preferences)
+            preferences.writeOpenClawGateway(current.copy(enabled = enabled))
+        }
+    }
+
     suspend fun setMemoryEnabled(enabled: Boolean) {
         dataStore.edit { preferences -> preferences[KEY_MEMORY_ENABLED] = enabled }
     }
@@ -217,6 +263,7 @@ class SettingsRepository(
         ),
         routeLookupEnabled = preferences[KEY_ROUTE_LOOKUP] ?: false,
         webSearchEnabled = preferences[KEY_WEB_SEARCH] ?: false,
+        openClawGateway = readOpenClawGatewaySettings(preferences),
         memoryEnabled = preferences[KEY_MEMORY_ENABLED] ?: false,
         mediaInputEnabled = preferences[KEY_MEDIA_INPUT_ENABLED] ?: false,
         dailyBriefEnabled = preferences[KEY_DAILY_BRIEF_ENABLED] ?: false,
@@ -232,6 +279,41 @@ class SettingsRepository(
                 ?: ConversationRepository.DEFAULT_RECENT_MESSAGES
             ).coerceIn(1, ConversationRepository.MAX_MESSAGES_PER_READ),
     )
+
+    private fun readOpenClawGatewaySettings(
+        preferences: Preferences,
+    ): OpenClawGatewaySettings = runCatching {
+        readOpenClawGatewaySettingsStrict(preferences)
+    }.getOrElse { OpenClawGatewaySettings() }
+
+    private fun readOpenClawGatewaySettingsStrict(
+        preferences: Preferences,
+    ): OpenClawGatewaySettings {
+        val rawTrustMode = preferences[KEY_OPENCLAW_GATEWAY_TRUST_MODE]
+            ?: OpenClawGatewayTrustMode.SYSTEM.name
+        val trustMode = OpenClawGatewayTrustMode.entries
+            .firstOrNull { candidate -> candidate.name == rawTrustMode }
+            ?: error("Invalid OpenClaw trust policy")
+        return OpenClawGatewaySettings(
+            enabled = preferences[KEY_OPENCLAW_GATEWAY_ENABLED] ?: false,
+            endpointUrl = preferences[KEY_OPENCLAW_GATEWAY_ENDPOINT_URL],
+            trustMode = trustMode,
+            leafCertificateDerSha256 =
+                preferences[KEY_OPENCLAW_GATEWAY_LEAF_CERTIFICATE_DER_SHA256],
+            foregroundOnly = preferences[KEY_OPENCLAW_GATEWAY_FOREGROUND_ONLY] ?: true,
+        )
+    }
+
+    private fun MutablePreferences.writeOpenClawGateway(gateway: OpenClawGatewaySettings) {
+        this[KEY_OPENCLAW_GATEWAY_ENABLED] = gateway.enabled
+        this[KEY_OPENCLAW_GATEWAY_TRUST_MODE] = gateway.trustMode.name
+        this[KEY_OPENCLAW_GATEWAY_FOREGROUND_ONLY] = gateway.foregroundOnly
+        gateway.endpointUrl?.let { this[KEY_OPENCLAW_GATEWAY_ENDPOINT_URL] = it }
+            ?: remove(KEY_OPENCLAW_GATEWAY_ENDPOINT_URL)
+        gateway.leafCertificateDerSha256?.let {
+            this[KEY_OPENCLAW_GATEWAY_LEAF_CERTIFICATE_DER_SHA256] = it
+        } ?: remove(KEY_OPENCLAW_GATEWAY_LEAF_CERTIFICATE_DER_SHA256)
+    }
 
     companion object {
         const val STORE_FILE_NAME = "agent-settings.preferences_pb"
@@ -250,6 +332,16 @@ class SettingsRepository(
         private val KEY_NOTIFICATION_RETENTION_DAYS = intPreferencesKey("notification_retention_days")
         private val KEY_ROUTE_LOOKUP = booleanPreferencesKey("route_lookup_enabled")
         private val KEY_WEB_SEARCH = booleanPreferencesKey("web_search_enabled")
+        private val KEY_OPENCLAW_GATEWAY_ENABLED =
+            booleanPreferencesKey("openclaw_gateway_enabled")
+        private val KEY_OPENCLAW_GATEWAY_ENDPOINT_URL =
+            stringPreferencesKey("openclaw_gateway_endpoint_url")
+        private val KEY_OPENCLAW_GATEWAY_TRUST_MODE =
+            stringPreferencesKey("openclaw_gateway_trust_mode")
+        private val KEY_OPENCLAW_GATEWAY_LEAF_CERTIFICATE_DER_SHA256 =
+            stringPreferencesKey("openclaw_gateway_leaf_certificate_der_sha256")
+        private val KEY_OPENCLAW_GATEWAY_FOREGROUND_ONLY =
+            booleanPreferencesKey("openclaw_gateway_foreground_only")
         private val KEY_MEMORY_ENABLED = booleanPreferencesKey("memory_enabled")
         private val KEY_MEDIA_INPUT_ENABLED = booleanPreferencesKey("media_input_enabled")
         private val KEY_DAILY_BRIEF_ENABLED = booleanPreferencesKey("daily_brief_enabled")
@@ -288,3 +380,12 @@ class SettingsRepository(
         )
     }
 }
+
+internal fun settingsIoRetryDelayMillis(attempt: Long): Long {
+    val exponent = attempt.coerceIn(0L, 5L).toInt()
+    return (SETTINGS_IO_INITIAL_RETRY_DELAY_MILLIS shl exponent)
+        .coerceAtMost(SETTINGS_IO_MAX_RETRY_DELAY_MILLIS)
+}
+
+private const val SETTINGS_IO_INITIAL_RETRY_DELAY_MILLIS = 1_000L
+private const val SETTINGS_IO_MAX_RETRY_DELAY_MILLIS = 30_000L

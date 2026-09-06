@@ -1,0 +1,10 @@
+{
+  "id": "personaledge-health",
+  "name": "Personal Edge host health",
+  "description": "Read one bounded, content-free watchdog snapshot with operator.read scope.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

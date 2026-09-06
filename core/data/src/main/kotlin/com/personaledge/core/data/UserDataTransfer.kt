@@ -474,7 +474,9 @@ internal object UserDataSnapshotValidator {
 
     private val SAFE_ID = Regex("[A-Za-z0-9._:-]{1,160}")
     private val ALLOWED_TEXT_CONTROLS = setOf('\t'.code, '\n'.code, '\r'.code)
-    private val IMAGE_ATTACHMENT_SOURCES = setOf("CAMERA", "GALLERY")
+    // Widened with SHARE inside the same unreleased payload version 2; an archive written before
+    // the share target existed simply never carries it, so older archives still import unchanged.
+    private val IMAGE_ATTACHMENT_SOURCES = setOf("CAMERA", "GALLERY", "SHARE")
     private const val AUDIO_ATTACHMENT_SOURCE = "VOICE"
     private const val MAX_ATTACHMENT_SUMMARY_CODE_POINTS = 32
     private const val MIN_AUDIO_SECONDS = 0

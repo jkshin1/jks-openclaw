@@ -136,7 +136,7 @@ verify_test_source_count() {
 }
 
 # A new top-level test file must be reviewed and explicitly added to the allowlist below.
-verify_test_source_count "$project_root/app/src/androidTest" 39
+verify_test_source_count "$project_root/app/src/androidTest" 42
 verify_test_source_count "$project_root/core/data/src/androidTest" 12
 verify_test_source_count "$project_root/core/diagnostics/src/androidTest" 1
 verify_test_source_count "$project_root/core/llm/src/androidTest" 3
@@ -259,13 +259,13 @@ run_suite() {
     echo "PASS $label selected=$selected passed=$passed guardedSkip=$skipped"
 }
 
-app_classes="com.personaledge.agent.AlarmForegroundRequestTest,com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.ChatHistoryCoordinatorTest,com.personaledge.agent.ConversationSummarizerTest,com.personaledge.agent.CredentialSettingsTest,com.personaledge.agent.DeviceExecutionInterlockTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8MediaTurnAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.GroundedWebSearchJourneyTest,com.personaledge.agent.ImageAttachmentLoaderTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KakaoReplySettingsTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.MediaCaptureStagingTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.NotificationCaptureCoordinatorTest,com.personaledge.agent.NotificationCaptureSinkTest,com.personaledge.agent.NotificationPostReaderTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.StoredNotificationGatewayTest,com.personaledge.agent.ThermalStatusMonitorInstrumentedTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest"
+app_classes="com.personaledge.agent.AlarmForegroundRequestTest,com.personaledge.agent.AlarmSetLiveAcceptanceTest,com.personaledge.agent.ChatHistoryCoordinatorTest,com.personaledge.agent.ConversationSummarizerTest,com.personaledge.agent.CredentialSettingsTest,com.personaledge.agent.DeviceExecutionInterlockTest,com.personaledge.agent.Fold8KakaoCommunicationSafetyAcceptanceTest,com.personaledge.agent.Fold8LifecycleAcceptanceTest,com.personaledge.agent.Fold8MediaTurnAcceptanceTest,com.personaledge.agent.Fold8OpenClawLiveAcceptanceTest,com.personaledge.agent.Fold8OpenClawSurfaceAcceptanceTest,com.personaledge.agent.Fold8PreservationSnapshotTest,com.personaledge.agent.Fold8ReminderAcceptanceTest,com.personaledge.agent.Fold8ReminderToolSelectionAcceptanceTest,com.personaledge.agent.Fold8ResponseLanguageAcceptanceTest,com.personaledge.agent.Fold8RuntimePrdAcceptanceTest,com.personaledge.agent.GroundedWebSearchJourneyTest,com.personaledge.agent.ImageAttachmentLoaderTest,com.personaledge.agent.KakaoNotificationLiveStateTest,com.personaledge.agent.KakaoNotificationLiveToolAcceptanceTest,com.personaledge.agent.KakaoReplySettingsTest,com.personaledge.agent.KoreanRouteLiveAcceptanceTest,com.personaledge.agent.MediaCaptureStagingTest,com.personaledge.agent.NetworkOfflineLiveAcceptanceTest,com.personaledge.agent.NotificationCaptureCoordinatorTest,com.personaledge.agent.NotificationCaptureSinkTest,com.personaledge.agent.NotificationPostReaderTest,com.personaledge.agent.OpenClawRemoteUiAcceptanceTest,com.personaledge.agent.PublicPersonSearchLiveAcceptanceTest,com.personaledge.agent.StoredNotificationGatewayTest,com.personaledge.agent.ThermalStatusMonitorInstrumentedTest,com.personaledge.agent.WeatherLiveToolAcceptanceTest,com.personaledge.agent.WebSearchLiveToolAcceptanceTest,com.personaledge.agent.WebSearchProviderLiveAcceptanceTest"
 data_classes="com.personaledge.core.data.AgentPlanCheckpointRepositoryTest,com.personaledge.core.data.CommitmentProposalRepositoryTest,com.personaledge.core.data.ConversationRepositoryTest,com.personaledge.core.data.MemoryRepositoryTest,com.personaledge.core.data.NotificationRepositoryBoundsTest,com.personaledge.core.data.PersonalEdgeDatabaseMigrationTest,com.personaledge.core.data.ReminderRepositoryTest,com.personaledge.core.data.SecretVaultTest,com.personaledge.core.data.SecureSecretFileSystemTest,com.personaledge.core.data.SettingsRepositoryTest,com.personaledge.core.data.TurnOutcomeRepositoryTest,com.personaledge.core.data.UserDataTransferRepositoryTest"
 diagnostics_classes="com.personaledge.core.diagnostics.AndroidDiagnosticsInstrumentationTest"
 llm_classes="com.personaledge.core.llm.LiteRtCacheDirectoryTest,com.personaledge.core.llm.LiteRtConversationPolicyTest,com.personaledge.core.llm.ModelArtifactStoreTest"
 tools_classes="com.personaledge.core.tools.AndroidAlarmGatewayTest,com.personaledge.core.tools.AndroidCalendarGatewayTest,com.personaledge.core.tools.SqliteActionLedgerTest"
 
-run_suite app com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner 151 30 30 \
+run_suite app com.personaledge.agent.test/androidx.test.runner.AndroidJUnitRunner 160 36 36 \
     -e class "$app_classes"
 run_suite data com.personaledge.core.data.test/androidx.test.runner.AndroidJUnitRunner 90 0 0 \
     -e class "$data_classes"
@@ -276,8 +276,8 @@ run_suite llm com.personaledge.core.llm.test/androidx.test.runner.AndroidJUnitRu
 run_suite tools com.personaledge.core.tools.test/androidx.test.runner.AndroidJUnitRunner 24 0 0 \
     -e class "$tools_classes"
 
-[[ "$total_selected" == "279" ]] || fail "aggregate reviewed test count changed: $total_selected"
-[[ "$total_skipped" == "30" || "$total_skipped" == "31" ]] ||
+[[ "$total_selected" == "288" ]] || fail "aggregate reviewed test count changed: $total_selected"
+[[ "$total_skipped" == "36" || "$total_skipped" == "37" ]] ||
     fail "aggregate guarded-skip count changed: $total_skipped"
 
 cat <<EOF

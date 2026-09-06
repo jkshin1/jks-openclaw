@@ -2,6 +2,7 @@ package com.personaledge.agent
 
 import com.personaledge.core.data.AgentSettings
 import java.util.EnumMap
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
@@ -19,6 +20,7 @@ internal enum class OwnerConsentFeature {
     COMMITMENT_PROPOSALS,
     PROACTIVE_ROUTE_PLANNING,
     DAILY_BRIEF,
+    OPENCLAW_GATEWAY,
 }
 
 internal enum class OwnerConsentMutationOutcome {
@@ -44,7 +46,7 @@ class OwnerConsentInterlock internal constructor() {
     /** Synchronous by design: callers close the gate before launching any persistence coroutine. */
     internal fun requestEnabled(feature: OwnerConsentFeature, enabled: Boolean): SettingRequest {
         val state = state(feature)
-        return synchronized(state.requestLock) {
+        val request = synchronized(state.requestLock) {
             SettingRequest(feature = feature, enabled = enabled).also { request ->
                 state.latestRequest.set(request)
                 // Every uncommitted mutation is fail-closed. This matters for two rapid enable
@@ -53,6 +55,8 @@ class OwnerConsentInterlock internal constructor() {
                 state.disableRequested.set(true)
             }
         }
+        state.notifyObservers()
+        return request
     }
 
     /** Serializes writes per feature and applies only the latest request to the process gate. */
@@ -61,7 +65,7 @@ class OwnerConsentInterlock internal constructor() {
         persist: suspend (OwnerConsentFeature, Boolean) -> Unit,
     ): OwnerConsentMutationOutcome {
         val state = state(request.feature)
-        return state.mutex.withLock {
+        val outcome = state.mutex.withLock {
             if (!isLatest(state, request)) return@withLock OwnerConsentMutationOutcome.SUPERSEDED
             try {
                 persist(request.feature, request.enabled)
@@ -83,11 +87,26 @@ class OwnerConsentInterlock internal constructor() {
                 }
             }
         }
+        if (outcome == OwnerConsentMutationOutcome.APPLIED) state.notifyObservers()
+        return outcome
     }
 
     /** Effective consent is always the intersection of durable state and the immediate gate. */
     internal fun allowed(feature: OwnerConsentFeature, durableEnabled: Boolean): Boolean =
         durableEnabled && !state(feature).disableRequested.get()
+
+    /**
+     * Registers a content-free process-gate observer.
+     *
+     * This exists for resources such as an open WebSocket that must close synchronously when the
+     * owner begins a disable mutation. Durable settings remain the other half of the gate; an
+     * observer notification alone never grants access.
+     */
+    internal fun observe(feature: OwnerConsentFeature, observer: () -> Unit): AutoCloseable {
+        val observers = state(feature).observers
+        observers += observer
+        return AutoCloseable { observers -= observer }
+    }
 
     private fun isLatest(state: FeatureState, request: SettingRequest): Boolean =
         synchronized(state.requestLock) { state.latestRequest.get() === request }
@@ -106,6 +125,11 @@ class OwnerConsentInterlock internal constructor() {
         val requestLock = Any()
         val disableRequested = AtomicBoolean(false)
         val latestRequest = AtomicReference<SettingRequest?>()
+        val observers = CopyOnWriteArraySet<() -> Unit>()
+
+        fun notifyObservers() {
+            observers.forEach { observer -> runCatching(observer) }
+        }
     }
 }
 
@@ -132,4 +156,5 @@ internal fun AgentSettings.ownerConsentEnabled(feature: OwnerConsentFeature): Bo
         OwnerConsentFeature.COMMITMENT_PROPOSALS -> commitmentProposalsEnabled
         OwnerConsentFeature.PROACTIVE_ROUTE_PLANNING -> proactiveRoutePlanningEnabled
         OwnerConsentFeature.DAILY_BRIEF -> dailyBriefEnabled
+        OwnerConsentFeature.OPENCLAW_GATEWAY -> openClawGateway.enabled
     }

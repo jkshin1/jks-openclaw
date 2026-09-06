@@ -232,6 +232,86 @@ class GroundedWebSearchJourneyTest {
         )
         assertEquals(TurnOutcomeState.ANSWER_COMPLETE, correctionOutcome.state)
 
+        // Reproduce the owner's full historical failure transcript across the storage, recovery,
+        // routing, evidence, and answer boundaries. The intermediate answer-review turn is closed
+        // conversation glue; it must not become a provider query or hide the original subject.
+        val reviewConversation = requireNotNull(
+            history.ensureConversation(null, OFFICEHOLDER_REQUEST),
+        )
+        val reviewSourceOrdinal = requireNotNull(
+            history.recordOrdinal(
+                reviewConversation,
+                MessageRole.USER,
+                OFFICEHOLDER_REQUEST,
+            ),
+        )
+        history.record(
+            reviewConversation,
+            MessageRole.ASSISTANT,
+            "실시간 정보를 제공할 수 없습니다.",
+        )
+        history.record(reviewConversation, MessageRole.USER, "웹 검색 할 수 있잖아")
+        history.record(
+            reviewConversation,
+            MessageRole.USER,
+            "웹검색을 해서 첫질문에 대한 답을 해줘",
+        )
+        history.record(
+            reviewConversation,
+            MessageRole.TOOL_RECEIPT,
+            "웹 검색을 완료했습니다.",
+        )
+        history.record(
+            reviewConversation,
+            MessageRole.ASSISTANT,
+            "대한민국 헌법상 대통령의 임기는 5년입니다.",
+        )
+        history.record(
+            reviewConversation,
+            MessageRole.USER,
+            "내가 뭘 물어봤지? 위 대답이 적절해?",
+        )
+        history.record(
+            reviewConversation,
+            MessageRole.ASSISTANT,
+            "현재 대통령의 이름을 물으셨고, 위 답변은 적절하지 않았습니다.",
+        )
+        val reviewRetryPrompt = "대통령 이름을 찾기 위해 웹검색을 더 잘해봐"
+        val reviewRetryRequest = requireNotNull(
+            history.contextualWebSearchRequestForFollowUp(
+                reviewConversation,
+                reviewRetryPrompt,
+            ),
+        )
+        assertEquals(reviewSourceOrdinal, reviewRetryRequest.userMessageOrdinal)
+        runtime.enqueueAnswer("현재 대한민국 대통령은 홍길동입니다.")
+        val reviewRetryTraceStart = trace.size
+        val reviewRetry = runStoredTurn(
+            controller = controller,
+            conversationId = reviewConversation,
+            prompt = reviewRetryPrompt,
+            turnId = REVIEW_RETRY_TURN_ID,
+            contextualRequest = reviewRetryRequest,
+        )
+
+        assertEquals(
+            listOf(
+                "search:$OFFICEHOLDER_QUERY",
+                "model:$REVIEW_RETRY_TURN_ID",
+            ),
+            trace.drop(reviewRetryTraceStart),
+        )
+        assertTrue(reviewRetry.answer.startsWith("현재 대한민국 대통령은 홍길동입니다."))
+        assertTrue(reviewRetry.answer.contains(OFFICIAL_OFFICEHOLDER_URL))
+        assertFalse(reviewRetry.answer.contains("임기는 5년"))
+        val reviewRetryOutcome = requireNotNull(
+            database.turnOutcomeDao().find(REVIEW_RETRY_TURN_ID),
+        )
+        assertEquals(
+            reviewSourceOrdinal,
+            reviewRetryOutcome.recoverySourceUserMessageOrdinal,
+        )
+
         val summaryPrompt = "검색결과를 정리해서 요약해줘"
         val priorResult = requireNotNull(
             history.priorWebResultForFollowUp(filmConversation, summaryPrompt),
@@ -585,5 +665,6 @@ class GroundedWebSearchJourneyTest {
         const val FILM_TURN_ID = "turn-10000000-0000-0000-0000-000000000002"
         const val CORRECTION_TURN_ID = "turn-10000000-0000-0000-0000-000000000003"
         const val SUMMARY_TURN_ID = "turn-10000000-0000-0000-0000-000000000004"
+        const val REVIEW_RETRY_TURN_ID = "turn-10000000-0000-0000-0000-000000000005"
     }
 }

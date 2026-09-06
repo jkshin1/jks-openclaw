@@ -1,7 +1,349 @@
 # Project status
 
-Last reviewed: 2026-09-01 against the current `versionCode=11`,
+> **2026-09-06 — development stopped. This Android app is retired.**
+>
+> The owner retired the app and the product problem it solved. Personal schedule, reminder, alarm,
+> and Kakao notification tooling is retired with it and is not being rebuilt elsewhere. Assistant
+> work continues on the already-hardened macOS OpenClaw Gateway, reached through Telegram instead
+> of through this app, and aimed at different work (coding, research, operations monitoring, media
+> and document processing) that suits Mac hardware.
+>
+> The final source state is tagged `rc11-final`. Nothing below is retracted: the evidence ledger and
+> its Fold8 receipts remain accurate for the exact artifacts they name. It is kept as a record, not
+> as a plan. The open acceptance work listed here and in [HANDOFF.md](HANDOFF.md) will not be
+> completed, and the promotion gate below is closed unfinished.
+>
+> Two `core:openclaw` corrections landed on 2026-09-06 immediately before the stop, so the tag
+> includes them. Both came from diffing the installed OpenClaw 2026.8.1 against the then-current
+> 2026.9.2 release. The hello check now accepts an explicit set of qualified releases
+> (`2026.8.1`, `2026.9.2`) rather than one hard-pinned string, and the chat error envelope accepts
+> 2026.9.x's added optional `errorDetail` object without reading its contents, so a real remote
+> failure is no longer misreported as a protocol violation. `core:openclaw` passed 104 JVM cases in
+> both variants with zero failures after the change. Wire protocol v4 itself is unchanged between
+> those releases; the protocol constants file is byte-identical.
+
+**2026-09-05 stopping point:** the owner chose to stop after one successful actual Fold8 Korean
+answer. HTTPS/pairing and the one request passed with local counts preserved. Cancel/restart,
+health extension activation, Android proposal integration, recovery retry and24-hour observation
+remain. See [REMOTE_AGENT_RESUME.md](REMOTE_AGENT_RESUME.md) for current evidence and exact restart scope.
+
+Last reviewed: 2026-09-05 against the current `versionCode=11`,
 `versionName=1.0.0-rc11` working tree.
+
+## 2026-09-05 optional OpenClaw / GLM remote-agent delta
+
+The local LiteRT model remains the shipped path. A new, default-off OpenClaw client scaffold adds a
+separate remote-agent boundary rather than silently replacing or automatically routing around the
+local model. Durable enablement, an HTTPS or loopback endpoint, system or pinned-certificate trust,
+and both a process-local owner-consent gate and crash-durable revocation barrier are all required
+before it can connect. The OpenClaw-only barrier starts blocked and eagerly reconciles a fixed,
+content-free `noBackupFilesDir` marker before any future coordinator can publish. Disable publishes
+and fsyncs the marker before DataStore, removes it only after a durable false commit, and leaves it
+blocking on failure; if publication itself cannot be proved, disable still best-effort commits
+false but reports failure and remains blocked. Startup uncertainty also repairs toward false.
+Unique-token CAS, serialization, and epochs prevent stale enable/disable completion from clearing a
+newer intent. Credentials and the device identity are endpoint-bound records in the Android
+Keystore-backed vault;
+compare-and-set storage and rollback prevent a stale connection epoch from overwriting a newer
+owner choice.
+
+`core:agent` now defines bounded start/status/event/wait/cancel contracts, and `core:openclaw`
+implements the pinned OpenClaw 2026.8.1 protocol-v4 projection. Each proposed remote turn uses a
+fresh one-shot model-run session, no model tools, no delivery side effect, and bounded output,
+event, and timeout limits. The wire parser preserves only bounded structured connect codes and
+retry policy, including the actual nested `error.details.code` used by 2026.8.1; remote prose,
+endpoint text, tokens, prompts, outputs, and device metadata do not enter public errors or object
+rendering. Foreground loss or disable seals new requests, enqueues at most 64 best-effort
+`chat.abort` frames for nonterminal reservations, then closes the socket. Queueing is not reported
+as remote cancellation: abrupt loss can still leave provider cost and OpenClaw SQLite/WAL residue
+until the run's maximum 30-minute timeout.
+
+The app coordinator is now wired into the Activity/ViewModel/Compose flow with explicit local/remote
+selection, masked endpoint/token setup, connection consent, progress/answer/cancel, and foreground
+revocation. Existing local history, summary, long-term memory, credential vault, and Tool execution
+remain the authoritative implementations; the remote route currently sends only its current
+question plus any quotes the owner ticked. See [`FEATURE_REUSE_AUDIT.md`](FEATURE_REUSE_AUDIT.md)
+for the owner's overlap audit.
+
+**2026-09-06 owner change: no per-question send approval, and one shared transcript.** At the
+owner's instruction the per-question external-disclosure dialog is removed: selecting the remote
+engine and consenting to the connection is the standing decision, so the send control dispatches
+the visible question directly. Everything else about a send is unchanged — the question and the
+ticked quotes are still exactly what the owner typed and selected, the selection is still
+revalidated against current storage and memory consent immediately before dispatch, an edited
+prompt, expired memory, withdrawn consent, endpoint change or backgrounding still stops a send
+already in flight, and a connection without durable consent still cannot carry a question. What
+the owner loses is the last look at the exact composed outbound text before it leaves the device;
+the connection-consent dialog now states that plainly. The remote turn is also no longer
+process-memory only: its typed question and received answer are written to the same Room
+conversation the local model appends to, through a narrow `OpenClawRemoteTranscript` seam, so
+restart, history, transfer, later context, and summarization treat both engines identically. The
+question is stored before the run starts (an interrupted run keeps it) and whatever answer text
+arrived is stored at any terminal outcome, including a cancelled or connection-lost partial. Only
+the typed question is stored, never the composed quotes, because each quote is already a row of
+its own. A failed write is reported and never claimed as stored: the screen keeps showing the
+unstored rows. The remote pane now renders that shared conversation with the same `ChatTranscript`
+composable as the local screen.
+
+**2026-09-06 Fold8 receipt for this change.** The owner approved the physical update. The
+read-only `preflight-fold8-release-update.sh` passed first on SM-F971N (`R5KL801YXWE`, API 37,
+arm64-v8a) with the unchanged release certificate
+`e0f66d4b4c8064db6a9d46097d77903cf13fbccacbdfc6e49e9f7c380b8e457a`. Same-certificate
+`adb install -r` of the owner-signed release pair succeeded; the pulled-back `base.apk` hash equals
+the local build exactly (`45ee97fc289a3805a7a245b5941c455b093b4fe6cebcd5f333d5bc87f241a548`, test
+APK `f2b3b3dff2eb549bb3cdbe653760415404fdb8a47e137307227c449a975dd475`) and `firstInstallTime`
+stayed `2026-08-23 18:10:37`. Content-free snapshots before and after installation were identical:
+23 conversations, 104 messages, 0 memories, 57 notifications, three credentials present, the
+3,659,530,240-byte model, Kakao reply disabled, settings digest
+`e5d5d2c4353bff258d49ed120e1e569f097af8892146e262a9133696823787cd`.
+
+`Fold8OpenClawSurfaceAcceptanceTest` passed 1/1 in 0.967 s without contacting a provider, so the
+new pane renders and returns to local on the real device. The new opt-in
+`Fold8OpenClawLiveAcceptanceTest#oneSendNeedsNoApprovalAndIsStoredInTheSharedConversation` then
+passed 1/1 in 8.767 s over Tailscale HTTPS using the stored device credential, so it added no
+pairing. Before authorizing it, the Gateway's own configuration was read and independently
+confirmed to cap `openrouter/z-ai/glm-5.3-flash` at 2,048 output tokens. It spent exactly one
+provider call: one send with no approval step in the path, a 55-byte Korean answer meeting the
+fixed 대한민국/수도/서울/REMOTE-KO-OK claims, `questionStored` and `answerStored` both true, and a
+Room read-back showing the last two rows of the active conversation are the owner's typed question
+followed by exactly the received answer. Exactly two message rows and zero new conversations were
+added, and the memory count was unchanged.
+
+The durability the old design could not provide was then verified directly: after `am force-stop`,
+a fresh process reported 106 messages against the 104 baseline, with conversations, memories,
+notifications, credentials, model size and settings digest all unchanged. Post-run platform
+thermal status was 0, the battery was 69% at 32.0 C while charging, and the app's exit history
+contained only instrumentation force-stops with no crash, ANR, or low-memory kill. The Mac Gateway
+stayed healthy on the same PID and is still listening only on loopback. This receipt covers one
+fixed short question on the stored-credential path; cancellation, network loss, process restart
+during a run, long answers, and the context-picker path on the phone remain untested. As always on
+a dirty tree, this ledger entry was written after the tested artifact was built, so rebuilding now
+changes the packaged whole-tree provenance field and therefore the APK hash; the receipt is bound
+to the named pulled-back bytes, and code equivalence must be established by comparing APK entries.
+
+**2026-09-06 Fold8 cancellation receipt, and two findings that changed the test.** Run on the same
+device and certificate after a further same-certificate update whose pulled-back hash matched
+(`f57e2f8c7890ce361a51d0ebcc481c25ef30a0b4f668a5b6d5509dba7ffc288c`).
+`Fold8OpenClawLiveAcceptanceTest#cancelsOneStartedAnswerAndStoresOnlyWhatArrived` passed 1/1 in
+6.972 s on the stored-credential path. The owner's cancel stopped the started run in **102 ms**,
+against the 60-second timeout it would otherwise have run to, and the Gateway's own log records
+`[agent] run 91687052-… ended with stopReason=aborted`. The turn stored exactly one row, its
+question, with `answerStored` false and zero answer bytes received; conversations and memory were
+unchanged.
+
+The first shape of that test could not run, and the reason is worth keeping. **This Gateway hands
+the app its answer when the run completes rather than as deltas.** The 40-item cancellation
+question therefore produced no visible text at all and simply reached its own timeout
+(`embedded run timeout … Request timed out before a response was generated`), so waiting for a
+partial answer in order to cancel it is not possible on this configuration. Nothing in the app
+buffers that text; there was none to buffer.
+
+**OpenClaw 2026.8.1 also surfaces an aborted run to the client as an error rather than an aborted
+terminal.** Reading the pinned runtime shows this is deliberate: its failover decision returns
+`action: "surface_error"` when a run's terminal is `aborted` or `timeout` with
+`source === "external"`, which is exactly our `chat.abort`. Its own log says `stopReason=aborted`
+while the `agent.wait` result the client sees reports `status: "error"`, so the app reported
+`원격 모델 실행에 실패했습니다` for a run the owner had successfully cancelled.
+
+A third observation came out of the same work. Cancelling in the first moment after a send, before
+`RemoteAgentStartResult.Started` has produced a run id, took the sealed-connection path and
+reported an unknown outcome rather than cancelling; the UI enables cancel as soon as the turn is
+running, so an owner tapping immediately reached it — and the remote run then kept costing until
+its own timeout.
+
+## 2026-09-06 resolution of all three remote findings
+
+All three were fixed and each was verified on the Fold8 against the signed release.
+
+**Long answers complete.** The Gateway takes its per-run timeout from the value this app sends in
+its start params, so the old 60 seconds was itself the cause; no Mac configuration was changed. The
+run limit is now 180 s with a 200 s observation bound, and `RemoteAgentContractLimits` already
+allowed both. Measured: the 40-item question that previously produced nothing and expired at 60 s
+completed in **120.757 s** with a 666-byte answer, stored as two rows. The absence of incremental
+deltas is unchanged and remains deliberate: this one-shot mode runs with internal session effects
+so it leaves no session residue on the Mac, and that is what suppresses live streaming. Text still
+arrives when the run completes.
+
+**A cancelled run is reported as cancelled.** The evidence used is not the error frame and not
+timing: it is the Gateway's own `chat.abort` acknowledgement, which reports `aborted: true` against
+this exact run id and is only sent for a run that was still live. `RunRecord.abortRequested` is set
+from nothing else, so a refusal, a protocol mismatch, or an `already terminal` answer all leave it
+false. When it is set, a `FAILED` terminal is read as `CANCELLED` on both paths a terminal can
+arrive by — the chat event and the `agent.wait` result. A `TIMED_OUT` terminal is deliberately not
+reinterpreted, because expiring is not being stopped. The residual limit is narrow and worth
+stating: if a run failed independently in the window between our accepted abort and its terminal,
+this labels it cancelled. Measured: cancel to terminal in **102 ms** against a 180-second timeout,
+terminal `원격 실행 취소가 확인되었습니다`, one row stored and no invented answer. This supersedes
+the paragraph above, which recorded the behaviour before the fix.
+
+**A cancel tapped before the run id exists is held.** It no longer closes the socket and reports an
+unknown outcome; the request is remembered and sent the instant start returns a run id. Measured:
+**0.842 s**, the connection stayed `CONNECTED`, the terminal was a confirmed cancellation, and one
+row was stored.
+
+Receipts, all on SM-F971N against same-certificate release updates whose pulled-back hashes matched
+(final app APK `fa4776cacfade4d638f6f5af4d2036e3b8242a71db7138f990449a58cd1812e5`) with
+`firstInstallTime` preserved at `2026-08-23 18:10:37`:
+`cancelsOneStartedAnswerAndStoresOnlyWhatArrived` 1/1 in 6.991 s,
+`holdsACancelTappedBeforeTheRunIdExists` 1/1 in 0.842 s,
+`completesALongAnswerWithinTheRaisedRunTimeout` 1/1 in 120.757 s,
+`oneSendNeedsNoApprovalAndIsStoredInTheSharedConversation` 1/1 in 10.781 s, and the provider-free
+`Fold8OpenClawSurfaceAcceptanceTest` 1/1 in 0.894 s. Host coverage adds four new JVM cases in
+`core:openclaw` for the abort rule — including that a refused abort, an unrequested abort, and a
+timeout are all left alone — and two in `app` for the held cancel. Final device state: 24
+conversations, 122 messages, 0 memories, 57 notifications, three credentials present, the
+3,659,530,240-byte model, settings digest
+`e5d5d2c4353bff258d49ed120e1e569f097af8892146e262a9133696823787cd`, thermal status 0, battery 83%
+at 32.5 C, and no crash, ANR, or low-memory exit. The conversation and message baseline moved from
+23/112 to 24/114 between sessions through ordinary owner use of the phone, not through these runs.
+
+Code equivalence for this receipt was established the way this document asks for, by comparing APK
+entries rather than reusing a whole-file hash. The APK still installed on the phone hashes exactly
+to the tested `fa4776ca…12e5` with `firstInstallTime` preserved, and rebuilding the tree after the
+documentation edits above produces `883a8fbb…dba4`, which differs from it in exactly one of 174
+entries: `assets/release-provenance.json`. Every code, resource and native entry is byte-identical,
+so the device ran precisely this source. A later snapshot confirmed the device unchanged at 24
+conversations and 122 messages, with the notification cache at 58 after one ordinary arrival.
+
+## 2026-09-06 remaining remote gates: network loss, process restart, context picker
+
+The three items that were still open after the cancellation work were all run on the Fold8 against
+app APK `be324da54e3dab32fbf2b90d0e7b77d5a58585b50a4fbfadb1b652a82bec5303`, installed by
+same-certificate update with the pulled-back hash matching and `firstInstallTime` preserved.
+
+**Network loss during a live run.** `networkLossDuringARunSealsItWithoutInventingAnAnswer` passed
+1/1 in 33.121 s. With a run in flight and its question already stored, the host disabled the
+phone's Wi-Fi and mobile data. The app sealed the run, reported `DISCONNECTED`, and used the
+uncertainty terminal — `원격 상태를 확인할 수 없습니다. 취소 완료와 과금 여부는 확인되지 않았습니다.`
+— rather than claiming a completed answer or a confirmed cancellation. One row was stored, the
+question, and no answer was invented for text that never arrived. This is the one test in this
+group that mutates device settings; both radios were restored immediately and verified back at
+`wifi=1 data=1 airplane_mode=0`, with the phone pinging the Mac's tailnet address again, after
+which `reconnectsUsingStoredDeviceCredentialWithoutBootstrap` passed 1/1 with zero submissions and
+unchanged local counts.
+
+**Process restart during a live run.** Split across two invocations so the kill is real rather than
+simulated: `startsARunLeftInFlightForTheProcessRestartCheck` passed 1/1 in 1.053 s and deliberately
+returned with the run still live, and instrumentation completion then killed the app process — the
+phone reported no pid for the package immediately afterwards. `aRunKilledWithItsProcessLeavesThe
+QuestionAndNoInventedAnswer` then passed 1/1 in 1.578 s in the fresh process: nothing reconnected on
+its own, nothing was running, no remote question or answer text was restored, the killed run's
+question was still the last transcript row, and the restart added and removed no rows. Activity
+recreation was already covered separately; this is the first receipt for an actual process death
+with a run in flight.
+
+**The context picker, proved by what reached the model.** `selectedContextIsWhatReachesTheModel`
+passed 1/1 in 29.436 s across two provider calls. The picker offered nothing until it was opened
+and preselected nothing. A first turn planted the fixed nonce `PE-CTX-7Q4M9` in the transcript; the
+second turn asked a question that does not contain that nonce and selected only the planted row as
+its reference. The 12-byte answer was exactly the nonce, so the selected quote demonstrably left
+the device — this is transmission evidence, not an assertion about the composed text. The selection
+and offered items were cleared after sending, four rows were stored across the two turns with no
+new conversation and an unchanged memory count, and each stored USER row is the owner's typed
+question rather than the quotes composed around it. Reading one offered item back across the split
+APK needed `OpenClawRemoteContextItem` public members added to the existing R8 keep allowlist; no
+production capability was broadened.
+
+Final device state: 24 conversations, 128 messages, 0 memories, 58 notifications, three credentials
+present, the 3,659,530,240-byte model, settings digest
+`e5d5d2c4353bff258d49ed120e1e569f097af8892146e262a9133696823787cd`, thermal status 0, battery 47%
+at 30.4 C, no crash, ANR, or low-memory exit, and `firstInstallTime` still `2026-08-23 18:10:37`.
+
+Storage integrity held across every failure shape observed that day — a Gateway run timeout, a
+connection sealed before the run id existed, and two abort-as-error terminals. Each stored its
+question and none stored an answer it never received, so the transcript went 106 to 112 rows across
+six provider calls with no invented content. Final state after the last run: 23 conversations,
+112 messages, 0 memories, 57 notifications, three credentials present, the 3,659,530,240-byte model,
+settings digest `e5d5d2c4353bff258d49ed120e1e569f097af8892146e262a9133696823787cd`, thermal status
+0, battery 74% at 32.3 C, and no crash, ANR, or low-memory exit.
+
+
+
+The source passed focused app unit/lint, debug/release Kotlin and Android-test compilation;
+337 app JVM cases include 17 new remote-controller cases. A further 88 core OpenClaw JVM cases
+passed, including a fix for the pinned Gateway sending presence metadata before hello and the
+immediate post-hello scheduling race. These counts are host contracts, not physical pairing or
+provider acceptance. Scoped emulator and physical evidence is recorded in
+[`REMOTE_AGENT_ACCEPTANCE.md`](REMOTE_AGENT_ACCEPTANCE.md) as each gate completes.
+
+The current Mac has an exact OpenClaw 2026.8.1 / Node 26 `personaledge` Gateway running under a
+KeepAlive LaunchAgent on `127.0.0.1` and `[::1]` port 18789. Gateway and OpenRouter credentials were
+migrated into OpenClaw's private SQLite secret store as SecretRefs; the legacy plaintext profile
+file and temporary key-transfer material were removed, and the official secret audit reported no
+plaintext, unresolved, shadowed, or legacy residue. Wildcard Tool denial, token authentication,
+model/plugin allowlists, and the GLM-5.3 Flash-only model policy are active.
+
+The repository now contains backup-first install/adopt/harden/verify/audit/watchdog/rollback,
+one-shot paid-smoke, and Tailscale Serve assets under `scripts/openclaw`; their isolated deployment
+suite and all 33 host-script tests passed. On 2026-09-05 the owner-approved managed adoption
+completed after correcting two installed-CLI probe contract mismatches: local token-auth CLI calls
+omit device identity and cannot use the optional principal-scoped create idempotency key, while
+incognito creation requires a canonical lower-case dashboard incognito key. The empty probe now
+dispatches once with deletion armed before sending; model-run idempotency is unchanged. The updated
+deployment asset regression passed, and the live apply proved `tools.effective=0`, deleted its
+probe, and atomically published the schema-4 final deployment manifest with no candidate remaining.
+The Gateway was healthy at PID 9290; the five-minute watchdog completed its first run with exit 0
+and a healthy policy/secrets/plugins receipt. The verified pre-adoption backup is under
+`OpenClawBackups/adoption-20260905T120932Z`, and the old workspace is retained at
+`quarantine/adopt-20260905T120932Z/workspace-before-adopt`. Three earlier temporary hardening
+recovery copies were removed under the owner's prior secret-cleanup approval after this success;
+persistent backups and quarantines remain.
+
+The deep security audit completed with zero critical findings, one warning, and one informational
+finding (`operations/security-audit-20260905T121632Z.json`). Its warning is a deep Gateway probe
+failure due to missing `operator.read` scope; independent token-auth health checks pass, but the
+deep probe itself did not pass. Doctor returned four warnings and no errors across 59 checks,
+including one auth-profile metadata warning despite the separate configured OpenRouter SecretRef.
+The audit wrapper now distinguishes validated warning-only doctor exit 1 from malformed/fatal or
+error-bearing results. Eight new isolated regressions cover that boundary. The first suite run
+after those changes exited 1 without a retained diagnostic; subsequent traced and fresh untraced
+runs passed, so the unexplained first result is not counted as a pass.
+
+The owner approved one fixed, tool-free OpenRouter connection test (`thinking=low`, 2,048 output
+tokens, 60-second run timeout). The first local attempt,
+`personal-edge-glm-smoke-f9a980cc-4da9-4fd8-8b0b-63edfe7fe649`, failed in sandbox provisioning with
+Docker `ENOENT`, before the pinned runner reaches provider inference. Colima 0.10.3 and Docker CLI
+29.8.0 were then installed without changing Node/OpenClaw. A new `personaledge` VM uses VZ,
+2 CPUs, 2 GiB memory, 10 GiB data/root disks, and only the writable profile `sandboxes` host mount.
+The pinned documentation's sandbox Dockerfile was built without a repository build context;
+the ARM64 image is `sha256:b073bd6e1ed8d897e79b5268a40abe24de29794ec5dc9a62d0f039dc6d8736e2`.
+A non-network, read-only-root, non-root container preflight passed. The owner-login LaunchAgent
+`com.personaledge.colima-runtime` is running (first run, PID 61551), and Docker server 29.5.2
+responds. This does not yet prove reboot, Docker-crash recovery, or sustained availability.
+
+The resumed smoke, `personal-edge-glm-smoke-746b967c-7855-4a56-a8d6-eefa13aa283e`, dispatched exactly
+one logged POST to OpenRouter `/api/v1/chat/completions` at 2026-09-05 12:26:43 UTC. It returned HTTP
+404 in 252 ms: `No endpoints found that can handle the requested parameters`. The Gateway's generic
+`model_not_found` wrapper is not sufficient to conclude that the model id is invalid: public model
+and ZDR endpoint lists include GLM-5.3 Flash. At that historical point, precise causation was unresolved and no successful answer existed.
+The later controlled differential isolated `max_completion_tokens`; the narrow GLM route patch
+then passed the 13:39 UTC Gateway smoke with an exact-model reply, zero tools, and zero run-owned
+SQLite rows after cleanup. See `REMOTE_AGENT_ACCEPTANCE.md`. Failed-call billing was not independently checked. The initial approval's one actual provider request was used. The owner subsequently authorized
+bounded test calls without repeated approval; the live differential is recorded below. Strict parameter checking, ZDR, and data-collection denial remain
+unchanged. Read-only exact-id checks found zero run-owned logical SQLite rows for both attempts;
+this is not secure erase. Terminal receipts are under
+`operations/glm-model-run-terminal-20260905T121719Z.json` and
+`operations/glm-model-run-terminal-20260905T122638Z.json`. A fresh final health check returned
+`ok=true` with both required plugins loaded and no errors, and the Gateway still listens only on
+IPv4/IPv6 loopback.
+
+A subsequent offline reconstruction used the pinned host capability resolver, OpenRouter stream
+wrapper, and completion adapter with a dummy key and the fixed marker. Node denied network access;
+one intercepted request contained only `max_completion_tokens`, `messages`, `model`, `provider`,
+`reasoning`, and `stream`, with the expected 2,048-token cap, `low` effort, and unchanged routing
+policy. No `store`, `parallel_tool_calls`, or tools were serialized. This is reconstructed
+provider-wrapper evidence, not a capture of the original Gateway POST or a replay of its complete
+pipeline. This reconstruction alone did not prove the unsupported field; the later paid differential did. The real key remains a configured, resolved SecretRef; re-entering it is not indicated
+by the observed 404.
+
+The owner installed and logged in Tailscale on Mac and Fold8; both now report online in the same
+tailnet. `pmset autorestart=1`, `sleep=0`, and `standby=0` were read back after owner administrator
+authentication. HTTPS Serve and actual pairing are separate gates; no 24-hour soak has completed. FileVault also means an unattended cold boot cannot make this user LaunchAgent available
+before owner login. The revised schema-2 observation soak also checks dedicated Docker/Colima/daemon generations.
+A real idle Colima recovery drill found the normal stopped-VM Docker context transition was not
+accepted; fallback restored the runtime and a bounded correction is in progress. No complete
+24-hour observation exists yet. Gateway provider inference has passed; real Fold8 inference and
+the observed availability window remain distinct acceptance gates.
 
 ## 2026-09-01 photo and voice input delta
 
@@ -116,14 +458,36 @@ Three findings came out of it, and all three changed the code.
    actually enabled, the runtime fails a turn closed when it carries a modality the engine did not
    load, and the setting applies from the next app start exactly as the backend choice does.
 
-**Still not validly measured on current source.** The audio front end was historically wired — the `static_audio_encoder` and
-`audio_adapter` caches load and the native mel filterbank runs at 16 kHz with 128 channels — but
-its context cost is unmeasured. The first receipt compared accumulated totals in one shared
-conversation and materially different image/audio prompts; that comparison was invalid, its audio
-number is discarded, and the roughly 220-token image number is not an exact cost. The corrected
-gate gives every control/media observation a fresh runtime and exactly one turn, compares paired
-before/after increments for an identical prompt, and caps both answers at 32 tokens below either
-required delta. It compiles but has not run on the Fold8. Korean transcription accuracy, the camera and picker flows through the
+**Measured on the Fold8, 2026-09-01.** The corrected gate ran and passed, 1 case in 82.714 s on
+the CPU backend. Every control and media observation got a newly initialized runtime and exactly
+one turn, `getTokenCount()` was sampled immediately before and after that turn, and both answers
+were capped at 32 decode tokens so answer-length variation could not reach either threshold. All
+four runtimes loaded the same `vision_encoder`, `vision_adapter`, `static_audio_encoder`, and
+`audio_adapter` caches, so configuration cannot explain the difference between a control and its
+paired media turn.
+
+| observation | init | turn | TTFT | context tokens | answer |
+|---|---|---|---|---|---|
+| image control | 1,158 ms | 14,056 ms | 12,989 ms | 648 | 23 code points |
+| image | 1,583 ms | 23,691 ms | 23,114 ms | 906 | 6 code points |
+| audio control | 1,148 ms | 14,137 ms | 13,065 ms | 610 | 21 code points |
+| audio, 15 s clip | 1,052 ms | 20,587 ms | 19,822 ms | 984 | 19 code points |
+
+One image cost **258 context tokens** against the documented 256, and a 15-second clip cost
+**374 tokens**, or 24.93 per second against the documented 25. Both published figures are therefore
+confirmed on this artifact rather than carried as documentation. The image turn again returned
+exactly the six digits rendered on the synthetic card, and no turn produced a Tool call. Battery
+moved 64% to 65% while charging and temperature 31.0 C to 32.2 C across the run.
+
+Owner state was untouched: content-free preservation snapshots before and after were identical at
+20 conversations, 95 messages, 48 notifications, 0 memories, three credentials present, the
+3,659,530,240-byte model, and settings digest
+`af13c42b582270e1e2fea4bdcdfc0224f68d6fddc4d6b6a5ef087f1adab3a5fc`. The pulled-back `base.apk`
+hash equalled the local build (`e20d4b42...0396`) and `firstInstallTime` stayed
+`2026-08-23 18:10:37`.
+
+The earlier roughly 220-token image figure came from an invalid comparison and is superseded by the
+258 measured here. Korean transcription accuracy, the camera and picker flows through the
 production ViewModel path, sustained-media thermal behaviour, and the fold/DeX layouts for the new
 composer controls all remain untouched. There is no GPU media path on this device to measure.
 

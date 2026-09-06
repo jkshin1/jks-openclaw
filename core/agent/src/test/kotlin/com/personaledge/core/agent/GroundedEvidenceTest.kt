@@ -263,6 +263,44 @@ class GroundedEvidenceTest {
     }
 
     @Test
+    fun `latest version search rejects help prose and answers with the identified release`() {
+        val plan = WebSearchAnswerPolicy.prepare(
+            query = "Android 최신 버전",
+            result = WebSearchResult(
+                provider = WebSearchProvider.TAVILY,
+                hits = listOf(
+                    WebSearchHit(
+                        title = "Android 버전 확인 및 업데이트",
+                        link = "https://support.example/android/version-help",
+                        snippet = "설정 앱에서 Android 버전을 확인하고 업데이트할 수 있습니다.",
+                    ),
+                    WebSearchHit(
+                        title = "Android 17 release",
+                        link = "https://developer.example/android/17",
+                        snippet = "Android 17은 현재 최신 안정 버전입니다.",
+                    ),
+                ),
+            ),
+            intent = WebSearchAnswerIntent.GENERAL,
+        )
+
+        assertEquals(
+            listOf("https://developer.example/android/17"),
+            plan.hits.map(WebSearchHit::link),
+        )
+        assertNull(
+            WebSearchAnswerPolicy.answerFromModelOrNull(
+                plan,
+                "Android 버전은 설정 앱에서 확인할 수 있습니다.",
+            ),
+        )
+        val answer = WebSearchAnswerPolicy.fallbackAnswer(plan)
+        assertTrue(answer.startsWith("현재 Android의 최신 버전은 17입니다."))
+        assertFalse(answer.contains("설정 앱"))
+        assertTrue(answer.contains("https://developer.example/android/17"))
+    }
+
+    @Test
     fun `web synthesis enforces english one sentence owner contract`() {
         val plan = WebSearchAnswerPolicy.prepare(
             query = "OpenAI latest news",

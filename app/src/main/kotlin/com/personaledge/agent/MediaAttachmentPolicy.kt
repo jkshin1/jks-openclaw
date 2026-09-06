@@ -33,6 +33,14 @@ internal object MediaAttachmentPolicy {
     /** Below this an image carries no legible detail and is refused rather than upscaled. */
     const val MIN_EDGE_PIXELS: Int = 32
 
+    /**
+     * Long edge of the composer preview thumbnail.
+     *
+     * Small on purpose: this exists so the owner can see which photo is attached, and at 128 px it
+     * costs about 64 KB of memory rather than carrying a second copy of the payload around.
+     */
+    const val PREVIEW_EDGE_PIXELS: Int = 128
+
     /** Guards against a decoder-reported size that no real photo has. */
     const val MAX_SOURCE_EDGE_PIXELS: Int = 20_000
 

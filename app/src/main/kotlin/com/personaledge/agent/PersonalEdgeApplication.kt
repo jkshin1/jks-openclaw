@@ -53,6 +53,9 @@ class PersonalEdgeApplication : Application() {
         channel.recordHistoricalExits()
         channel.recordResourceSnapshot()
         if (CandidateProcessPolicy.providerIntegrationsEnabled(BuildConfig.CANDIDATE_MODEL_LAB)) {
+            // This performs only app-private marker/DataStore recovery. It does not create a
+            // Gateway connection; any future coordinator must also require the recovery barrier.
+            container.startOpenClawGatewayConsentRecovery()
             ReminderWorkBootstrap.start(this)
             ensureCalendarReconciliationObserver()
         }

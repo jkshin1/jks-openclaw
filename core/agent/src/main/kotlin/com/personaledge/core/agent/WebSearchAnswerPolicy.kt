@@ -24,6 +24,8 @@ internal class WebSearchAnswerPlan(
     val intent: WebSearchAnswerIntent,
     hits: List<WebSearchHit>,
     val officeholderName: String? = null,
+    /** Release identified from the evidence for a `<subject> 최신 버전` query. */
+    val latestVersion: String? = null,
     val responseContract: WebSearchResponseContract = WebSearchResponseContract(),
 ) {
     val hits: List<WebSearchHit> = hits.toList()
@@ -70,10 +72,25 @@ internal object WebSearchAnswerPolicy {
         } else {
             null
         }
+        // A release question is answerable only from a hit that actually names a release. Help
+        // pages that repeat the subject and the word "버전" score well on topic overlap yet answer
+        // a different question, so they are dropped rather than ranked below.
+        val latestVersion = if (intent == WebSearchAnswerIntent.CURRENT_OFFICEHOLDER) {
+            null
+        } else {
+            resolveLatestVersion(ranked)
+        }
         val selectedCandidates = when {
-            intent != WebSearchAnswerIntent.CURRENT_OFFICEHOLDER -> ranked
-            officeholderName == null -> emptyList()
-            else -> ranked.filter { candidate -> candidate.officeholderName == officeholderName }
+            intent == WebSearchAnswerIntent.CURRENT_OFFICEHOLDER ->
+                if (officeholderName == null) {
+                    emptyList()
+                } else {
+                    ranked.filter { candidate -> candidate.officeholderName == officeholderName }
+                }
+
+            WebSearchAnswerability.latestVersionQueryOrNull(query) == null -> ranked
+            latestVersion == null -> emptyList()
+            else -> ranked.filter { candidate -> candidate.latestVersion == latestVersion }
         }
         val selected = selectedCandidates
             .map(ScoredHit::hit)
@@ -84,6 +101,7 @@ internal object WebSearchAnswerPolicy {
             intent = intent,
             hits = selected,
             officeholderName = officeholderName,
+            latestVersion = latestVersion,
             responseContract = responseContract,
         )
     }
@@ -181,6 +199,13 @@ internal object WebSearchAnswerPolicy {
             val personName = probablePersonName(plan.query)
             if (personName != null && personName !in body) return null
         }
+        if (WebSearchAnswerability.latestVersionQueryOrNull(plan.query) != null) {
+            // "설정 앱에서 확인할 수 있습니다" is a true sentence that answers a different
+            // question, so the release itself has to appear in the first sentence.
+            val requiredVersion = plan.latestVersion ?: return null
+            val firstSentence = firstSentenceOrNull(body) ?: return null
+            if (requiredVersion !in firstSentence) return null
+        }
         if (plan.intent == WebSearchAnswerIntent.CURRENT_OFFICEHOLDER) {
             val requiredName = plan.officeholderName ?: return null
             val request = WebSearchAnswerability.currentOfficeholderQueryOrNull(plan.query)
@@ -225,6 +250,25 @@ internal object WebSearchAnswerPolicy {
                 return contractFailureAnswer(plan)
             }
             return appendTrustedFooter(body, plan)
+        }
+        val latestVersionQuery = WebSearchAnswerability.latestVersionQueryOrNull(plan.query)
+        if (latestVersionQuery != null && plan.hits.isNotEmpty()) {
+            val version = plan.latestVersion
+            if (version != null &&
+                plan.responseContract.exactSentenceCount.let { it == null || it == 1 }
+            ) {
+                // App-authored rather than a snippet quote: the selected page states the release
+                // in its own wording, and the owner asked a direct question.
+                val body = when (plan.responseContract.language) {
+                    WebSearchResponseContract.Language.KOREAN ->
+                        "현재 ${latestVersionQuery.subject}의 최신 버전은 ${version}입니다."
+
+                    WebSearchResponseContract.Language.ENGLISH ->
+                        "The public evidence identifies $version as the latest " +
+                            "${latestVersionQuery.subject} release."
+                }
+                return appendTrustedFooter(body, plan)
+            }
         }
         if (plan.hits.isEmpty()) {
             return contractFailureAnswer(plan)
@@ -369,6 +413,12 @@ internal object WebSearchAnswerPolicy {
         } else {
             null
         }
+        val latestVersion = if (intent == WebSearchAnswerIntent.CURRENT_OFFICEHOLDER) {
+            null
+        } else {
+            WebSearchAnswerability.latestVersionEvidenceOrNull(query, hit)
+                ?.version
+        }
 
         val requiredMatches = when {
             relevance.significantTermCount == 0 -> 0
@@ -393,8 +443,13 @@ internal object WebSearchAnswerPolicy {
             hit = hit,
             officeholderName = officeholderEvidence?.name,
             authoritative = officeholderEvidence?.authoritative == true,
+            latestVersion = latestVersion,
         )
     }
+
+    /** One consistent release across the selected evidence, or nothing. Conflicts fail closed. */
+    private fun resolveLatestVersion(candidates: List<ScoredHit>): String? =
+        candidates.mapNotNull(ScoredHit::latestVersion).distinct().singleOrNull()
 
     private fun resolveCurrentOfficeholderName(candidates: List<ScoredHit>): String? {
         val authoritativeNames = candidates.asSequence()
@@ -652,6 +707,7 @@ internal object WebSearchAnswerPolicy {
         val hit: WebSearchHit,
         val officeholderName: String?,
         val authoritative: Boolean,
+        val latestVersion: String? = null,
     )
 
     private data class SentenceEvidence(

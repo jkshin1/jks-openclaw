@@ -21,6 +21,20 @@ class CurrentOfficeholderEvidence internal constructor(
         "CurrentOfficeholderEvidence(authoritative=$authoritative, name=<redacted>)"
 }
 
+/** App-canonical latest-release query: one public subject plus an explicit release marker. */
+class LatestVersionQuery internal constructor(
+    val subject: String,
+) {
+    override fun toString(): String = "LatestVersionQuery(subject=<redacted>)"
+}
+
+/** A release identifier one bounded hit directly attributes to the requested subject. */
+class LatestVersionEvidence internal constructor(
+    val version: String,
+) {
+    override fun toString(): String = "LatestVersionEvidence(version=<redacted>)"
+}
+
 /**
  * Answerability checks shared by provider fallback and final answer selection.
  *
@@ -98,6 +112,41 @@ object WebSearchAnswerability {
             }
             ?: return null
         return CurrentOfficeholderEvidence(name = name, authoritative = authoritative)
+    }
+
+    /**
+     * Parses `<subject> 최신 버전`-shaped queries into their subject.
+     *
+     * Deliberately narrow. The marker must name a release, so ordinary "최신 소식" topics never
+     * enter this path, and a subject that is only a first-person app reference is refused because
+     * no public source can answer it.
+     */
+    fun latestVersionQueryOrNull(query: String): LatestVersionQuery? {
+        val normalized = normalizePreservingCase(query)
+        val match = LATEST_VERSION_QUERY.matchEntire(normalized) ?: return null
+        val subject = match.groupValues[1].trim().trimEnd('의')
+        if (subject.length !in 2..48) return null
+        if (PRIVATE_SUBJECT_TERMS.any { term -> subject.compact().contains(term) }) return null
+        return LatestVersionQuery(subject = subject)
+    }
+
+    /**
+     * Returns the release this hit attributes to the requested subject, or null.
+     *
+     * A page that merely repeats the subject and the word "버전" is help prose — "설정 앱에서
+     * 버전을 확인할 수 있습니다" answers a different question — so a usable hit has to place a
+     * version number directly after the subject.
+     */
+    fun latestVersionEvidenceOrNull(query: String, hit: WebSearchHit): LatestVersionEvidence? {
+        val subject = latestVersionQueryOrNull(query)?.subject ?: return null
+        val text = normalizePreservingCase("${hit.title} ${hit.snippet}")
+        val pattern = Regex(
+            "${Regex.escape(subject)}\\s+v?(\\d+(?:\\.\\d+){0,3})",
+            RegexOption.IGNORE_CASE,
+        )
+        val version = pattern.find(text)?.groupValues?.get(1) ?: return null
+        if (version.length > 24) return null
+        return LatestVersionEvidence(version = version)
     }
 
     fun hasCurrentOfficeholderAnswer(query: String, hits: List<WebSearchHit>): Boolean =
@@ -179,5 +228,9 @@ object WebSearchAnswerability {
     )
     private val LATIN_NAME_TOKEN = Regex("[A-Za-z][A-Za-z.'’\\-]{0,39}")
     private val CURRENT_OFFICEHOLDER_QUERY = Regex("^(.+?)\\s+현직\\s+(.+?)\\s+이름\\s+공식$")
+    private val LATEST_VERSION_QUERY = Regex(
+        "^(.+?)\\s*(?:최신\\s*안정\\s*버전|최신\\s*버전|최신\\s*릴리스|최근\\s*릴리스)\\s*[?!.]*$",
+    )
+    private val PRIVATE_SUBJECT_TERMS = setOf("내앱", "우리앱", "앱")
     private val WHITESPACE = Regex("\\s+")
 }

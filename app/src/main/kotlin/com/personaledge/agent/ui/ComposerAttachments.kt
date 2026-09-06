@@ -9,14 +9,24 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.Image
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -30,56 +40,78 @@ import com.personaledge.agent.ui.theme.CapsuleShape
 import com.personaledge.core.llm.TurnMediaKind
 
 /**
- * The attachment controls in their own row above the prompt field.
+ * The attachment entry point, benchmarked on the ChatGPT and Claude Android composers.
  *
- * Four visible labels rather than a "+" menu or two indistinguishable microphone icons: the owner
- * chooses before speaking whether audio becomes editable dictation or stays an attachment. The
- * row remains above the text field so four actions do not squeeze the editor on the Fold cover.
+ * A single "+" inside the prompt row rather than a row of labelled buttons above it: the previous
+ * four-button row cost a whole line of vertical space on every turn to expose actions that are
+ * used occasionally. Dictation keeps its own microphone next to send, because it is the one voice
+ * action reached constantly and because it must stay visibly distinct from attaching a recording
+ * — those two do very different things with what the owner says.
  */
 @Composable
-internal fun ComposerMediaActions(
+internal fun ComposerAttachMenu(
     enabled: Boolean,
     onTakePhoto: () -> Unit,
     onPickImage: () -> Unit,
-    onStartDictation: () -> Unit,
-    onStartVoiceAttachment: () -> Unit,
+    onAttachVoice: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
     val callbacks = mapOf(
         ComposerMediaAction.TAKE_PHOTO to onTakePhoto,
         ComposerMediaAction.PICK_IMAGE to onPickImage,
-        ComposerMediaAction.START_DICTATION to onStartDictation,
-        ComposerMediaAction.ATTACH_AUDIO to onStartVoiceAttachment,
+        ComposerMediaAction.ATTACH_AUDIO to onAttachVoice,
     )
-    BoxWithConstraints(modifier = modifier) {
-        val columns = ComposerMediaActionLayoutPolicy.columnsForWidth(maxWidth.value)
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            ComposerMediaAction.entries.chunked(columns).forEach { actions ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    actions.forEach { action ->
-                        MediaActionButton(
-                            action = action,
-                            enabled = enabled,
-                            onClick = checkNotNull(callbacks[action]),
-                            modifier = Modifier.weight(1f),
+    Box(modifier = modifier) {
+        Surface(
+            onClick = { expanded = true },
+            enabled = enabled,
+            shape = CapsuleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier
+                .size(42.dp)
+                .semantics { contentDescription = ATTACH_MENU_DESCRIPTION },
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_plus),
+                    contentDescription = null,
+                    tint = if (enabled) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    },
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            ComposerMediaAction.menuActions.forEach { action ->
+                DropdownMenuItem(
+                    text = { Text(action.menuLabel) },
+                    leadingIcon = {
+                        Icon(
+                            painter = painterResource(action.iconRes),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
                         )
-                    }
-                    repeat(columns - actions.size) {
-                        Box(Modifier.weight(1f))
-                    }
-                }
+                    },
+                    onClick = {
+                        expanded = false
+                        checkNotNull(callbacks[action]).invoke()
+                    },
+                    modifier = Modifier.semantics {
+                        contentDescription = action.contentDescription
+                    },
+                )
             }
         }
     }
 }
 
+/** Dictation, kept as its own control beside send exactly as the benchmarked apps place it. */
 @Composable
-private fun MediaActionButton(
-    action: ComposerMediaAction,
+internal fun ComposerDictationButton(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -90,67 +122,79 @@ private fun MediaActionButton(
         shape = CapsuleShape,
         color = MaterialTheme.colorScheme.surface,
         modifier = modifier
-            .heightIn(min = 48.dp)
-            .semantics { contentDescription = action.contentDescription },
+            .size(42.dp)
+            .semantics {
+                contentDescription = ComposerMediaAction.START_DICTATION.contentDescription
+            },
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = action.visibleLabel,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (enabled) {
+            Icon(
+                painter = painterResource(R.drawable.ic_microphone),
+                contentDescription = null,
+                tint = if (enabled) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
                     MaterialTheme.colorScheme.outline
                 },
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 4.dp),
+                modifier = Modifier.size(20.dp),
             )
         }
     }
 }
 
+internal const val ATTACH_MENU_DESCRIPTION = "사진과 음성 첨부 메뉴 열기"
+
 internal enum class ComposerMediaAction(
-    val visibleLabel: String,
+    val menuLabel: String,
     val contentDescription: String,
+    val iconRes: Int,
 ) {
     TAKE_PHOTO(
-        visibleLabel = "촬영",
+        menuLabel = "사진 촬영",
         contentDescription = "카메라로 사진 촬영해서 첨부",
+        iconRes = R.drawable.ic_camera,
     ),
     PICK_IMAGE(
-        visibleLabel = "사진",
+        menuLabel = "사진 선택",
         contentDescription = "기기에서 사진 선택해서 첨부",
+        iconRes = R.drawable.ic_image,
     ),
     START_DICTATION(
-        visibleLabel = "받아쓰기",
+        menuLabel = "받아쓰기",
         contentDescription = "음성을 텍스트로 받아쓰기 시작",
+        iconRes = R.drawable.ic_microphone,
     ),
     ATTACH_AUDIO(
-        visibleLabel = "음성 첨부",
+        menuLabel = "음성 첨부",
         contentDescription = "음성을 녹음해서 대화에 첨부",
+        iconRes = R.drawable.ic_microphone,
     ),
-}
+    ;
 
-internal object ComposerMediaActionLayoutPolicy {
-    /** Four 64 dp actions plus three 4 dp gaps, measured after the composer's outer padding. */
-    const val FOUR_COLUMN_MIN_WIDTH_DP = 268f
-
-    fun columnsForWidth(availableWidthDp: Float): Int =
-        if (availableWidthDp >= FOUR_COLUMN_MIN_WIDTH_DP) 4 else 2
+    companion object {
+        /**
+         * What the "+" menu offers.
+         *
+         * Dictation is deliberately absent: it has its own button, and burying it in the same
+         * menu as "음성 첨부" is exactly how an owner ends up attaching a recording when they
+         * meant to dictate.
+         */
+        val menuActions: List<ComposerMediaAction> = listOf(TAKE_PHOTO, PICK_IMAGE, ATTACH_AUDIO)
+    }
 }
 
 /**
  * The staged attachment, shown above the prompt field until it is sent or removed.
  *
- * A label rather than a thumbnail. The payload never enters UI state — that is what keeps a photo
- * out of state snapshots and recomposition traces — so the composer describes the attachment
- * instead of re-decoding it for a preview.
+ * A photo shows its own bounded thumbnail, the way the benchmarked apps do, because "which photo
+ * did I attach" is otherwise unanswerable without sending it. The thumbnail is a small separate
+ * derivative; the turn payload itself still never enters UI state. Audio has nothing to show, so
+ * it keeps the labelled chip.
  */
 @Composable
 internal fun ComposerAttachmentChip(
     attachment: PendingMediaAttachment,
+    preview: ImageBitmap?,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -165,17 +209,28 @@ internal fun ComposerAttachmentChip(
             modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                painter = painterResource(
-                    when (attachment.kind) {
-                        TurnMediaKind.IMAGE -> R.drawable.ic_image
-                        TurnMediaKind.AUDIO -> R.drawable.ic_microphone
-                    },
-                ),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
+            if (preview != null && attachment.kind == TurnMediaKind.IMAGE) {
+                Image(
+                    bitmap = preview,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(MaterialTheme.shapes.small),
+                )
+            } else {
+                Icon(
+                    painter = painterResource(
+                        when (attachment.kind) {
+                            TurnMediaKind.IMAGE -> R.drawable.ic_image
+                            TurnMediaKind.AUDIO -> R.drawable.ic_microphone
+                        },
+                    ),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
             Text(
                 text = attachment.label,
                 style = MaterialTheme.typography.bodyMedium,

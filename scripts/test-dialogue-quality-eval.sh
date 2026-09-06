@@ -46,6 +46,8 @@ failed_review_score="$fixture_root/failed-review-score.json"
 invalid_review_predictions="$fixture_root/invalid-review-predictions.jsonl"
 degraded="$fixture_root/degraded.jsonl"
 degraded_score="$fixture_root/degraded-score.json"
+negated="$fixture_root/negated.jsonl"
+negated_score="$fixture_root/negated-score.json"
 mutated_corpus="$fixture_root/mutated-corpus.jsonl"
 duplicate_corpus="$fixture_root/duplicate-corpus.jsonl"
 duplicate_predictions="$fixture_root/duplicate-predictions.jsonl"
@@ -99,7 +101,7 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as source:
     score = json.load(source)
-assert score["schemaVersion"] == 2
+assert score["schemaVersion"] == 3
 assert score["caseCount"] == 8
 assert score["lexicalScreenPassed"] is True
 assert score["reviewedDialogueSetPassed"] is False
@@ -107,6 +109,7 @@ assert score["promotionEligible"] is False
 assert score["quality"]["casePassRate"] == 1.0
 assert score["quality"]["requiredFactRecall"] == 1.0
 assert score["quality"]["requiredAnyOfSatisfaction"] == 1.0
+assert score["quality"]["requiredClaimAffirmationRate"] == 1.0
 assert score["quality"]["forbiddenFactAvoidance"] == 1.0
 assert score["quality"]["maxSentenceCompliance"] == 1.0
 assert score["quality"]["nonAnswerAccuracy"] == 1.0
@@ -114,6 +117,51 @@ assert score["humanReviewCoverage"]["complete"] is False
 assert score["humanReviewCoverage"]["allDimensionsPassed"] is False
 assert score["deviceExecution"]["performedByThisScorer"] is False
 assert score["mismatches"] == []
+PY
+
+python3 - "$predictions" "$negated" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    rows = [json.loads(line) for line in source]
+for row in rows:
+    if row["id"] == "dialogue-long-salience-01":
+        # This used to pass every automatic check: all required substrings are present, no
+        # forbidden candidate appears, and the answer stays within two sentences. Every required
+        # claim is nevertheless explicitly denied.
+        row["answer"] = (
+            "ORBIT-7은 오프라인이 아니며 지연이 50ms 이하도 아닙니다. "
+            "ORBIT-7을 선택하지 않겠습니다."
+        )
+with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as target:
+    for row in rows:
+        target.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+PY
+python3 "$project_root/scripts/score-dialogue-quality-eval.py" \
+    --corpus "$corpus" \
+    --predictions "$negated" \
+    --model-label negated-required-fixture >"$negated_score"
+python3 - "$negated_score" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    score = json.load(source)
+assert score["lexicalScreenPassed"] is False
+assert score["quality"]["requiredFactRecall"] == 1.0
+assert score["quality"]["requiredAnyOfSatisfaction"] == 1.0
+assert score["quality"]["forbiddenFactAvoidance"] == 1.0
+assert score["quality"]["maxSentenceCompliance"] == 1.0
+assert score["quality"]["nonAnswerAccuracy"] == 1.0
+assert score["quality"]["requiredClaimAffirmationRate"] == 0.875
+assert len(score["mismatches"]) == 1
+case = score["mismatches"][0]
+assert case["id"] == "dialogue-long-salience-01"
+assert case["checks"]["requiredFacts"] is True
+assert case["checks"]["requiredAnyOf"] is True
+assert case["checks"]["requiredClaimsAffirmed"] is False
+assert set(case["negatedRequiredClaims"]) >= {"ORBIT-7", "오프라인", "50ms 이하", "선택"}
 PY
 
 python3 - "$predictions" "$reviewed_predictions" <<'PY'

@@ -8,6 +8,9 @@ import com.personaledge.core.llm.TurnMediaKind
 enum class MediaAttachmentSource {
     CAMERA,
     GALLERY,
+
+    /** Sent in from another app's share sheet. */
+    SHARE,
     VOICE,
 }
 
@@ -90,6 +93,7 @@ internal object MediaAttachmentPresentation {
         TurnMediaKind.IMAGE -> when (attachment.source) {
             MediaAttachmentSource.CAMERA -> "촬영한 사진"
             MediaAttachmentSource.GALLERY -> "선택한 사진"
+            MediaAttachmentSource.SHARE -> "공유받은 사진"
             MediaAttachmentSource.VOICE -> "사진"
         }
 
@@ -103,6 +107,7 @@ internal object MediaAttachmentPresentation {
         TurnMediaKind.IMAGE -> when (summary.source) {
             MediaAttachmentSource.CAMERA -> "사진 1장(촬영)"
             MediaAttachmentSource.GALLERY -> "사진 1장(선택)"
+            MediaAttachmentSource.SHARE -> "사진 1장(공유)"
             MediaAttachmentSource.VOICE -> "사진 1장"
         }
 

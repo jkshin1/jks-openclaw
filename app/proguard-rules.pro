@@ -116,6 +116,12 @@
 # that the target APK has optimized away.
 -keepclassmembers class com.personaledge.agent.PersonalEdgeViewModel { public *; }
 -keepclassmembers class com.personaledge.agent.PersonalEdgeUiState { public *; }
+# Opt-in physical remote acceptance reads only the existing public state/connection contract.
+-keepclassmembers class com.personaledge.agent.OpenClawRemoteUiState { public *; }
+# The opt-in context-picker receipt has to pick one offered item by its own key and text, which is
+# the same public value the picker renders. Class names stay obfuscatable.
+-keepclassmembers,allowobfuscation class com.personaledge.agent.OpenClawRemoteContextItem { public *; }
+-keep enum com.personaledge.agent.OpenClawGatewayUiState { *; }
 -keepclassmembers class com.personaledge.agent.ActiveReasoningUiState { public *; }
 -keepclassmembers class com.personaledge.agent.ChatEntry { public *; }
 -keepclassmembers class com.personaledge.agent.ChatHistoryState { public *; }

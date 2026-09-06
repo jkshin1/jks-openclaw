@@ -38,6 +38,7 @@ import androidx.compose.ui.draganddrop.toAndroidDragEvent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
@@ -135,29 +136,27 @@ internal fun Composer(
                 media.attachment?.let { attachment ->
                     ComposerAttachmentChip(
                         attachment = attachment,
+                        preview = media.preview,
                         onRemove = media.onRemoveAttachment,
                     )
                 }
             }
-            if (media.visible) {
-                ComposerMediaActions(
-                    enabled = media.enabled,
-                    onTakePhoto = media.onTakePhoto,
-                    onPickImage = media.onPickImage,
-                    onStartDictation = media.onStartDictation,
-                    onStartVoiceAttachment = media.onStartVoiceAttachment,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 14.dp, end = 12.dp, top = 8.dp),
-                )
-            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 14.dp, end = 12.dp, top = 8.dp, bottom = 10.dp),
+                    .padding(start = 10.dp, end = 12.dp, top = 8.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                if (media.visible) {
+                    ComposerAttachMenu(
+                        enabled = media.enabled,
+                        onTakePhoto = media.onTakePhoto,
+                        onPickImage = media.onPickImage,
+                        onAttachVoice = media.onStartVoiceAttachment,
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    )
+                }
                 TextField(
                     value = prompt,
                     onValueChange = onPromptChange,
@@ -204,6 +203,13 @@ internal fun Composer(
                         },
                     ),
                 )
+                if (media.visible) {
+                    ComposerDictationButton(
+                        enabled = media.enabled,
+                        onClick = media.onStartDictation,
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    )
+                }
                 SendOrStopButton(
                     turnActive = turnActive,
                     canSend = canSend,
@@ -233,6 +239,8 @@ internal data class ComposerMediaState(
     /** The controls are shown but currently refuse — a turn is running, or one is attached. */
     val enabled: Boolean,
     val attachment: PendingMediaAttachment?,
+    /** Bounded thumbnail of a staged photo; null for audio and when nothing is staged. */
+    val preview: ImageBitmap?,
     val recording: VoiceRecordingUiState?,
     val onTakePhoto: () -> Unit,
     val onPickImage: () -> Unit,

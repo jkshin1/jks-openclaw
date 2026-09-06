@@ -300,6 +300,7 @@ dependencies {
     implementation(project(":core:agent"))
     implementation(project(":core:data"))
     implementation(project(":core:diagnostics"))
+    implementation(project(":core:openclaw"))
     implementation(platform(libs.kotlin.bom))
 
     implementation(libs.androidx.core.ktx)

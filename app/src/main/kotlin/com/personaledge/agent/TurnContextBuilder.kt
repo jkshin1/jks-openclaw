@@ -463,7 +463,7 @@ internal object TurnContextBuilder {
         val content = if (focusedAssistant) {
             sanitizeFocusedAssistant(contextualText, contentBudget)
         } else if (message.role == MessageRole.USER) {
-            sanitizeHeadAndTail(contextualText, contentBudget)
+            sanitizeUserMessage(contextualText, contentBudget)
         } else {
             sanitize(contextualText, contentBudget)
         }
@@ -518,6 +518,82 @@ internal object TurnContextBuilder {
             .replace("|>", " >")
 
     /** Keeps both the opening subject and the newest tail (often a correction). */
+    /**
+     * Head and tail as usual, plus one stated constraint from the elided middle.
+     *
+     * A long request often puts its edges first and last — the subject at the front, the newest
+     * correction at the end — which is why user rows are elided from the middle. But a condition
+     * the owner stated part-way through ("개인정보 포함 후보는 제외") is exactly the kind of thing
+     * that changes the answer, and a plain head/tail split is precisely what drops it. When the
+     * elided middle contains one, a bounded window around it is carried too.
+     */
+    private fun sanitizeUserMessage(value: String, maximumBytes: Int): String {
+        if (maximumBytes <= 0) return ""
+        val safe = sanitizeFully(value)
+        if (safe.utf8Size() <= maximumBytes) return safe
+        val separator = " … "
+        val separatorBytes = separator.utf8Size()
+        val usableBytes = maximumBytes - separatorBytes * 2
+        if (usableBytes < MIN_CONSTRAINT_WINDOW_BYTES * 3) {
+            return sanitizeHeadAndTail(safe, maximumBytes)
+        }
+
+        val middleBudget = (usableBytes / 3).coerceAtMost(MAX_CONSTRAINT_WINDOW_BYTES)
+        val edgeBudget = usableBytes - middleBudget
+        val headBudget = edgeBudget / 2
+        val tailBudget = edgeBudget - headBudget
+        val head = truncateUtf8Prefix(safe, headBudget)
+        val tail = truncateUtf8Tail(safe, tailBudget)
+        val middle = constraintWindowOrNull(
+            safe = safe,
+            searchFrom = head.length,
+            searchUntil = safe.length - tail.length,
+            maximumBytes = middleBudget,
+        ) ?: return sanitizeHeadAndTail(safe, maximumBytes)
+
+        return (head + separator + middle + separator + tail).also { balanced ->
+            check(balanced.utf8Size() <= maximumBytes)
+        }
+    }
+
+    /**
+     * A bounded window around the first constraint marker strictly inside the elided middle.
+     *
+     * The window starts a few whole words before the marker so the condition reads as a phrase
+     * rather than beginning mid-sentence, and never crosses into the head or tail that are already
+     * retained. Returns null when the middle states no condition, which leaves ordinary long
+     * messages on the existing head/tail path.
+     */
+    private fun constraintWindowOrNull(
+        safe: String,
+        searchFrom: Int,
+        searchUntil: Int,
+        maximumBytes: Int,
+    ): String? {
+        if (searchUntil - searchFrom < 2 || maximumBytes < MIN_CONSTRAINT_WINDOW_BYTES) return null
+        val region = safe.substring(searchFrom, searchUntil)
+        val markerIndex = CONSTRAINT_MARKERS
+            .mapNotNull { marker ->
+                region.indexOf(marker, ignoreCase = true).takeIf { index -> index >= 0 }
+            }
+            .minOrNull()
+            ?: return null
+
+        // Walk left over whole words while a bounded share of the window remains, so a long
+        // unbroken filler run stops the walk instead of consuming the whole budget.
+        val leadBudget = maximumBytes / 2
+        var start = markerIndex
+        while (start > 0) {
+            val previousSpace = region.lastIndexOf(' ', start - 2)
+            val candidate = if (previousSpace < 0) 0 else previousSpace + 1
+            if (region.substring(candidate, markerIndex).utf8Size() > leadBudget) break
+            start = candidate
+            if (candidate == 0) break
+        }
+        val window = truncateUtf8Prefix(region.substring(start), maximumBytes).trim()
+        return window.takeIf(String::isNotBlank)
+    }
+
     private fun sanitizeHeadAndTail(value: String, maximumBytes: Int): String {
         if (maximumBytes <= 0) return ""
         val safe = sanitizeFully(value)
@@ -629,4 +705,15 @@ internal object TurnContextBuilder {
     private const val MIN_MESSAGE_BLOCK_BYTES = 16
     private const val MIN_ANCHOR_CONTENT_BYTES = 12
     private const val MIN_HEAD_TAIL_CONTENT_BYTES = 12
+    private const val MIN_CONSTRAINT_WINDOW_BYTES = 24
+    private const val MAX_CONSTRAINT_WINDOW_BYTES = 160
+    /**
+     * Words that mark a stated condition. Inclusion and exclusion wording matters as much as the
+     * formal "조건"/"기준" vocabulary, because that is how a constraint is usually phrased.
+     */
+    private val CONSTRAINT_MARKERS = listOf(
+        "제외", "포함", "반드시", "필수", "빼고", "말고", "이상", "이하", "미만", "초과",
+        "조건", "기준", "요건", "제약", "만족", "우선",
+        "exclude", "except", "must", "required", "at least", "at most", "only",
+    )
 }

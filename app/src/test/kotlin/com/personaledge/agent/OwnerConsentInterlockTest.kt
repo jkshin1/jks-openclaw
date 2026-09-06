@@ -1,5 +1,7 @@
 package com.personaledge.agent
 
+import com.personaledge.core.data.AgentSettings
+import com.personaledge.core.data.OpenClawGatewaySettings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -16,6 +18,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OwnerConsentInterlockTest {
+    @Test
+    fun `openclaw gateway consent is default off and closes immediately`() {
+        val feature = OwnerConsentFeature.OPENCLAW_GATEWAY
+        val defaults = AgentSettings()
+        val configured = AgentSettings(
+            openClawGateway = OpenClawGatewaySettings(
+                enabled = true,
+                endpointUrl = "wss://personal-edge.example.test/",
+            ),
+        )
+        val interlock = OwnerConsentInterlock()
+
+        assertFalse(defaults.ownerConsentEnabled(feature))
+        assertTrue(configured.ownerConsentEnabled(feature))
+        assertTrue(interlock.allowed(feature, configured.ownerConsentEnabled(feature)))
+
+        interlock.requestEnabled(feature, enabled = false)
+
+        assertFalse(interlock.allowed(feature, configured.ownerConsentEnabled(feature)))
+    }
+
     @Test
     fun `durable false is off by default and a failed disable stays closed`() = runBlocking {
         val interlock = OwnerConsentInterlock()

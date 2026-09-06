@@ -121,9 +121,9 @@ app through `ACTION_IMAGE_CAPTURE`, which only requires the permission when the 
 
 Documented per-modality token costs are recorded in `TurnMediaBudget` so the byte and duration
 caps can be read against the 4,096-token context rather than looking arbitrary: 256 tokens for an
-image, 25 tokens per second of audio for Gemma 4. **These are Google's published figures, not
-measurements of this runtime.** The Fold8 run below puts one image in the right neighbourhood but
-does not yet pin either figure exactly.
+image, 25 tokens per second of audio for Gemma 4. Both were published figures when they were
+written down; the Fold8 run below has since measured 258 tokens for one image and 24.93 per second
+of audio on this exact artifact, so the constants are now confirmed rather than assumed.
 
 ## Model capability is a declared fact, not a guess
 
@@ -187,21 +187,34 @@ The engine picks its encoders once, exactly like its backend, so enabling media 
 next app start — the settings footnote says so and the composer explains it if an attachment is
 attempted first.
 
-### Audio is wired but not yet measured
+### Both per-modality costs are now measured
 
-The `static_audio_encoder` and `audio_adapter` XNNPack caches load, and the native mel filterbank
-runs at 16 kHz with 128 channels, so the clip does reach the audio front end. The token
-measurement was inconclusive: the first version of the receipt compared accumulated token totals in
-one shared conversation, and also compared materially different image/audio prompts. Conversation
-growth and prompt length could therefore masquerade as encoder cost. The corrected gate gives each
-control/media observation a newly initialized runtime and exactly one turn, samples
-`getTokenCount()` immediately before and after that turn, and subtracts paired per-turn increments
-for identical prompts. Both paired answers are capped at 32 decode tokens, below the 100-token image
-and 60-token audio thresholds, so answer-length variation alone cannot satisfy either threshold.
-This corrected source compiles, but it has not run on the Fold8.
+The first version of this receipt compared accumulated token totals in one shared conversation, and
+also compared materially different image and audio prompts, so conversation growth and prompt
+length could masquerade as encoder cost. The corrected gate gives each control and media
+observation a newly initialized runtime and exactly one turn, samples `getTokenCount()` immediately
+before and after that turn, and subtracts paired per-turn increments for identical prompts. Both
+answers are capped at 32 decode tokens, below either threshold, so answer-length variation alone
+cannot satisfy them.
 
-For the same reason the ~220-token image delta from that first run is retained only as historical
-diagnostic context, not accepted as an exact per-image cost.
+It ran on the Fold8 on 2026-09-01 and passed, 1 case in 82.714 s on CPU:
+
+| observation | init | turn | TTFT | context tokens | answer |
+|---|---|---|---|---|---|
+| image control | 1,158 ms | 14,056 ms | 12,989 ms | 648 | 23 code points |
+| image | 1,583 ms | 23,691 ms | 23,114 ms | 906 | 6 code points |
+| audio control | 1,148 ms | 14,137 ms | 13,065 ms | 610 | 21 code points |
+| audio, 15 s clip | 1,052 ms | 20,587 ms | 19,822 ms | 984 | 19 code points |
+
+**One image costs 258 context tokens** against the documented 256, and **a 15-second clip costs
+374**, or 24.93 per second against the documented 25. All four runtimes loaded the same
+`vision_encoder`, `vision_adapter`, `static_audio_encoder`, and `audio_adapter` caches, so the
+difference between a control and its paired media turn is the payload and nothing else. The image
+turn again returned exactly the six rendered digits, and no turn produced a Tool call.
+
+Media adds roughly 7-10 seconds of prefill on CPU: a control reached its first token in about 13 s,
+the image turn in 23.1 s and the audio turn in 19.8 s. The ~220-token image figure from the first
+invalid comparison is superseded by the 258 measured here.
 
 ## What is verified and what is not
 
@@ -229,15 +242,14 @@ figures in `TurnMediaBudget` remain Google's documentation.
 
 ## Physical acceptance still owed
 
-1. The corrected fresh-runtime paired-control gate, which can establish that each media input adds
-   context beyond its identical bounded-decode control; it is not an exact encoder-cost benchmark.
-2. Dictation accuracy on real Korean speech, including the silence and too-short refusals.
-3. Document, receipt, and whiteboard photos against the four image intents.
-4. Camera and picker flows through the production ViewModel path, including the permission-free
+1. Dictation accuracy on real Korean speech, including the silence and too-short refusals.
+2. Document, receipt, and whiteboard photos against the four image intents.
+3. Camera and picker flows through the production ViewModel path, including the permission-free
    capture claim and the transcript's content-free attachment chip.
-5. Thermal behaviour across a sustained sequence of media turns; the runs so far were short and the
-   phone stayed cool while charging.
-6. Fold/DeX layouts for the composer's attachment row and recording bar.
+4. Thermal behaviour across a sustained sequence of media turns. The accepted run was 82.7 s of CPU
+   inference and moved the battery 31.0 C to 32.2 C while charging, which says nothing about a long
+   session.
+5. Fold/DeX layouts for the composer's attachment row and recording bar.
 
-Item 6 aside, all of these need only the phone reconnected: the release pair builds and the
-receipt class is already in it.
+The per-modality context cost, the image path itself, and the empty Tool scope on a media turn are
+no longer on this list: they were measured on the phone on 2026-09-01.

@@ -188,8 +188,8 @@ class ManualToolAgentController(
     private val limits: AgentLoopLimits = AgentLoopLimits(),
     private val forceExplicitToolScope: Boolean = false,
     private val monotonicClockMillis: () -> Long = { System.nanoTime() / 1_000_000L },
-    private val sideEffectTurnGate: SideEffectTurnGate =
-        SideEffectTurnGate { _, _, _ -> true },
+    private val sideEffectTurnGate: SideEffectTurnGate = DEFAULT_SIDE_EFFECT_TURN_GATE,
+    private val remoteProposalClockMillis: () -> Long = System::currentTimeMillis,
 ) {
     /**
      * Budget for a turn that must not touch a tool.
@@ -302,6 +302,110 @@ class ManualToolAgentController(
             ?.takeIf { retained -> retained.turnId == turnId }
             ?.events
             .orEmpty()
+
+    /**
+     * Runs one explicitly imported remote reminder through the ordinary local Tool boundary.
+     *
+     * The app must first persist the owner-approved import in local history and create the
+     * existing STARTED recovery capsule using [RemoteReminderProposal.requiredLocalTurnId]. That
+     * identity is mandatory, not a caller-generated replacement. The supplied production
+     * [SideEffectTurnGate] must durably arm that capsule before the existing Action Ledger claim.
+     * Its default demonstration gate is explicitly insufficient for this entry point.
+     *
+     * Import approval does not replace the Tool's exact preview/confirmation, execution interlock,
+     * or persistent ledger. No local LLM entry point is called, including during cancellation.
+     */
+    fun runApprovedRemoteReminderProposal(
+        turnId: TurnId,
+        proposal: RemoteReminderProposal,
+        expectedSource: RemoteReminderProposalSource,
+    ): Flow<AgentEvent> = flow {
+        if (!isValidTurnId(turnId) || turnId != proposal.requiredLocalTurnId) {
+            emit(AgentEvent.Failure(turnId, AgentFailureCode.TURN_MISMATCH))
+            return@flow
+        }
+        if (!proposal.matches(expectedSource)) {
+            emit(AgentEvent.Failure(turnId, AgentFailureCode.INVALID_TOOL_CALL))
+            return@flow
+        }
+        if (!proposal.isCurrent(remoteProposalClockMillis())) {
+            emit(AgentEvent.Failure(turnId, AgentFailureCode.DEADLINE_EXCEEDED))
+            return@flow
+        }
+        if (sideEffectTurnGate === DEFAULT_SIDE_EFFECT_TURN_GATE) {
+            emit(AgentEvent.Failure(turnId, AgentFailureCode.TOOL_NOT_EXECUTED))
+            return@flow
+        }
+        val job = currentCoroutineContext()[Job]
+            ?: error("A coroutine Job is required to run an agent turn.")
+        val active = ActiveTurn(
+            turnId = turnId,
+            job = job,
+            reminderDateTimeHint = null,
+            readOnlyToolsOnly = false,
+            requireReadTool = false,
+            executionContract = null,
+            toolScope = LlmTurnToolScope.exact(setOf(ReminderCreateTool.NAME)),
+            media = emptyList(),
+            enforceToolScope = true,
+            usesLlmRuntime = false,
+            remoteReminderProposal = proposal,
+        )
+        if (!activeTurn.compareAndSet(null, active)) {
+            emit(AgentEvent.Failure(turnId, AgentFailureCode.BUSY))
+            return@flow
+        }
+        retainedExecutions.set(RetainedExecutions(turnId, emptyList()))
+        try {
+            if (!proposal.consumeExecution()) abort(AgentFailureCode.TOOL_NOT_EXECUTED)
+            val resolved = registry.resolve(ReminderCreateTool.NAME) as? RegisteredManualTool.ReminderCreate
+                ?: abort(AgentFailureCode.UNKNOWN_TOOL)
+            val remaining = (proposal.expiresAtEpochMillis - remoteProposalClockMillis())
+                .coerceAtMost(limits.deadlineMillis)
+                .coerceAtMost(RemoteReminderProposalSource.MAX_LIFETIME_MILLIS)
+            if (remaining < MINIMUM_ACTION_LIFETIME_MILLIS) abort(AgentFailureCode.DEADLINE_EXCEEDED)
+            val deadline = saturatedAdd(monotonicClockMillis(), remaining)
+            withTimeout(remaining) {
+                runTool(
+                    active = active,
+                    call = LlmToolCall(
+                        id = "remote-reminder-1",
+                        name = ReminderCreateTool.NAME,
+                        argumentsJson = proposal.canonicalArgumentsJson,
+                    ),
+                    tool = resolved.tool,
+                    toolName = resolved.definition.name,
+                    requestOrdinal = 1,
+                    deadline = deadline,
+                    parse = { ReminderCreateArgumentsParser(RemoteReminderProposalParser.MAX_ARGUMENT_UTF8_BYTES).parse(it) },
+                    encode = TrustedToolResultJson::encode,
+                )
+                // A validation-repair response is never reinjected or treated as an execution.
+                val receipt = retainedToolExecutions(turnId).singleOrNull()
+                    ?: abort(AgentFailureCode.TOOL_NOT_EXECUTED)
+                ensureBeforeDeadline(deadline)
+                emit(AgentEvent.TrustedAnswer(turnId, when (receipt.outcome) {
+                    ToolExecutionOutcome.WRITE_COMPLETED ->
+                        "리마인더를 저장했습니다. 알림 전달 상태는 리마인더 목록에서 확인하세요."
+                    ToolExecutionOutcome.WRITE_REFUSED -> "리마인더를 저장하지 못했습니다."
+                    ToolExecutionOutcome.READ_COMPLETED -> abort(AgentFailureCode.INVALID_TOOL_CALL)
+                }))
+                emit(AgentEvent.Completed(turnId))
+            }
+        } catch (_: TimeoutCancellationException) {
+            emit(AgentEvent.Failure(turnId, AgentFailureCode.DEADLINE_EXCEEDED))
+        } catch (abort: TurnAbort) {
+            emit(AgentEvent.Failure(turnId, abort.code, abort.runtimeCode, abort.toolFailure))
+        } catch (cancelled: CancellationException) {
+            active.state.compareAndSet(STATE_RUNNING, STATE_CANCELLING)
+            throw cancelled
+        } catch (_: Exception) {
+            emit(AgentEvent.Failure(turnId, AgentFailureCode.TOOL_NOT_EXECUTED))
+        } finally {
+            active.state.compareAndSet(STATE_RUNNING, STATE_FINISHED)
+            activeTurn.compareAndSet(active, null)
+        }
+    }
 
     fun runTurn(
         turnId: TurnId,
@@ -1483,7 +1587,20 @@ class ManualToolAgentController(
             orchestrator.executeWithReceipt(
                 action = action,
                 beforeSideEffectExecution = { trustedToolName, trustedRisk ->
-                    sideEffectTurnGate.allow(active.turnId, trustedToolName, trustedRisk)
+                    val remote = active.remoteReminderProposal
+                    if (remote != null &&
+                        (!remote.isCurrent(remoteProposalClockMillis()) ||
+                            active.turnId != remote.requiredLocalTurnId ||
+                            trustedToolName != ReminderCreateTool.NAME ||
+                            trustedRisk != ToolRisk.LOCAL_WRITE)
+                    ) {
+                        false
+                    } else {
+                        val allowed = sideEffectTurnGate.allow(active.turnId, trustedToolName, trustedRisk)
+                        // The durable app gate can suspend. Recheck the remote expiry after it,
+                        // before the orchestrator's final identity/expiry check and ledger claim.
+                        allowed && (remote == null || remote.isCurrent(remoteProposalClockMillis()))
+                    }
                 },
                 onExecuted = { trustedExecution ->
                     val receipt = AgentEvent.ToolExecuted(
@@ -1546,6 +1663,7 @@ class ManualToolAgentController(
     }
 
     private suspend fun cancelRuntimeOnce(active: ActiveTurn) {
+        if (!active.usesLlmRuntime) return
         if (!active.runtimeCancelIssued.compareAndSet(false, true)) return
         withContext(NonCancellable) {
             runCatching { runtime.cancel(active.turnId) }
@@ -1624,6 +1742,8 @@ class ManualToolAgentController(
         val toolScope: LlmTurnToolScope?,
         val media: List<TurnMediaAttachment>,
         val enforceToolScope: Boolean,
+        val usesLlmRuntime: Boolean = true,
+        val remoteReminderProposal: RemoteReminderProposal? = null,
         val state: AtomicInteger = AtomicInteger(STATE_RUNNING),
         val runtimeCancelIssued: AtomicBoolean = AtomicBoolean(false),
         val completedReadExecutions: AtomicInteger = AtomicInteger(0),
@@ -1642,6 +1762,7 @@ class ManualToolAgentController(
     ) : RuntimeException(null, null, false, false)
 
     private companion object {
+        val DEFAULT_SIDE_EFFECT_TURN_GATE = SideEffectTurnGate { _, _, _ -> true }
         const val TOOL_FREE_OUTPUT_TOKENS = 256
         const val MAX_TURN_ID_CHARACTERS = 128
         const val MAX_CALL_ID_CHARACTERS = 128
