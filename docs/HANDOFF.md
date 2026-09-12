@@ -1,5 +1,9 @@
 # Personal Edge handoff
 
+**Active Mac/Telegram handoff:** [OPENCLAW_TELEGRAM.md](OPENCLAW_TELEGRAM.md).
+The Android and tool-free Gateway instructions below are historical; their pending gates are not
+the active project's work queue.
+
 > **2026-09-06 — retired. Do not pick this up as active work.** The owner stopped development and
 > retired the app together with its schedule/reminder/alarm/notification purpose. Assistant work
 > moved to the macOS OpenClaw Gateway over Telegram. The final state is tagged `rc11-final`; see the

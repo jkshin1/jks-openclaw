@@ -1,0 +1,100 @@
+{
+  "2026.9.2": {
+    "token": {
+      "path": "node_modules/@openclaw/ai/dist/openai-completions-stream-BsrBe3Gg.mjs",
+      "before": "e6c6e6021cb1072db1abe3197691f02f9d613d3d15ff1eb43e2bd4900c70bd4f",
+      "after": "8ad504c7e0048341614592c7160e79155846b5c902c3cace08e3cdc8b562f6d0",
+      "export": "b"
+    },
+    "memory": {
+      "path": "dist/session-ingestion-Cx5hXbYJ.js",
+      "before": "8865774e3ffd67972e63eb2a929228479f707c2d5e043a40b9aa9ea79ff20917",
+      "after": "5d43d9835da85cb1c49fafd1f78cd7fc8a535e22e8c7d3a6805aad682edca220"
+    },
+    "thinking": [
+      {
+        "path": "dist/thinking-policy-DI_bnHxv.js",
+        "before": "ef0f6a9a94d0a531b163d7ff919df139bef5133da85f5cbe14ae9dc2c7a063ca",
+        "after": "c76d5f0d7e8f1333a16d8cc8b9dfb42b0bdf43918b620e78c978d07376896e5a"
+      },
+      {
+        "path": "dist/stream-CGolKR6w.js",
+        "before": "36378855a41905dbe7bc23ffddebef23fdf67cfcba4d469d148030887d0d8bc9",
+        "after": "e4e686e7ce67cd491b515cc874fc3e0712e743f683b0d86e9474053ea896a53a"
+      }
+    ],
+    "delivery": [
+      {
+        "path": "dist/delivery-queue-recovery-CeXGRhn8.js",
+        "before": "58eaaff6297c03e77453306457a21d3af9f11d07f8d21ce25e872b1d91c5ec8b",
+        "after": "09f0fbd08188932550b62f10e3647f5d28f4723cd019ec69796a456ace5571a1"
+      },
+      {
+        "path": "dist/delivery-queue-storage-BMi71pp-.js",
+        "before": "a23733acf3b51837e7697401aa59f1f7f6c6c9cd1c029f230c4fc4a1f1032d1f",
+        "after": "185ba7441f6884faa27786f6b094ffbb0009400170fd7e9f1edd4254d3bcad43"
+      },
+      {
+        "path": "dist/telegram-delivery-retry.mjs",
+        "before": null,
+        "after": "7fcac0fc3e3197861efba98e580ddbe14010ada1815d7196712440600c483d28"
+      }
+    ],
+    "test": {
+      "host": "node_modules/@openclaw/ai/dist/host-CEvLw30U.mjs",
+      "completions": "node_modules/@openclaw/ai/dist/openai-completions-BIUV3RDT.mjs",
+      "thinking": "dist/thinking-DterdXhr.js"
+    }
+  },
+  "2026.9.3": {
+    "token": {
+      "path": "node_modules/@openclaw/ai/dist/openai-prompt-cache-BI0rkM-5.mjs",
+      "before": "46f56fe4dd90dac2e6b02231d2f49c63b2cbe8e540bb5cf3c8b536603c8cf3ee",
+      "export": "s",
+      "after": "53cbe62e2dcaaca73a484a4222f2efe0eb768624174a517a60e74472df48a4c3"
+    },
+    "memory": {
+      "path": "dist/session-ingestion-BSkSbS3o.mjs",
+      "before": "16b96ed67165ca831eec2a12feb8ecaba237de2b3c041c321432ba2e047ed421",
+      "after": "fab71f54ea28219e6de5e4313536f4a4d555c8f9898830809de9654f98d092b2"
+    },
+    "authReprobe": {
+      "path": "dist/model-fallback-runner-DRMQDUbt.mjs",
+      "before": "82ce89778d0663ec82fbb317cb38fc41240330b8ae16e88192dd2dea142f8c5b",
+      "after": "53b9b76f79081cca2d829143a62a67948a4ae93ba18fd06817d57b9aa3896c8d"
+    },
+    "thinking": [
+      {
+        "path": "dist/thinking-policy-BsnPO_CO.mjs",
+        "before": "e0d19de39cb83267a9bc93da22862eacd6a99133188e06b0d9eb4bef51b2beeb",
+        "after": "3ea2ae8bace7615d1b90d29009211b5165cfadd048d3cb886e498bdea1bc90ab"
+      },
+      {
+        "path": "dist/stream-BBUi6awz.mjs",
+        "before": "749c9fda311802b3f4ae176d6376570c342c3bea6c07bcdfa43efe30bf302e9f",
+        "after": "d3c879c4a6e820dc903d5cdeb66b50dbd98ab6905de6697d99a13e8690422204"
+      }
+    ],
+    "delivery": [
+      {
+        "path": "dist/delivery-queue-recovery-M6LHIPeo.mjs",
+        "before": "aec6838a7e554aeeeefc7f2425efe39af119c0fad50c407ed33c0293bde3a9fa",
+        "after": "9f953e704dd44f144deb29c9c688b62b23378abc3960ad89509fc7cba9299d31"
+      },
+      {
+        "path": "dist/delivery-queue-storage-BoTQv3qb.mjs",
+        "before": "4dfe11f99779fa4a3195f78703ba49e72f1cdadb0b894aee469eea3e273edbe2",
+        "after": "34cfdc699aa902df0905bc52bf0951495b67f84a7ca4f58c62e46a22269b6830"
+      },
+      {
+        "path": "dist/telegram-delivery-retry.mjs",
+        "after": "7fcac0fc3e3197861efba98e580ddbe14010ada1815d7196712440600c483d28"
+      }
+    ],
+    "test": {
+      "host": "node_modules/@openclaw/ai/dist/host-CWuF-sS3.mjs",
+      "completions": "node_modules/@openclaw/ai/dist/openai-completions-KuoZyx0d.mjs",
+      "thinking": "dist/thinking-DXBjerSL.mjs"
+    }
+  }
+}

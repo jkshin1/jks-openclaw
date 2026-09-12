@@ -2,12 +2,22 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# The archived Android relay verifier remains available with its original strict contract.
+# Telegram is a host agent with a positive tool inventory and a separate operating policy.
+if [[ "${1:-}" == "--telegram" ]]; then
+    shift
+    exec python3 "$script_dir/verify-telegram-gateway.py" "$@"
+fi
 # shellcheck source=_common.sh
 source "$script_dir/_common.sh"
 
 usage() {
     cat <<'EOF'
 Usage: verify-gateway.sh [--skip-live | --observe-only] [--acknowledge-transient-session-write]
+       verify-gateway.sh --telegram [--skip-live] [--json] [--owner-id ID]
+
+Use --telegram for the active Mac/Telegram deployment. The options below apply only to the
+archived, tool-free Android relay; its pinned manifest is not the current Telegram receipt.
 
 Verifies pinned runtime hashes, private state, restrictive config/workspace, store SecretRefs,
 bundled provider/pairing plugins, LaunchAgent policy, loopback listeners, and RPC health.

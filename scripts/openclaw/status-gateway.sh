@@ -2,6 +2,10 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${1:-}" == "--telegram" ]]; then
+    shift
+    exec python3 "$script_dir/telegram-ops-status.py" "$@"
+fi
 # shellcheck source=_common.sh
 source "$script_dir/_common.sh"
 

@@ -43,6 +43,26 @@ openclaw_note() {
     echo "INFO $*"
 }
 
+# The active Mac/Telegram host agent is upgraded in place, so its installed runtime moves ahead of
+# the version these scripts pin. That pin is deliberate: this tooling describes the frozen
+# tool-free Android relay, which is a different deployment rather than a stale copy of the current
+# one, so a newer installed runtime is an expected boundary and not a corrupted or tampered
+# install. Say which deployment the caller reached instead of reporting bare drift.
+openclaw_fail_archived_relay_version() {
+    local subject="$1" observed="$2"
+    {
+        echo "FAIL $subject is $observed, not the pinned $PERSONAL_EDGE_OPENCLAW_VERSION"
+        echo "     These scripts manage the archived tool-free Android relay only. They do not"
+        echo "     manage the active Mac/Telegram host agent, whose runtime is upgraded in place."
+        echo "     This is the expected archived-relay boundary, not a corrupted install."
+        echo "     For the active deployment use the --telegram entry points, for example:"
+        echo "       scripts/openclaw/status-gateway.sh --telegram"
+        echo "       scripts/openclaw/verify-gateway.sh --telegram"
+        echo "     See AGENTS.md and docs/OPENCLAW_TELEGRAM.md."
+    } >&2
+    exit 1
+}
+
 openclaw_require_command() {
     command -v "$1" >/dev/null 2>&1 || openclaw_fail "required command not found: $1"
 }
@@ -495,6 +515,7 @@ openclaw_existing_cli() {
 openclaw_assert_existing_runtime() {
     local node_path="${PERSONAL_EDGE_OPENCLAW_NODE_BIN:-/opt/homebrew/opt/node/bin/node}"
     local node_version node_major installed_version_output installed_version unsafe_path link_path link_target
+    local package_version
 
     openclaw_require_command find
     openclaw_require_command jq
@@ -507,8 +528,9 @@ openclaw_assert_existing_runtime() {
     [[ -x "$node_path" && ! -L "$node_path" ]] ||
         openclaw_fail "pinned Homebrew Node path is missing or unsafe: $node_path"
     openclaw_assert_owned_nonwritable_file "$node_path" "pinned Homebrew Node"
-    [[ "$(jq -r '.version' "$openclaw_package_json")" == "$PERSONAL_EDGE_OPENCLAW_VERSION" ]] ||
-        openclaw_fail "existing OpenClaw package is not $PERSONAL_EDGE_OPENCLAW_VERSION"
+    package_version="$(jq -r '.version' "$openclaw_package_json")"
+    [[ "$package_version" == "$PERSONAL_EDGE_OPENCLAW_VERSION" ]] ||
+        openclaw_fail_archived_relay_version "existing OpenClaw package" "$package_version"
 
     unsafe_path="$(find "$openclaw_runtime_root" \( -type f -o -type d \) \
         \( -perm -020 -o -perm -002 \) -print -quit)"
@@ -533,7 +555,7 @@ openclaw_assert_existing_runtime() {
     installed_version_output="$(openclaw_existing_cli --version)"
     installed_version="$(openclaw_extract_version "$installed_version_output")"
     [[ "$installed_version" == "$PERSONAL_EDGE_OPENCLAW_VERSION" ]] ||
-        openclaw_fail "existing OpenClaw CLI is not $PERSONAL_EDGE_OPENCLAW_VERSION"
+        openclaw_fail_archived_relay_version "existing OpenClaw CLI" "$installed_version"
 }
 
 openclaw_assert_gateway_plist() {
@@ -920,7 +942,7 @@ openclaw_check_managed_tailscale_serve() {
 }
 
 openclaw_load_deployment() {
-    local install_method expected_node node_version node_major deployment_json
+    local install_method expected_node node_version node_major deployment_json package_version
     local candidate_manifest final_manifest
 
     openclaw_require_command jq
@@ -1027,8 +1049,9 @@ openclaw_load_deployment() {
     openclaw_assert_owned_nonwritable_file "$openclaw_package_json" "OpenClaw package metadata"
     openclaw_assert_owned_nonwritable_file "$openclaw_cli_entry" "OpenClaw CLI entry"
     openclaw_assert_owned_nonwritable_file "$openclaw_gateway_entry" "OpenClaw Gateway entry"
-    [[ "$(jq -r '.version' "$openclaw_package_json")" == "$PERSONAL_EDGE_OPENCLAW_VERSION" ]] ||
-        openclaw_fail "OpenClaw package metadata version drifted"
+    package_version="$(jq -r '.version' "$openclaw_package_json")"
+    [[ "$package_version" == "$PERSONAL_EDGE_OPENCLAW_VERSION" ]] ||
+        openclaw_fail_archived_relay_version "OpenClaw package metadata" "$package_version"
     [[ "$(openclaw_sha256 "$openclaw_package_json")" == "$(jq -r '.packageJsonSha256' <<< "$deployment_json")" ]] ||
         openclaw_fail "OpenClaw package metadata hash drifted"
     [[ "$(openclaw_sha256 "$openclaw_cli_entry")" == "$(jq -r '.cliEntrySha256' <<< "$deployment_json")" ]] ||

@@ -1,0 +1,30 @@
+{
+    "agents": {
+        "defaults": {
+            "model": {"primary": "openai/gpt-6-astra", "fallbacks": []},
+            "thinkingDefault": "high",
+            "reasoningDefault": "off",
+            "modelSelectionScope": "session",
+            "models": {
+                "openai/gpt-5.6-sol": {"alias": "sol", "agentRuntime": {"id": "codex"}},
+                "openai/gpt-6-astra": {"alias": "codex", "agentRuntime": {"id": "codex"}}
+            },
+            "modelPolicy": {
+                "allow": ["openrouter/*", "openai/gpt-5.6-sol", "openai/gpt-6-astra"]
+            },
+            "pdfModel": {"primary": "openai/gpt-5.6-sol", "fallbacks": []},
+            "subagents": {
+                "model": {"primary": "openai/gpt-5.6-sol", "fallbacks": []}
+            }
+        }
+    },
+    "plugins": {
+        "entries": {
+            "memory-core": {
+                "config": {
+                    "dreaming": {"model": "openai/gpt-5.6-sol"}
+                }
+            }
+        }
+    }
+}

@@ -1,4 +1,14 @@
-# Personal Edge Agent
+# Mac OpenClaw assistant
+
+현재 목적은 **이 Mac에서 동작하는 OpenClaw를 Telegram으로 사용하는 것**입니다.
+코딩·리서치·운영·미디어·문서 작업을 중심으로 운영합니다.
+
+- 운영 문서: [OpenClaw Telegram](docs/OPENCLAW_TELEGRAM.md)
+- 다른 Mac에서 이어 쓰기: [새 컴퓨터 이전 가이드](docs/OPENCLAW_NEW_MACHINE.md)
+- 운영 검증: `scripts/openclaw/verify-gateway.sh --telegram`
+- Android 앱: 개발 종료, `rc11-final` 태그로 보존. 아래 내용은 기존 앱의 기록입니다.
+
+## Archived Personal Edge Android app
 
 Galaxy Z Fold8를 우선 대상으로 하는 on-device personal AI agent Android 프로젝트입니다.
 

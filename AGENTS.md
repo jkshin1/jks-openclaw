@@ -1,5 +1,26 @@
 # Repository Guidelines
 
+## Active purpose: Mac OpenClaw over Telegram
+
+As of 2026-09-06, this repository supports the owner's Mac-hosted OpenClaw assistant, reached
+through Telegram, for coding, research, operations, media, and documents. Read
+`docs/OPENCLAW_TELEGRAM.md` for current operations. The Android app is retired and preserved at
+`rc11-final`; do not resume its unfinished release gates or delete its source/device data.
+
+Active operational assets live in `scripts/openclaw/`. Use
+`python3 scripts/openclaw/test-telegram-gateway.py` and
+`scripts/openclaw/verify-gateway.sh --telegram` for this deployment. The legacy verifier without
+`--telegram`, deployment manifest, and hardening/install scripts describe the frozen tool-free
+Android relay; do not apply them to the host agent. Their `PERSONAL_EDGE_OPENCLAW_VERSION`
+pin stays at `2026.8.1` on purpose: it also derives the install path
+`~/.local/openclaw-2026.8.1`, which the in-place host upgrade kept, and the relay's GLM-only model
+policy is not the host agent's. Reaching one of those scripts now reports that archived-relay
+boundary and exits 1, so a newer installed runtime is never mistaken for drift or tampering. Do
+not "fix" the pin to match the installed version. Keep credentials and local runtime state out
+of Git. Back up live configuration before a scoped operational change and verify actual tool and
+transport behavior afterward. Report configured, runtime-verified, and Telegram-delivered
+evidence separately. Android-specific rules below apply only when modifying the archived app.
+
 ## Project Structure & Module Organization
 
 - `app/`: Compose UI, wiring, permissions, and lifecycle policy.

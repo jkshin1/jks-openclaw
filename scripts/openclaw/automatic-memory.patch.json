@@ -1,0 +1,44 @@
+{
+    "agents": {
+        "defaults": {
+            "compaction": {
+                "memoryFlush": {"enabled": true},
+                "postCompactionSections": ["Memory policy"]
+            }
+        }
+    },
+    "plugins": {
+        "entries": {
+            "memory-core": {
+                "config": {
+                    "memoryPolicy": {
+                        "excludeSessions": {
+                            "chatTypes": ["direct", "group", "channel"]
+                        }
+                    },
+                    "dreaming": {
+                        "enabled": true,
+                        "frequency": "0 3 * * *",
+                        "timezone": "Asia/Seoul",
+                        "model": "openai/gpt-5.6-sol",
+                        "storage": {"mode": "inline", "separateReports": false},
+                        "phases": {
+                            "light": {"enabled": true, "lookbackDays": 7, "limit": 20},
+                            "rem": {"enabled": true, "lookbackDays": 7, "limit": 10},
+                            "deep": {
+                                "enabled": true,
+                                "limit": 5,
+                                "minScore": 0.8,
+                                "minRecallCount": 3,
+                                "minUniqueQueries": 3,
+                                "maxAgeDays": 90,
+                                "maxPromotedSnippetTokens": 160,
+                                "maxPriorEntryLossFraction": 0.1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

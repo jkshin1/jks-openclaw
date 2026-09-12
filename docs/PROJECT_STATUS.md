@@ -1,5 +1,162 @@
 # Project status
 
+**Current Mac/Telegram operations and evidence:** [OPENCLAW_TELEGRAM.md](OPENCLAW_TELEGRAM.md).
+On 2026-09-12 KST, the owner-requested Hermes priorities were implemented and installed with a
+transactional backup: independent test/runtime receipts now connect recovery episodes, versioned
+procedures, verified reuse and finding closure; reviews receive lifecycle and verified procedure
+context plus hashed source/release deltas, with cumulative reading and input-estimate budgets.
+The earlier configured-main collector repair was recorded as an operator-origin episode, closed
+with real installed-collector checks, and reused successfully in a separate validation run.
+Five original weekly findings were imported: two observations and three deferred follow-ups with
+owners/reasons, separate from that resolved repair. The existing weekly heartbeat now records the
+same post-repair evidence chain without changing its schedule or adding inference. Gateway/Telegram
+verification passed. Synthetic report procedure correction and fresh-input reuse passed in both
+OpenClaw and Hermes; OpenClaw raw-mode token telemetry is missing, so the complete efficiency
+comparison remains blocked and ordinary work routing is unchanged. After explicit owner approval,
+the actual private operations-data acceptance completed once on Sol/high at 23:29 KST: six
+responses in 162.665 seconds, exact procedure reference, correct main/defaults distinction and
+preserved resolved state, with 10,340 bytes read and zero reread. The 23:30 local follow-up reported
+backup-stale as an open issue owned by codex. Following the owner's repair request, a fresh backup
+and offline restore rehearsal reached VERIFIED at 23:47 KST: 42 SQLite databases and 57,335 files.
+The first attempt exposed six temporary aliases in inactive retained pilot data whose existing
+runtime targets are excluded from the official archive. Those aliases were moved to a separate
+private quarantine with a reversible manifest included in the new backup; the target binary and
+archive safety checks were preserved. At 23:48 KST, operationsOk=true, issues=[] and observer
+consecutiveFailures=0. This repair made no model call, Gateway restart or Telegram send, and added
+no recurring backup automation. See the [backup repair record](OPENCLAW_HERMES_OPERATIONS.md#2026-09-12-backup-stale-repair).
+At 23:54 KST, independent test/runtime receipts closed backup-stale with valid closure evidence.
+Both the failed attempt and successful repair were retained as experiences; only the successful
+repair became `refresh-openclaw-verified-backup` v1. Finding states are now observed 3, deferred 3
+and resolved 2. The new procedure has no verified reuse yet; the existing procedure's reuse count
+remains one.
+The real acceptance reference was recorded without increasing verified reuse counts.
+The installed operations worker also passed one
+synthetic-only real model run: exact procedure reference, observation classification, one 386-byte
+source read and no reread, with four responses. See
+[implementation and acceptance](OPENCLAW_HERMES_OPERATIONS.md#2026-09-12-verified-operations-knowledge).
+
+On 2026-09-12 KST, the first natural Saturday Hermes review completed on Sol/high, reading the
+installed 1.1.0 procedure and the supplied sources. Gateway/Telegram were healthy; two terminal
+exec failures and earlier auth-selection log entries were kept separate from current service
+status. OpenClaw 2026.9.4 and Hermes 0.21.2 were identified for compatibility review; neither
+runtime was upgraded. Independent follow-up found that diagnostic configuration showed only global
+defaults and omitted the approved main-agent GLM fallback. The collector now reports the configured
+main route separately from global defaults and explicitly excludes session overrides and actual
+provider selection from that claim. Regression and installed collection evidence are recorded in
+[the weekly review record](OPENCLAW_HERMES_OPERATIONS.md#2026-09-12-first-weekly-review).
+
+On 2026-09-10 KST, eight owner-requested operations improvements were installed. The five-minute
+tool-free observer now starts one detached `--mode incident` review for a qualified open Gateway,
+task or dreaming fault, budgeted to one per incident, a six-hour interval and two per day, with
+durable intent written before the spawn; transport and backup faults stay on their deterministic
+procedures. Evidence gained classified per-failure grouping, a Gateway exec-PATH tool inventory and
+a model-free Hermes invocability check. Reviews gained fingerprint deduplication that short-circuits
+identical evidence with zero model calls, an append-only review ledger exposing repeat findings, a
+`record-applied` feedback path that invalidates the deduplication baseline, and runtime-patch
+coverage against the latest upstream release. Boundaries were preserved: failure groups carry fixed
+classification labels rather than command text or raw error strings, classification anchors on the
+app-authored prefix so an argument containing a word like `authorization` is not filed as an auth
+fault, only the `PATH=` line of the secret-bearing service environment is read, the ledger carries
+finding identifiers rather than model prose, and the inventory checks raise warnings only, never
+issues, so they cannot change a health verdict or raise an owner alert. A task-schema change now
+voids only the failure grouping, and an older installed collector omits only that section. Verified:
+130 offline tests across five suites (28 controller, 45 observer/status, 12, 27, 18), a real
+collect-only run that reproduced the day's two failure causes with zero model calls, live upstream
+patch-coverage against tag v2026.9.3, backup-first installation of both installed copies with the
+scheduled observer run confirmed executing the new code, a live `record-applied` round trip, and
+`test-host-scripts.sh` 34/34. The Gateway process, Telegram transport, configuration and model
+defaults were unchanged. Hermes procedure memory moved to `HERMES_OPS_RUNBOOK.md` 1.1.0 in both the
+repository seed and the preserved installed copy; whether a real model run reads it is not yet
+observed, and the first natural weekly run remains 2026-09-12 10:00 KST.
+On 2026-09-10 KST, the archived-relay management scripts were made to say which deployment the
+caller reached. Their `PERSONAL_EDGE_OPENCLAW_VERSION="2026.8.1"` pin is unchanged and deliberate:
+it also derives the install path `~/.local/openclaw-2026.8.1`, which the in-place upgrade to
+2026.9.3 kept, so bumping the constant alone would point the runtime root at a directory that does
+not exist. The pin is also only the first of several gates that path fails — the live deployment
+manifest still records the pre-upgrade `version` and four drifted hashes
+(`packageJsonSha256`, `cliEntrySha256`, `gatewayEntrySha256`, `wrapperSha256`; `commonSha256` and
+`watchdogSha256` still match), and `_common.sh` pins the relay's GLM-only model policy against a
+host agent now configured for `openai/gpt-5.6-sol`. Entering `openclaw_assert_existing_runtime` or
+`openclaw_load_deployment` with a newer installed runtime therefore reports the archived-relay
+boundary and the `--telegram` entry points instead of bare drift, still exiting 1. No live
+deployment state, manifest, hash baseline or configuration was changed. Verified: the legacy
+`status-gateway.sh` and `security-audit.sh` paths print the boundary and exit 1, the active
+`status-gateway.sh --telegram` and `verify-gateway.sh --telegram` are unaffected, and
+`test-deployment-assets.sh` plus `test-host-scripts.sh` (34) pass.
+On 2026-09-10 KST, Hermes was expanded from event reports to requested OpenClaw diagnosis,
+update-impact review and operational improvement candidates. The installed Sol/high worker read
+its operations procedure and source tools in a real successful review; current operations were
+healthy, historical failures were kept separate, and no code replacement was justified. A verified
+archived-relay versus active-Telegram distinction was added to the procedure after independent review.
+The existing Gateway and Telegram transport remained ready. A Codex heartbeat named
+`Hermes OpenClaw 주간 운영 점검` is ACTIVE for Saturday 10:00 Asia/Seoul; its first natural run
+is September 12 and has not yet occurred. Proven fixes continue through scoped backup, tests,
+installation and runtime checks. [Implementation and evidence](OPENCLAW_HERMES_OPERATIONS.md).
+
+On 2026-09-10 KST, stale Codex subscription blocking was cleared through the official usage
+reprobe, and explicit Codex runtimes were connected to that same guarded reprobe path.
+Astra response and post-restart Heartbeat succeeded. Four deleted synthetic pilot agents' retained
+database registrations and directories had prevented startup; their registrations were removed
+and files preserved outside agent discovery. Configuration, credentials and existing conversation
+events were preserved. See [the recovery record](OPENCLAW_HEARTBEAT_RECOVERY_20260910.md).
+
+On 2026-09-09 KST, an isolated Hermes 0.21.1 worker was installed for explicitly requested
+operations-event reports. Its separate ChatGPT OAuth, Sol/high procedure learning and fresh-session
+reuse passed; the existing Astra main agent also invoked the installed wrapper and returned an
+independently verified report. Main configuration and conversation identity were preserved.
+OpenClaw native create/apply and fresh-session reuse also passed on the existing main route.
+The optional Telegram usage guide was sent once on 2026-09-10 KST after the owner's explicit approval
+resolved the earlier automatic-review rejection; Telegram accepted it as message 155 for the verified owner.
+Phone opening remains unobserved. The original acceptance snapshot and a separate closure receipt are preserved.
+Detailed integration command-argument auditing remains unobserved because the smoke's post-run history request
+was invalid. Scope, failed attempts, receipts and usage: [OpenClaw + Hermes pilot](OPENCLAW_HERMES_PILOT.md).
+
+On 2026-09-09 KST, OpenClaw and the official Codex plugin were subsequently upgraded to
+**2026.9.3** after all four local runtime patches were requalified against exact source hashes.
+Default Astra/high and the owner's Telegram session identity were preserved. Individual task
+progress, recording-to-minutes/subtitles, and an AI/LLM weekly briefing were installed. The weekly
+briefing uses official public sources, Sol/low isolated summaries and owner Telegram receipts,
+scheduled for Saturday 09:00 Asia/Seoul. Actual synthetic meeting processing and four Telegram
+attachments passed; the future scheduled run remains distinct from registration. See
+[the upgrade and workflow record](OPENCLAW_UPDATE_20260909.md).
+
+On 2026-09-09 KST, the owner-authorized operations improvements repaired the stale observer
+template, deployed aggregate status and bounded failure/recovery alerts, and added current-runtime
+backup with isolated restore verification. Synthetic document/media processing, four-page visual
+review and seven Telegram attachments passed; direct SRT uses a validated ZIP without expanding
+media permissions. Seventy-two focused offline tests passed. The Gateway process, configuration,
+GPT-6 Astra/high default and four runtime patches were preserved. Owner upload and phone opening
+remain separate. Commands and verification boundaries: [OPENCLAW_OPERATIONS_KO.md](OPENCLAW_OPERATIONS_KO.md).
+The old zero-tool relay manifest does not certify the current Telegram host agent.
+The Mac deployment now uses owner-approved automatic memory with explicit correction/forget priority;
+current policy and acceptance evidence are recorded in that operations document. Community skill
+recommendations are in [OPENCLAW_SKILL_RECOMMENDATIONS.md](OPENCLAW_SKILL_RECOMMENDATIONS.md).
+On 2026-09-07 KST, Summarize, local Whisper, Word and Excel were installed and verified on this Mac;
+GitHub was excluded. [OPENCLAW_PRODUCTIVITY.md](OPENCLAW_PRODUCTIVITY.md) records actual execution,
+Korean output, PDF rendering and spreadsheet recalculation evidence and its limits.
+Codex, Web Readability and Document Extract were subsequently installed and execution-verified.
+Codex uses ChatGPT account authentication with API-key fallback disabled. On 2026-09-08 KST the
+owner selected and saved GPT-6 Astra/high as the default conversation model: `/model codex` selects
+`openai/gpt-6-astra`, and `/model sol` selects `openai/gpt-5.6-sol`. Model commands default to the
+current session. Summarize is explicitly Sol/low; PDF, delegated work and Dreaming's internal
+completion use Sol. The scheduled Dreaming agent turn inherits the default Astra/high.
+GLM remains available for manual selection, with no automatic fallback from Codex. Default Astra
+execution passed with actual `write`/`read` tools and no reroute; the installed Sol/low summary CLI
+passed, session model/effort commands left global defaults unchanged, and the updated guidance was
+delivered to Telegram. Seventeen offline tests, the live verifier and installed observer passed.
+Dreaming's internal Sol route passed an isolated core check; the scheduler and a complete owner-memory
+cycle were not exercised. Prior execution evidence below retains its original model scope.
+See [OPENCLAW_PLUGINS.md](OPENCLAW_PLUGINS.md) for configuration, usage and bounded evidence.
+On 2026-09-08, the image-request `Yield failed` report was traced to a mistaken `sessions_yield`
+call for independent image generation. The original image and Telegram photo delivery had completed;
+the live workspace guidance now specifies the correct wait/finish behavior. Eleven policy tests
+and live gateway verification passed. No new image request or phone-download acceptance was run;
+the bounded receipt is in [OPENCLAW_TELEGRAM.md](OPENCLAW_TELEGRAM.md#image-generation-wait-correction-2026-09-08-kst).
+GLM-5.3 Flash `/think max` support was added on 2026-09-07 KST with pinned runtime patches,
+offline request validation, live command persistence and two successful isolated GLM responses.
+That acceptance retained the owner session's `high`; [OPENCLAW_TELEGRAM.md](OPENCLAW_TELEGRAM.md#glm-max-thinking)
+records the separate wire, provider-response and Telegram-delivery evidence boundaries.
+
 > **2026-09-06 — development stopped. This Android app is retired.**
 >
 > The owner retired the app and the product problem it solved. Personal schedule, reminder, alarm,

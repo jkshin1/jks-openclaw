@@ -38,6 +38,22 @@ credentials*.json
 service-account*.json
 client_secret*.json
 
+# OpenClaw / Hermes private state and migration backups
+.openclaw*/
+.hermes*/
+/backups/
+/migration-backups/
+auth.json
+auth-store.json
+auth-profiles.json
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
 # Large on-device model artifacts
 models/*
 !models/README.md

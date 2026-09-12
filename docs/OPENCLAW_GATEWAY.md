@@ -1,5 +1,9 @@
 # OpenClaw Gateway on the always-on Mac
 
+> Archived Android relay runbook. For the active Mac/Telegram host agent, use
+> [OPENCLAW_TELEGRAM.md](OPENCLAW_TELEGRAM.md). The tool-free policy and pinned adoption manifest
+> below are historical and must not be reapplied to the current deployment.
+
 This runbook prepares the current Mac as the single-owner OpenClaw Gateway for Personal Edge.
 The deployment is pinned to OpenClaw `2026.8.1`, Node 26, profile `personaledge`, and
 `openrouter/z-ai/glm-5.3-flash`. Android remains the only authority for device permissions,

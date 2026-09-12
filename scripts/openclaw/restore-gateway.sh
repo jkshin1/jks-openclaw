@@ -2,12 +2,17 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${1:-}" == "--telegram" ]]; then
+    shift
+    exec python3 "$script_dir/telegram-backup.py" rehearse "$@"
+fi
 # shellcheck source=_common.sh
 source "$script_dir/_common.sh"
 
 usage() {
     cat <<'EOF'
 Usage: restore-gateway.sh --archive FILE --target NEW_DIRECTORY --apply
+       restore-gateway.sh --telegram --archive FILE --target NEW_DIRECTORY --apply
 
 Verifies and restores a trusted OpenClaw archive into a fresh staging directory. It never
 overwrites or activates live state. Review the manifest and follow docs/OPENCLAW_GATEWAY.md before

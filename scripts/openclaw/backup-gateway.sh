@@ -2,12 +2,17 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${1:-}" == "--telegram" ]]; then
+    shift
+    exec python3 "$script_dir/telegram-backup.py" create "$@"
+fi
 # shellcheck source=_common.sh
 source "$script_dir/_common.sh"
 
 usage() {
     cat <<'EOF'
 Usage: backup-gateway.sh [--output DIRECTORY] --apply
+       backup-gateway.sh --telegram [--output DIRECTORY] --apply --rehearse
 
 Creates and verifies a consistent OpenClaw full archive with the official online-backup command.
 Never raw-copies live SQLite, WAL, SHM, or journal files. Backups contain credentials and must be
