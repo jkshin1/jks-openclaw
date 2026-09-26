@@ -617,3 +617,51 @@ state와 runtime 복구 자료이며 별도 Hermes 저장소 전체의 백업을
 `retry-1/backup-verification.json`, `restored-health-verification.json`,
 `alias-relocation.json`, `knowledge-closure-receipt.json`에 있다. 최초 실패와 성공한 재시도는
 별도 영수증으로 보존했다.
+
+### 2026-09-19 주간 점검과 후속 복구
+
+자연 주간 실행 `ops-20260919T010404Z-8db23c12`는 한 번 실행했고 실제 종료 코드는 1이었다.
+Hermes Sol/high가 네 번 응답한 뒤 누적된 소스 결과 때문에 다음 입력이 worker의 추정 예산에
+걸려 `MODEL_INPUT_ESTIMATE_BUDGET_EXHAUSTED`로 종료됐다. 제공된 사용량은 비캐시 입력
+49,766·캐시 읽기 82,048·출력 1,848, 총 133,662 tokens다. 이는 구독 한도 오류가 아니다.
+최종 분석과 후보 검사 결과는 없으며 원본 실패 영수증과 사용량을 보존했다. 재시도나 다른
+모델·인증 경로 전환은 하지 않았다.
+
+수집기가 별도로 확인한 현재 문제는 `backup-stale`이었다. Gateway/Telegram은 정상이고
+9월 12일 검증 백업의 나이가 555,381초로 72시간을 초과했다. 기존
+`refresh-openclaw-verified-backup` v1을 적용해 10:08 KST 새 백업과 격리 복원을 완료했다.
+SQLite 42개와 파일 57,678개, archive·manifest SHA-256과 최신 영수증의 일치를 확인했다.
+21개 백업 회귀 검사와 설치된 observer의 무전송·무추론 재확인이 통과했으며 `issues=[]`,
+`consecutiveFailures=0`으로 회복됐다. 설정·기존 백업을 보존했고 링크 이동이나 Gateway
+재시작은 필요하지 않았다. 새 경험과 기존 절차의 실제 재사용 1회를 기록하고 같은 검증
+묶음으로 `backup-stale`을 다시 종료했다. 주간 점검 간격보다 백업의 유효 기간이 짧으므로
+향후 갱신 주기 개선은 별도 보류 항목으로 남기며 이번 점검이 새 예약을 만들지는 않는다.
+
+독립 코드 검토로 worker의 조기 최종 작성 전환을 추가했다. 입력 추정이 호출당 한도의
+절반에 도달하거나 누적 여유가 현재 입력 두 번보다 작거나 마지막 회차이면, 기존 회차를
+`tool_choice=none`으로 전환해 확보한 근거와 미검토 범위를 보고하도록 한다. 원래 근거와
+도구 결과를 삭제하지 않으며, 추가 지시까지 포함해 기존 60,000/180,000 한도를 다시
+검사한다. 최종 전환 뒤 도구 실행과 추가 호출은 거절한다. 임의로 큰 요청이 언제나
+완료된다는 보장은 없으며 기존 제한을 넘는 요청은 계속 거절한다.
+
+소스 회귀 검사 117개(worker 39·controller 50·installer 15·Telegram 정책 13)가 통과했다.
+공식 설치기의 비공개 백업 후 설치했고, 설치본을 pinned Hermes runtime에 로드해
+네트워크를 차단한 mock 검사 4개와 실제 Gateway/Telegram 검사를 통과했다. 이 검사는
+실제 모델의 후속 분석 성공과 다르다. 해당 문제는 다음 자연 검토의 최종 분석 완료 확인까지
+담당 `codex`의 `deferred`로 유지하며 수정 경험을 새 검증 절차로 승격하지 않는다.
+
+이번 토요일 09:00 AI·LLM 브리핑도 별도로 `SUMMARY_NOT_VERIFIED` 상태였고 전달이
+시작되지 않았음을 내용 없는 상태 자료로 확인했다. 공개 출처 수집 실패는 없었으며 원래
+기준점·미완료 실행을 보존했다. 이 운영 점검에서 이전 사용자 업무를 재시작하지 않는
+계약에 따라 브리핑을 재실행·재전송하지 않고 담당과 보류 이유를 기록했다.
+
+설치 버전은 OpenClaw 2026.9.3/Hermes 0.21.1을 유지한다. 공식
+[OpenClaw v2026.9.4](https://github.com/openclaw/openclaw/releases/tag/v2026.9.4)는 기존 검토
+대상이며, [Hermes v0.21.3](https://github.com/NousResearch/hermes-agent/releases/tag/v2026.9.14)는
+새 검토 대상이다. 이번 실패만으로 런타임 교체 필요성을 판정하지 않았다.
+
+비공개 근거는 해당 실행의 `operator-followup/` 아래에 있다. `backup-verification.json`은
+실제 회귀·백업·해시 대조·설치된 observer 명령을 연결하고, `worker-verification.json`은
+코드 검사·설치·설치본의 mock 동작·Gateway 확인을 연결한다. 두 파일은 위
+`verificationRef` 규격의 경로와 SHA-256으로 경험에 등록하며, `completion.json`에서
+원본 주간 실패, 백업 복구, 코드 설치, 실제 모델 수용 대기를 구분한다.

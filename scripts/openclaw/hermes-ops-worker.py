@@ -422,8 +422,47 @@ class ModelInputBudget:
             "attempt_scope": "worker_dispatches_including_failures_excluding_native_internal_retries",
             "per_dispatch_limit": MAX_MODEL_INPUT_ESTIMATE, "cumulative_limit": MAX_CUMULATIVE_MODEL_INPUT_ESTIMATE,
             "dispatch_attempts": 0, "completed_responses": 0, "failed_dispatches": 0,
-            "estimated_input_tokens": 0, "max_dispatch_estimate": 0, "budget_rejections": 0}
+            "estimated_input_tokens": 0, "max_dispatch_estimate": 0, "budget_rejections": 0,
+            "finalization_dispatches": 0, "finalization_reason": None}
         observation["model_input_metrics"] = self.metrics
+
+    def reserve_dispatch(self, api_kwargs):
+        """Use an existing turn for a final answer before another tool round grows it.
+
+        Keep all supplied evidence and tool results. This is an early stopping
+        threshold, not a promise that arbitrary model output fits: reserve still
+        rejects an oversized request, including the finalization instruction.
+        A provider ignoring tool_choice cannot spend another dispatch.
+        """
+        require(not self.metrics["finalization_dispatches"], "MODEL_FINALIZATION_NOT_COMPLETED")
+        estimate = (len(encoded(api_kwargs)) + 3) // 4
+        reason = None
+        if estimate >= MAX_MODEL_INPUT_ESTIMATE // 2:
+            reason = "per_dispatch_headroom"
+        elif self.metrics["estimated_input_tokens"] + 2 * estimate >= MAX_CUMULATIVE_MODEL_INPUT_ESTIMATE:
+            reason = "cumulative_headroom"
+        elif self.metrics["dispatch_attempts"] + 1 >= MAX_ITERATIONS:
+            reason = "last_dispatch"
+        if reason:
+            api_kwargs = copy.deepcopy(api_kwargs)
+            # Keep tool definitions so earlier function calls remain interpretable;
+            # the Responses transport supports the explicit no-tools choice.
+            api_kwargs["tool_choice"] = "none"
+            instruction = ("This is the final permitted response for this review. Do not call tools. "
+                "Return the required result JSON now using only evidence already supplied or actually read. "
+                "State that the source review stopped early for the input budget and describe unread or "
+                "unverified areas as evidence gaps; do not imply a complete source audit. "
+                "Preserve unresolved issues and distinguish observations from unverified proposals. "
+                "Use empty patches and runbook_candidate unless a proposal is already fully supported.")
+            if "input" in api_kwargs:
+                api_kwargs["instructions"] = (api_kwargs.get("instructions", "") + "\n" + instruction).strip()
+            else:
+                api_kwargs["messages"] = [*api_kwargs.get("messages", []), {"role": "system", "content": instruction}]
+        self.reserve(api_kwargs)
+        if reason:
+            self.metrics["finalization_dispatches"] = 1
+            self.metrics["finalization_reason"] = reason
+        return api_kwargs
 
     def reserve(self, api_kwargs):
         estimate = (len(encoded(api_kwargs)) + 3) // 4
@@ -481,6 +520,8 @@ def build_prompt(request):
             "Read relevant changed ranges once; reuse previous tool content. Budget rejection is recoverable: stop rereading and report evidence gaps. "
             f"Serialized model-input estimate is bounded to {MAX_MODEL_INPUT_ESTIMATE} per dispatch and "
             f"{MAX_CUMULATIVE_MODEL_INPUT_ESTIMATE} cumulative (UTF-8 JSON bytes/4, not billed tokens). Finish before exhaustion. "
+            "The worker may make a remaining turn final with tool_choice=none before those limits; "
+            "then return the result JSON from available evidence and explicitly report the incomplete review. "
             "Correct pagination errors within this run, without repeating the diagnosis. "
             "Return exactly one JSON object matching this contract; no markdown fences. "
             "A replacement is {path,beforeSha256,content} with FULL replacement content, for an existing supplied editable source only. "
@@ -631,7 +672,7 @@ def run_worker(home: Path, request: dict, observation: dict):
                 require(input_budget.metrics["dispatch_attempts"] < MAX_ITERATIONS, "API_BUDGET_EXHAUSTED")
                 require(not (home / "auth.json").exists(), "OPS_AUTH_COPY_REFUSED")
                 require(skill_snapshot(home) == before, "UNAPPROVED_SKILL_CHANGE")
-                input_budget.reserve(api_kwargs)
+                api_kwargs = input_budget.reserve_dispatch(api_kwargs)
             except PolicyError as exc:
                 raise RuntimePolicyStop(str(exc)) from None
             try:
@@ -647,6 +688,7 @@ def run_worker(home: Path, request: dict, observation: dict):
 
         def _execute_tool_calls(self, assistant_message, messages, effective_task_id, api_call_count=0):
             try:
+                require(not input_budget.metrics["finalization_dispatches"], "MODEL_FINALIZATION_NOT_COMPLETED")
                 bundle.validate_batch(assistant_message)
                 assert_staged_skill_gate(write_approval, skill_manager_tool)
             except PolicyError as exc:

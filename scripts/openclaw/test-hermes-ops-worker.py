@@ -313,6 +313,66 @@ class OpsWorkerTest(unittest.TestCase):
         self.assertFalse(budget.metrics["billed_tokens"])
         self.assertNotIn("synthetic input", json.dumps(observation))
 
+    def test_large_review_finishes_existing_dispatch_without_discarding_evidence(self):
+        budget = worker.ModelInputBudget({})
+        # The failing weekly run had spent 72,278 before its 47,027-token
+        # fourth dispatch. That response requested another large source batch.
+        budget.metrics.update(dispatch_attempts=3, completed_responses=3, estimated_input_tokens=72278)
+        payload = {"model": worker.MODEL, "input": [{"role": "user", "content": "x" * 187800}],
+                   "instructions": "Original contract", "tools": [{"type": "function", "name": "ops_read_source"}]}
+        original = copy.deepcopy(payload)
+        prepared = budget.reserve_dispatch(payload)
+        self.assertEqual(payload, original)
+        self.assertEqual(prepared["input"], original["input"])
+        self.assertEqual(prepared["tools"], original["tools"])
+        self.assertEqual(prepared["tool_choice"], "none")
+        self.assertIn("incomplete", worker.build_prompt(self.request))
+        self.assertIn("evidence gaps", prepared["instructions"])
+        self.assertTrue(prepared["instructions"].startswith("Original contract"))
+        self.assertEqual(budget.metrics["dispatch_attempts"], 4)
+        self.assertEqual(budget.metrics["finalization_dispatches"], 1)
+        self.assertEqual(budget.metrics["finalization_reason"], "per_dispatch_headroom")
+        self.assertLessEqual(budget.metrics["max_dispatch_estimate"], worker.MAX_MODEL_INPUT_ESTIMATE)
+        self.assertLessEqual(budget.metrics["estimated_input_tokens"], worker.MAX_CUMULATIVE_MODEL_INPUT_ESTIMATE)
+        with self.assertRaisesRegex(worker.PolicyError, "MODEL_FINALIZATION_NOT_COMPLETED"):
+            budget.reserve_dispatch(payload)
+        self.assertEqual(budget.metrics["dispatch_attempts"], 4)
+
+    def test_finalization_counts_instruction_overhead_and_cumulative_headroom(self):
+        payload = {"model": worker.MODEL, "messages": [{"role": "user", "content": "x" * 1000}]}
+        estimate = (len(worker.encoded(payload)) + 3) // 4
+        budget = worker.ModelInputBudget({})
+        budget.metrics["estimated_input_tokens"] = worker.MAX_CUMULATIVE_MODEL_INPUT_ESTIMATE - 2 * estimate
+        prepared = budget.reserve_dispatch(payload)
+        self.assertEqual(prepared["tool_choice"], "none")
+        self.assertEqual(prepared["messages"][0], payload["messages"][0])
+        self.assertEqual(budget.metrics["finalization_reason"], "cumulative_headroom")
+        budget = worker.ModelInputBudget({})
+        with patch.object(worker, "MAX_MODEL_INPUT_ESTIMATE", estimate):
+            with self.assertRaisesRegex(worker.PolicyError, "MODEL_INPUT_ESTIMATE_BUDGET_EXHAUSTED"):
+                budget.reserve_dispatch(payload)
+        self.assertEqual(budget.metrics["dispatch_attempts"], 0)
+        self.assertEqual(budget.metrics["finalization_dispatches"], 0)
+        self.assertEqual(budget.metrics["budget_rejections"], 1)
+        budget = worker.ModelInputBudget({})
+        budget.metrics["estimated_input_tokens"] = worker.MAX_CUMULATIVE_MODEL_INPUT_ESTIMATE - estimate
+        with self.assertRaisesRegex(worker.PolicyError, "MODEL_INPUT_ESTIMATE_BUDGET_EXHAUSTED"):
+            budget.reserve_dispatch(payload)
+        self.assertEqual(budget.metrics["dispatch_attempts"], 0)
+        self.assertEqual(budget.metrics["finalization_dispatches"], 0)
+
+    def test_ordinary_dispatch_is_unchanged_and_last_dispatch_is_final(self):
+        payload = {"model": worker.MODEL, "input": [{"role": "user", "content": "Small evidence"}],
+                   "instructions": "Contract", "tools": []}
+        budget = worker.ModelInputBudget({})
+        self.assertIs(budget.reserve_dispatch(payload), payload)
+        self.assertEqual(budget.metrics["finalization_dispatches"], 0)
+        self.assertNotIn("tool_choice", payload)
+        budget.metrics["dispatch_attempts"] = worker.MAX_ITERATIONS - 1
+        self.assertEqual(budget.reserve_dispatch(payload)["tool_choice"], "none")
+        self.assertEqual(budget.metrics["finalization_reason"], "last_dispatch")
+        self.assertEqual(budget.metrics["dispatch_attempts"], worker.MAX_ITERATIONS)
+
     def test_bounded_source_read_returns_only_bundle_lines_and_continuation(self):
         content = ("x" * 1000 + "\n") * 40
         self.request["sources"][self.source]["content"] = content
@@ -600,6 +660,49 @@ class OpsWorkerTest(unittest.TestCase):
             self.assertEqual(receipt["error_code"], "MODEL_INPUT_ESTIMATE_BUDGET_EXHAUSTED")
             self.assertEqual(receipt["model_input_metrics"]["dispatch_attempts"], 0)
             self.assertEqual(receipt["model_input_metrics"]["budget_rejections"], 1)
+
+    @unittest.skipUnless(importlib.util.find_spec("run_agent") is not None, "optional pinned Hermes runtime is not installed")
+    def test_native_finalization_keeps_evidence_and_refuses_any_more_tools_or_dispatches(self):
+        with patch.dict(os.environ, self.env, clear=True), worker.profile_environment(self.home), \
+                patch.object(socket.socket, "connect", side_effect=AssertionError("offline network blocked")), \
+                worker.base.quiet_runtime():
+            import model_tools
+            from run_agent import AIAgent
+            from agent.codex_responses_adapter import _preflight_codex_api_kwargs
+            reply = copy.deepcopy(self.result)
+            reply["analysis"] = "입력 예산 때문에 소스 검토를 조기 종료했습니다. 읽지 않은 소스는 검증되지 않았습니다."
+            original_input = [{"role": "user", "content": "synthetic-evidence " * 9000}]
+
+            def transport(agent, api_kwargs):
+                normalized = _preflight_codex_api_kwargs(api_kwargs)
+                self.assertEqual(normalized["tool_choice"], "none")
+                self.assertEqual(api_kwargs["input"], original_input)
+                self.assertIn("evidence gaps", normalized["instructions"])
+                return SimpleNamespace(model=worker.MODEL)
+
+            def conversation(agent, **_kwargs):
+                for name, args in (("skills_list", {}), ("skill_view", {"name": worker.SKILL_NAME})):
+                    result = model_tools.handle_function_call(name, args, enabled_tools=sorted(worker.EXPECTED_TOOLS),
+                                                              enabled_toolsets=["skills", "ops_bundle"])
+                    agent.tool_complete_callback("synthetic", name, args, result)
+                kwargs = {"model": agent.model, "input": original_input, "instructions": "Contract", "tools": []}
+                agent._interruptible_api_call(kwargs)
+                with self.assertRaisesRegex(worker.RuntimePolicyStop, "MODEL_FINALIZATION_NOT_COMPLETED"):
+                    agent._execute_tool_calls(message("ops_read_source", {"path": self.source}), [], "synthetic")
+                with self.assertRaisesRegex(worker.RuntimePolicyStop, "MODEL_FINALIZATION_NOT_COMPLETED"):
+                    agent._interruptible_api_call(kwargs)
+                return {"completed": True, "partial": False, "interrupted": False, "error": None,
+                        "final_response": json.dumps(reply, ensure_ascii=False)}
+
+            with patch.object(AIAgent, "run_conversation", conversation), \
+                    patch.object(AIAgent, "_interruptible_api_call", transport):
+                observed = worker.run_worker(self.home, self.request, {})
+            self.assertTrue(observed["completed"])
+            self.assertEqual(observed["model_input_metrics"]["dispatch_attempts"], 1)
+            self.assertEqual(observed["model_input_metrics"]["completed_responses"], 1)
+            self.assertEqual(observed["model_input_metrics"]["finalization_dispatches"], 1)
+            self.assertEqual(observed["read_metrics"]["successful_reads"], 0)
+            self.assertEqual(observed["result"], reply)
 
     @unittest.skipUnless(importlib.util.find_spec("run_agent") is not None, "optional pinned Hermes runtime is not installed")
     def test_native_registry_agent_and_borrowed_auth_without_network_or_inference(self):
