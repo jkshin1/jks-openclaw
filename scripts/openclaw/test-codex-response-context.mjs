@@ -27,7 +27,7 @@ try {
   const contract = await fs.readFile(new URL('./templates/TELEGRAM_SOUL.md', import.meta.url), 'utf8');
   await fs.writeFile(path.join(dir, 'SOUL.md'), contract);
   const second = await context('response-fixture');
-  for (const marker of ['TELEGRAM RESPONSE CONTRACT', 'final=false', 'sessions_yield', 'structured generated attachments']) {
+  for (const marker of ['TELEGRAM RESPONSE CONTRACT', 'final=false', 'sessions_yield', 'structured generated attachments', 'final=true', 'LAST tool action', 'Never end with only final=false']) {
     assert(second.turnScopedDeveloperInstructions?.includes(marker), marker + ' missing from live turn projection'); checks++;
   }
   await fs.writeFile(path.join(dir, 'SOUL.md'), contract + '\nFresh instruction revision marker.\n');

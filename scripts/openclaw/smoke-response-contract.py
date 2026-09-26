@@ -29,6 +29,9 @@ image_wait_tool: the tool used solely to wait after image_generate async=true/st
 image_accepted_turn_end: the normal final text after progress is already delivered and background image is accepted;
 completion_tool: the tool used to deliver the ready image in message-tool-only mode;
 completion_structured_attachments: boolean whether generated attachments must be included;
+terminal_send_final: boolean final argument for the last completed reply;
+handoff_send_final: boolean final argument for the LAST user-facing acknowledgement in the CURRENT turn AFTER an authorized continuation has already been scheduled successfully; no work or tools remain in this turn, the remaining task will run in a separate later turn;
+tools_after_final_send: boolean whether to update progress_card after a confirmed final=true send;
 regenerate_on_send_failure: boolean whether to regenerate a completed image to repair its failed send.
 This test must remain tool-free. Do not write memory.'''
     try:
@@ -52,7 +55,8 @@ This test must remain tool-free. Do not write memory.'''
         actual = json.loads(raw)
         expected = {'progress_tool': 'message', 'progress_final': False, 'image_wait_tool': None,
             'image_accepted_turn_end': 'NO_REPLY', 'completion_tool': 'message',
-            'completion_structured_attachments': True, 'regenerate_on_send_failure': False}
+            'completion_structured_attachments': True, 'regenerate_on_send_failure': False,
+            'terminal_send_final': True, 'handoff_send_final': True, 'tools_after_final_send': False}
         details = result.get('terminalReceipt', {})
         assert actual == expected, 'Response contract mismatch'
         assert details.get('successfulToolNames') == [], 'Unexpected tool use'
