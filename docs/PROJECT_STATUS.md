@@ -1,6 +1,48 @@
 # Project status
 
 **Current Mac/Telegram operations and evidence:** [OPENCLAW_TELEGRAM.md](OPENCLAW_TELEGRAM.md).
+On 2026-09-26 KST, the main agent's chain became `anthropic/claude-opus-5-5` →
+`openai/gpt-6-sol` → OpenRouter GLM, and the global default became Opus → Sol. Opus runs through
+the `claude-cli` runtime on this Mac's own Claude Code login (Homebrew `claude-code@latest`
+2.1.282; Opus 5.5 needs 2.1.280+), drawing from the Claude subscription, with no Anthropic API
+key and native Claude session discovery disabled. No runtime file was patched. One synthetic
+agent turn with no model override ran `claude-cli`/`claude-opus-5-5` and returned `OPUS55-READY`;
+a raw `modelRun` smoke cannot test this route because 2026.9.3 forces raw runs onto the embedded
+runtime. Its failover showed the real chain order (Opus auth failure, Sol 429 with Codex
+exhausted until 2026-09-30, GLM answered). The verifier, 16 policy tests and the reinstalled
+observer's scheduled check passed. A real owner Telegram message then ran on `claude-cli`/Opus 5.5
+with no fallback and Telegram accepted the reply (message 426). Actual Claude limit exhaustion
+remains unverified; see the migration record's known boundaries.
+The paragraph below describes the superseded 2026-09-23 Sol state.
+On 2026-09-23 KST, the configured global and main-agent default routes moved to
+`openai/gpt-6-sol` with `high` thinking; main retains its sole configured OpenRouter GLM
+fallback. A separate, scoped Sol compatibility patch is installed in four OpenClaw 2026.9.3
+files (plugin manifest, thinking policy, model route contract, and ChatGPT/Codex resolver).
+Its reviewed hashes are in `scripts/openclaw/runtime-patch-specs.json` and its private installed
+receipt is `operations/gpt6-sol-patch.json`. This does not replace the four earlier local
+runtime repairs. Codex 0.156.1 still uses the ChatGPT OAuth credential without an API-key
+billing route. An isolated Gateway `modelRun` returned `SOL-READY`: requested/effective
+`openai/gpt-6-sol`, response model `gpt-6-sol`, no reroute or successful tools, and cleaned
+synthetic state. The owner's Telegram conversation and Telegram delivery have not yet been
+tested on this new route; quota exhaustion, fallback under Sol, and comparative usage savings
+also remain unverified. Historical Astra receipts below keep their original scope.
+The same day, a fresh official backup and offline restore rehearsal reached `VERIFIED` at
+07:02:48 UTC with 42 SQLite databases and 64,016 files. Its recovery supplement contains
+the Sol installation receipt and all four patched runtime files; the restored copy was
+checked separately and was not activated. The operating status returned `ok=true` and
+`issues=[]`. This is a recovery copy of the current Sol state, not an Astra rollback.
+
+On 2026-09-19 KST, the natural weekly Hermes review ran once and stopped at the worker's
+model-input estimate budget after four responses; the failed attempt and supplied usage were retained
+without retry. Independent follow-up refreshed the stale backup and verified its offline restoration
+(42 SQLite databases, 57,678 files), recording actual reuse of the existing backup procedure and
+valid finding closure. Current observer issues and consecutive failures returned to zero.
+A bounded final-response transition was installed without changing model/input limits or credentials:
+117 source regressions, four installed-worker offline mock checks, and live Gateway/Telegram checks
+passed. Actual model acceptance remains deferred to the next natural review. The separately failed
+09:00 weekly briefing remains preserved and unsent; it was not restarted by this operations review.
+See [the September 19 record](OPENCLAW_HERMES_OPERATIONS.md#2026-09-19-주간-점검과-후속-복구).
+
 On 2026-09-12 KST, the owner-requested Hermes priorities were implemented and installed with a
 transactional backup: independent test/runtime receipts now connect recovery episodes, versioned
 procedures, verified reuse and finding closure; reviews receive lifecycle and verified procedure
@@ -140,7 +182,8 @@ owner selected and saved GPT-6 Astra/high as the default conversation model: `/m
 `openai/gpt-6-astra`, and `/model sol` selects `openai/gpt-5.6-sol`. Model commands default to the
 current session. Summarize is explicitly Sol/low; PDF, delegated work and Dreaming's internal
 completion use Sol. The scheduled Dreaming agent turn inherits the default Astra/high.
-GLM remains available for manual selection, with no automatic fallback from Codex. Default Astra
+At that time, GLM was available for manual selection, with no automatic fallback from Codex. The
+September 11 main-agent fallback policy superseded that historical boundary. Default Astra
 execution passed with actual `write`/`read` tools and no reroute; the installed Sol/low summary CLI
 passed, session model/effort commands left global defaults unchanged, and the updated guidance was
 delivered to Telegram. Seventeen offline tests, the live verifier and installed observer passed.

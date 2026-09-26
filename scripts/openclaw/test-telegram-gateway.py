@@ -24,7 +24,8 @@ def fixture():
                                   "groupPolicy": "allowlist", "groupAllowFrom": ["12345"],
                                   "groups": {"*": {"requireMention": True}},
                                   "botToken": {"source": "store", "id": "TELEGRAM_BOT_TOKEN"}}},
-        "agents": {"defaults": {"sandbox": {"mode": "off"}}},
+        "agents": {"defaults": {"sandbox": {"mode": "off"}},
+                   "entries": {"main": {"model": copy.deepcopy(verifier.MAIN_MODEL_ROUTE)}}},
         "tools": {"profile": "coding", "alsoAllow": ["browser"], "deny": ["computer"],
                   "exec": {"host": "gateway", "mode": "full"}, "elevated": {"enabled": False},
                   "fs": {"workspaceOnly": False}},
@@ -38,15 +39,20 @@ def fixture():
 
 class TelegramPolicyTest(unittest.TestCase):
     def test_main_fallback_authorization_is_exact_and_keeps_routing_guards(self):
-        approved = {"main": {"model": {"primary": "openai/gpt-6-astra",
-                                      "fallbacks": ["openrouter/z-ai/glm-5.3-flash"]}}}
+        opus, sol, glm = verifier.OPUS_MODEL, verifier.SOL_MODEL, verifier.GLM_MODEL
+        approved = {"main": {"model": {"primary": opus, "fallbacks": [sol, glm]}}}
         config = fixture()
         config["agents"]["entries"] = copy.deepcopy(approved)
         verifier.owner_policy(config, "12345")
         changes = [
-            {"main": {"model": {"primary": "openrouter/z-ai/glm-5.3-flash", "fallbacks": []}}},
-            {"main": {"model": {"primary": "openai/gpt-6-astra", "fallbacks": ["openrouter/other"]}}},
-            {"main": {"model": {"primary": "openai/gpt-6-astra", "fallbacks": ["openrouter/z-ai/glm-5.3-flash", "openrouter/other"]}}},
+            {"main": {"model": {"primary": glm, "fallbacks": []}}},
+            {"main": {"model": {"primary": sol, "fallbacks": [glm]}}},
+            {"main": {"model": {"primary": "openai/gpt-6-astra", "fallbacks": [glm]}}},
+            {"main": {"model": {"primary": "anthropic/claude-opus-5", "fallbacks": [sol, glm]}}},
+            {"main": {"model": {"primary": opus, "fallbacks": [glm]}}},
+            {"main": {"model": {"primary": opus, "fallbacks": [sol]}}},
+            {"main": {"model": {"primary": opus, "fallbacks": [glm, sol]}}},
+            {"main": {"model": {"primary": opus, "fallbacks": [sol, glm, "openrouter/other"]}}},
             dict(approved, other={}),
             {"main": dict(approved["main"], tools={"allow": ["exec"]})},
         ]
@@ -84,11 +90,13 @@ class TelegramPolicyTest(unittest.TestCase):
             "auth": {"profiles": {"openai:owner": {"provider": "openai", "mode": "oauth"}},
                      "order": {"openai": ["openai:owner"]}},
             "agents": {"defaults": {
-                "model": {"primary": "openai/gpt-6-astra", "fallbacks": []},
+                "model": copy.deepcopy(verifier.DEFAULT_MODEL_ROUTE),
                 "thinkingDefault": "high", "modelSelectionScope": "session",
                 "models": {"openai/gpt-5.6-sol": {"alias": "sol", "agentRuntime": {"id": "codex"}},
-                           "openai/gpt-6-astra": {"alias": "codex", "agentRuntime": {"id": "codex"}}},
-                "modelPolicy": {"allow": ["openrouter/*", "openai/gpt-5.6-sol", "openai/gpt-6-astra"]},
+                           "openai/gpt-6-astra": {"alias": "astra", "agentRuntime": {"id": "codex"}},
+                           "openai/gpt-6-sol": {"alias": "codex", "agentRuntime": {"id": "codex"}}},
+                "modelPolicy": {"allow": ["openrouter/*", "openai/gpt-5.6-sol", "openai/gpt-6-astra",
+                                          "openai/gpt-6-sol", verifier.OPUS_MODEL]},
                 "subagents": {"model": {"primary": "openai/gpt-5.6-sol", "fallbacks": []}},
                 "pdfModel": {"primary": "openai/gpt-5.6-sol", "fallbacks": []}}},
             "plugins": {"allow": ["codex", "openai", "web-readability", "document-extract"],
@@ -97,7 +105,8 @@ class TelegramPolicyTest(unittest.TestCase):
         }
         config["plugins"]["entries"]["codex"]["config"] = {
             "appServer": {"homeScope": "agent", "mode": "yolo",
-                          "clearEnv": ["OPENAI_API_KEY", "CODEX_API_KEY"]},
+                          "clearEnv": ["OPENAI_API_KEY", "CODEX_API_KEY"],
+                          "command": verifier.APPROVED_CODEX_COMMAND},
             **{key: {"enabled": False} for key in
                ["sessionCatalog", "supervision", "codexPlugins", "computerUse"]}}
         listing = {"profiles": [{"id": "openai:owner", "provider": "openai", "type": "oauth"}]}
@@ -107,7 +116,11 @@ class TelegramPolicyTest(unittest.TestCase):
             ("auth.profiles.openai:owner.mode", "api_key"),
             ("agents.defaults.model.primary", "openrouter/z-ai/glm-5.3-flash"),
             ("agents.defaults.model.primary", "openai/gpt-5.6-sol"),
+            ("agents.defaults.model.primary", "openai/gpt-6-astra"),
+            ("agents.defaults.model.primary", "openai/gpt-6-sol"),
             ("agents.defaults.model.fallbacks", ["openrouter/z-ai/glm-5.3-flash"]),
+            ("agents.defaults.model.fallbacks", ["openai/gpt-6-sol", "openrouter/z-ai/glm-5.3-flash"]),
+            ("agents.defaults.model.fallbacks", []),
             ("agents.defaults.thinkingDefault", "low"),
             ("agents.defaults.thinkingDefault", None),
             ("agents.defaults.modelSelectionScope", "global"),
@@ -115,6 +128,11 @@ class TelegramPolicyTest(unittest.TestCase):
             ("agents.defaults.modelSelectionScope", None),
             ("agents.defaults.modelPolicy.allow", ["openrouter/*", "openai/*"]),
             ("agents.defaults.modelPolicy.allow", ["openrouter/*", "openai/gpt-5.6-sol"]),
+            ("agents.defaults.modelPolicy.allow", ["openrouter/*", "openai/gpt-5.6-sol",
+                                                   "openai/gpt-6-astra", "openai/gpt-6-sol"]),
+            ("agents.defaults.modelPolicy.allow", ["openrouter/*", "openai/gpt-5.6-sol",
+                                                   "openai/gpt-6-astra", "openai/gpt-6-sol",
+                                                   "anthropic/*"]),
             ("agents.defaults.pdfModel.primary", "openrouter/z-ai/glm-5.3-flash"),
             ("agents.defaults.pdfModel.fallbacks", ["openrouter/paid-model"]),
             ("agents.defaults.subagents.model.primary", "openrouter/paid-model"),
@@ -133,7 +151,7 @@ class TelegramPolicyTest(unittest.TestCase):
                 parent[keys[-1]] = value
                 with self.assertRaises(ValueError):
                     verifier.codex_subscription_policy(bad, listing)
-        for model in ("openai/gpt-5.6-sol", "openai/gpt-6-astra"):
+        for model in ("openai/gpt-5.6-sol", "openai/gpt-6-astra", "openai/gpt-6-sol"):
             for replacement in (None, {"alias": "other", "agentRuntime": {"id": "codex"}},
                                 {"alias": config["agents"]["defaults"]["models"][model]["alias"],
                                  "agentRuntime": {"id": "openclaw"}}):
@@ -149,6 +167,125 @@ class TelegramPolicyTest(unittest.TestCase):
         bad_listing["profiles"][0]["type"] = "api_key"
         with self.assertRaises(ValueError):
             verifier.codex_subscription_policy(config, bad_listing)
+
+    def test_gpt6_sol_preserves_auth_and_rejects_unreviewed_commands(self):
+        config = {
+            "auth": {"profiles": {"openai:owner": {"provider": "openai", "mode": "oauth"}},
+                     "order": {"openai": ["openai:owner"]}},
+            "agents": {"defaults": {
+                "model": copy.deepcopy(verifier.DEFAULT_MODEL_ROUTE),
+                "thinkingDefault": "high", "modelSelectionScope": "session",
+                "models": {"openai/gpt-5.6-sol": {"alias": "sol", "agentRuntime": {"id": "codex"}},
+                           "openai/gpt-6-astra": {"alias": "astra", "agentRuntime": {"id": "codex"}},
+                           "openai/gpt-6-sol": {"alias": "codex", "agentRuntime": {"id": "codex"}}},
+                "modelPolicy": {"allow": ["openrouter/*", "openai/gpt-5.6-sol", "openai/gpt-6-astra",
+                                          "openai/gpt-6-sol", verifier.OPUS_MODEL]},
+                "subagents": {"model": {"primary": "openai/gpt-5.6-sol", "fallbacks": []}},
+                "pdfModel": {"primary": "openai/gpt-5.6-sol", "fallbacks": []}}},
+            "plugins": {"allow": ["codex", "openai", "web-readability", "document-extract"],
+                        "entries": {name: {"enabled": True} for name in
+                                    ["codex", "openai", "web-readability", "document-extract"]}},
+        }
+        config["plugins"]["entries"]["codex"]["config"] = {
+            "appServer": {"homeScope": "agent", "mode": "yolo",
+                          "clearEnv": ["OPENAI_API_KEY", "CODEX_API_KEY"],
+                          "command": verifier.APPROVED_CODEX_COMMAND},
+            **{key: {"enabled": False} for key in
+               ["sessionCatalog", "supervision", "codexPlugins", "computerUse"]}}
+        listing = {"profiles": [{"id": "openai:owner", "provider": "openai", "type": "oauth"}]}
+        verifier.codex_subscription_policy(config, listing)
+        server = config["plugins"]["entries"]["codex"]["config"]["appServer"]
+        for command in ("/tmp/codex", verifier.APPROVED_CODEX_COMMAND + " --unsafe", "/usr/bin/true"):
+            server["command"] = command
+            with self.assertRaisesRegex(ValueError, "Codex auth environment"):
+                verifier.codex_subscription_policy(config, listing)
+        server["command"] = verifier.APPROVED_CODEX_COMMAND
+        defaults = config["agents"]["defaults"]
+        defaults["models"]["openai/gpt-6-sol"]["agentRuntime"]["id"] = "openclaw"
+        with self.assertRaisesRegex(ValueError, "Codex model alias"):
+            verifier.codex_subscription_policy(config, listing)
+        config = fixture()
+        verifier.owner_policy(config, "12345")
+        config["agents"]["entries"]["main"]["model"]["fallbacks"].append("openrouter/other")
+        with self.assertRaisesRegex(ValueError, "agent routing overrides"):
+            verifier.owner_policy(config, "12345")
+
+    def test_claude_route_uses_native_login_without_session_discovery(self):
+        config = {
+            "auth": {"profiles": {"openai:owner": {"provider": "openai", "mode": "oauth"}},
+                     "order": {"openai": ["openai:owner"]}},
+            "agents": {"defaults": {"models": {verifier.OPUS_MODEL: {
+                "alias": "opus", "agentRuntime": {"id": "claude-cli"}}}}},
+            "plugins": {"allow": ["codex", "anthropic"],
+                        "entries": {"anthropic": {"enabled": True,
+                                                  "config": {"sessionCatalog": {"enabled": False}}}}},
+        }
+        verifier.claude_subscription_policy(config, {"profiles": []})
+        changes = [
+            ("auth.profiles.anthropic:default", {"provider": "anthropic", "mode": "api_key"}),
+            ("auth.profiles.anthropic:token", {"provider": "anthropic", "mode": "token"}),
+            ("auth.order.anthropic", ["anthropic:default"]),
+            ("models", {"providers": {"anthropic": {"baseUrl": "https://api.anthropic.com"}}}),
+            ("agents.defaults.models." + verifier.OPUS_MODEL, {"alias": "opus"}),
+            ("agents.defaults.models." + verifier.OPUS_MODEL,
+             {"alias": "opus", "agentRuntime": {"id": "openclaw"}}),
+            ("agents.defaults.models." + verifier.OPUS_MODEL,
+             {"alias": "codex", "agentRuntime": {"id": "claude-cli"}}),
+            ("plugins.allow", ["codex"]),
+            ("plugins.entries.anthropic.enabled", False),
+            ("plugins.entries.anthropic.config", {}),
+            ("plugins.entries.anthropic.config.sessionCatalog.enabled", True),
+        ]
+        for path, value in changes:
+            with self.subTest(path=path, value=value):
+                bad = copy.deepcopy(config)
+                keys = path.split(".", 3) if path.startswith("agents.defaults.models.") else path.split(".")
+                parent = bad
+                for key in keys[:-1]:
+                    parent = parent[key]
+                parent[keys[-1]] = value
+                with self.assertRaises(ValueError):
+                    verifier.claude_subscription_policy(bad, {"profiles": []})
+        with self.assertRaisesRegex(ValueError, "stored Anthropic credential"):
+            verifier.claude_subscription_policy(
+                config, {"profiles": [{"id": "anthropic:default", "type": "api_key"}]})
+
+    def test_claude_executable_must_be_first_on_service_path_and_from_cask(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cask = root / "Caskroom/claude-code@latest/2.1.282"
+            cask.mkdir(parents=True)
+            (cask / "claude").write_text("#!/bin/sh\n")
+            (cask / "claude").chmod(0o755)
+            homebrew_bin, early_bin = root / "homebrew-bin", root / "early-bin"
+            homebrew_bin.mkdir()
+            early_bin.mkdir()
+            approved = homebrew_bin / "claude"
+            approved.symlink_to(cask / "claude")
+            service_env = root / "gateway.env"
+
+            def check(path_value):
+                service_env.write_text(f"export HOME='{temp}'\nexport PATH='{path_value}'\n")
+                service_env.chmod(0o600)
+                verifier.claude_cli_policy(service_env, approved, root / "Caskroom/claude-code@latest")
+
+            check(f"{early_bin}:{homebrew_bin}:/usr/bin")
+            (early_bin / "claude").write_text("#!/bin/sh\n")
+            (early_bin / "claude").chmod(0o755)
+            with self.assertRaisesRegex(ValueError, "unreviewed claude"):
+                check(f"{early_bin}:{homebrew_bin}:/usr/bin")
+            with self.assertRaisesRegex(ValueError, "unreviewed claude"):
+                check("/usr/bin:/bin")
+            approved.unlink()
+            approved.symlink_to(early_bin / "claude")
+            with self.assertRaisesRegex(ValueError, "not the Homebrew cask"):
+                check(f"{homebrew_bin}:/usr/bin")
+            service_env.write_text("export PATH=\"$PATH:/opt/homebrew/bin\"\n")
+            with self.assertRaisesRegex(ValueError, "plain quoted"):
+                verifier.claude_cli_policy(service_env, approved, root / "Caskroom/claude-code@latest")
+            service_env.write_text("export HOME='/tmp'\n")
+            with self.assertRaisesRegex(ValueError, "PATH missing"):
+                verifier.claude_cli_policy(service_env, approved, root / "Caskroom/claude-code@latest")
 
     def test_automatic_memory_keeps_transcripts_out_and_bounds_promotion(self):
         config = json.loads(Path(__file__).with_name("automatic-memory.patch.json").read_text())

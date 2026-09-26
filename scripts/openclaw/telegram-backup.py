@@ -313,7 +313,10 @@ def recovery_supplement(bundle, args):
     version = package_data["version"]
     require(version in RUNTIME_PATCH_SPECS, "unreviewed runtime release for backup recovery")
     auth_reprobe = RUNTIME_PATCH_SPECS[version].get("authReprobe")
-    receipts = PATCH_RECEIPTS + (("auth-reprobe-patch.json",) if auth_reprobe is not None else ())
+    gpt6_sol = RUNTIME_PATCH_SPECS[version].get("gpt6Sol")
+    receipts = (PATCH_RECEIPTS
+                + (("auth-reprobe-patch.json",) if auth_reprobe is not None else ())
+                + (("gpt6-sol-patch.json",) if gpt6_sol is not None else ()))
     add(args.package / "package.json", "recovery/runtime/package.json")
     add(args.cli, "recovery/management/openclaw")
     for name in ("ai.openclaw.personaledge.plist", "com.personaledge.openclaw-telegram-watchdog.plist"):
@@ -330,8 +333,23 @@ def recovery_supplement(bundle, args):
                     and receipt.get("afterSha256") == auth_reprobe["after"]
                     and type(receipt.get("inferenceRequests")) is int and receipt["inferenceRequests"] == 0,
                     "Codex auth reprobe receipt differs from reviewed patch")
+        if name == "gpt6-sol-patch.json":
+            expected_files = [{"path": entry["path"], "beforeSha256": entry["before"],
+                               "afterSha256": entry["after"]} for entry in gpt6_sol]
+            require(len(expected_files) == 4 and len({entry["path"] for entry in expected_files}) == 4
+                    and receipt.get("installed") is True
+                    and receipt.get("package") == str(args.package)
+                    and type(receipt.get("modelRequests")) is int and receipt["modelRequests"] == 0
+                    and receipt.get("files") == expected_files,
+                    "GPT-6 Sol receipt differs from reviewed installed patch")
         add(args.state_dir / "operations" / name, "recovery/receipts/" + name)
-        patch_files = [receipt] if name == "auth-reprobe-patch.json" else receipt.get("files", [receipt])
+        if name == "auth-reprobe-patch.json":
+            patch_files = [receipt]
+        elif name == "gpt6-sol-patch.json":
+            patch_files = [{"relativePath": entry["path"], "afterSha256": entry["after"]}
+                           for entry in gpt6_sol]
+        else:
+            patch_files = receipt.get("files", [receipt])
         for entry in patch_files:
             relative = entry.get("relativePath") or "dist/" + entry.get("name", "")
             relative = member_name(relative)

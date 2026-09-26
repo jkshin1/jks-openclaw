@@ -1,8 +1,53 @@
 # Telegram 운영 점검·백업·첨부 검증
 
-현재 `personaledge` Mac 배포용 명령입니다. 기본 GPT-6 Astra/high, ChatGPT OAuth,
-owner allowlist와 기존 대화는 그대로 유지합니다. 구형 Android relay 명령에는
+현재 `personaledge` Mac 배포용 명령입니다. 2026-09-23 기준 설정된 기본 모델은
+GPT-6 Sol/high이며, Codex 0.156.1의 ChatGPT OAuth 경로를 사용합니다. owner allowlist와
+기존 대화는 유지합니다. 구형 Android relay 명령에는
 아래의 `--telegram`을 반드시 붙이세요.
+
+## Claude Opus 5.5 전환 (2026-09-26)
+
+main 에이전트 기본 체인은 `anthropic/claude-opus-5-5` → `openai/gpt-6-sol` → OpenRouter GLM,
+전역 기본값은 Opus → Sol입니다. Opus는 이 Mac의 Claude Code 로그인(`claude-cli` 실행기,
+Homebrew `claude-code@latest`)으로 Claude 요금제 사용량을 씁니다. Anthropic API 키는 없습니다.
+검증 범위와 한계는 [운영 문서](OPENCLAW_TELEGRAM.md#claude-opus-55-main-route-migration-2026-09-26-kst)에
+있습니다. 아래 Sol 절은 2026-09-23 당시 기록입니다.
+
+## GPT-6 Sol 전환 확인 범위 (2026-09-23)
+
+당시 전역 기본 경로는 `openai/gpt-6-sol`이고, main 에이전트도 같은 모델을 우선 사용하도록
+설정했습니다. main 에이전트의 기존 GLM 단일 fallback은 유지합니다. OpenClaw 2026.9.3의
+plugin manifest, thinking policy, model route contract, ChatGPT/Codex resolver 네 파일에
+한정된 Sol 호환성 패치를 설치했습니다. 검토된 해시는
+`scripts/openclaw/runtime-patch-specs.json`, 설치 영수증은 비공개
+`~/.openclaw-personaledge/operations/gpt6-sol-patch.json`에 있습니다. 기존 네 가지
+런타임 복구 패치와 별개이며, API 키 과금 경로는 추가하지 않았습니다.
+
+격리된 Gateway `modelRun`은 요청·적용 모델 `openai/gpt-6-sol`, 응답 모델 `gpt-6-sol`,
+`rerouted=false`, 성공 도구 0개와 `SOL-READY` 응답을 반환했고 임시 실행 상태를
+정리했습니다. 실제 Telegram 대화의 새 모델 응답과 전달은 아직 확인하지 않았습니다.
+Codex 할당량 소진이나 새 Sol 경로의 GLM fallback도 실제로 재현하지 않았습니다.
+사용량 절감 효과도 비교 측정하지 않았습니다.
+
+2026-09-23 새 백업은 공식 online archive와 별도 경로 복원 검증을 마쳐 `VERIFIED`입니다
+(`2026-09-23T07:02:48Z`, SQLite 42개, 파일 64,016개). 복구 자료에 Sol 설치 영수증과
+패치된 네 런타임 파일이 포함되고 별도 복원 폴더에서도 확인됐습니다. 운영 상태 조회는
+`ok=true`, `issues=[]`를 반환했습니다. 이 백업은 현재 **Sol 설정의 복구본**이며
+이전 Astra 상태로의 원복을 뜻하지 않습니다. 백업 영수증의 `productionActivated=false`는
+복원본에서 운영 Gateway를 시작하지 않았다는 뜻입니다.
+
+### Astra로 원복할 때
+
+활성 실행이 없음을 확인한 뒤 비공개 상태 백업을 보존하고 Gateway와 감시기를 멈춥니다.
+준비된 원본 파일을 사용하는 `patch-gpt6-sol.py --rollback`으로 OpenClaw 2026.9.3의
+네 파일을 검토된 이전 해시로 되돌리고, 공식 설정 패치로 전역·main 모델과 별칭·허용
+목록을 Astra 정책에 맞춰 함께 복원합니다. main의 기존 GLM fallback과 OAuth 자격 증명은
+별도로 검토해 유지합니다. 이에 맞는 `runtime-patch-specs.json`과 엄격 검증기 소스도
+같은 버전으로 복원한 뒤 Gateway를 시작해 정적·실시간 검증을 통과시키고, 감시기를
+재설치해 첫 검사와 다음 예약 검사를 확인합니다. 마지막으로 격리 Astra 실행과 실제
+Telegram 전달을 각각 확인합니다. 이전 설정 파일만 되돌리면 Sol 패치 해시 및 현재
+검증기·설치된 감시기의 모델 정책과 맞지 않아 정상 복구로 볼 수 없습니다. 새 Sol
+백업의 복원 폴더를 운영 환경에 곧바로 활성화하지 않습니다.
 
 ## 운영 상태
 
@@ -43,7 +88,8 @@ scripts/openclaw/restore-gateway.sh --telegram --archive /절대경로/state.tar
 
 기본 백업 위치는 `~/Library/Application Support/PersonalEdge/OpenClawBackups/telegram/`입니다.
 공식 online backup으로 활성 SQLite의 일관성을 보존하고, full state archive와 함께
-네 가지 패치의 실제 파일·해시 영수증, runtime/Node 버전, CLI wrapper, LaunchAgent,
+기존 런타임 패치와 GPT-6 Sol 호환성 패치의 실제 파일·해시 영수증, runtime/Node 버전,
+CLI wrapper, LaunchAgent,
 복구 스크립트·정책을 보관합니다. archive 검증과 별도 폴더 복원 후 파일 해시,
 SQLite integrity·필수 schema·논리 행 수를 확인해야 `VERIFIED` 영수증이 발행됩니다.
 

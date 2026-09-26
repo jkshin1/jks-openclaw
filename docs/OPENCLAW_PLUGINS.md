@@ -2,13 +2,16 @@
 
 2026-09-07 KST에 현재 Mac의 OpenClaw 2026.9.2에서 설치·활성화하고 실제 실행을 확인했다.
 이 문서는 Codex 앱 자체에 설치하는 플러그인이 아니라 Telegram 봇의 OpenClaw 플러그인을 다룬다.
-2026-09-08에는 아래 모델 정책을 적용하고 기본 Astra 파일 도구 실행, Sol/low 요약 및
+2026-09-08에는 당시의 Astra 기본 모델 정책을 적용하고 기본 Astra 파일 도구 실행, Sol/low 요약 및
 변경 안내의 Telegram 전송을 확인했다. 세부 범위는
 [모델 기본값 검증](OPENCLAW_TELEGRAM.md#codex-default-acceptance-2026-09-08-kst)에 있다.
 아래 2026-09-07 실행 증거는 당시 모델에 대한 기록이다.
 2026-09-09에는 코어와 아래 세 플러그인을 2026.9.3으로 맞추고 실제 로딩·추출기 등록,
 기본 Astra 응답 및 Sol 요약을 재확인했다. [업데이트 검증 기록](OPENCLAW_UPDATE_20260909.md)에
 현재 버전의 검증 범위를 구분했다.
+2026-09-23에는 전역 및 주 에이전트 기본 모델을 `openai/gpt-6-sol` / `high`로 적용하고
+현재 설정과 격리된 Gateway 실행을 확인했다. 아래의 9월 7~9일 실행 기록은 당시 모델의
+증거로 남긴다.
 
 | 플러그인 | 현재 설치 출처 / 버전 | 용도와 9월 7일 실행 검증 |
 | --- | --- | --- |
@@ -27,27 +30,33 @@ OpenClaw 인증 저장소에 연결했다. 계획의 21개 항목 중 인증 1�
 건너뛰었다. 다른 Codex 대화, 메모리, 스킬, 연결 플러그인은 가져오지 않았다. 인증 값은
 문서·스크립트·Git에 넣지 않는다.
 
-- 기본 대화 모델은 `openai/gpt-6-astra`, 별칭은 `codex`, 추론 강도는 `high`로 지정했다.
-- `openai/gpt-5.6-sol`의 별칭은 `sol`이다. 두 모델 모두 네이티브 `codex` 실행기를 사용한다.
+- 2026-09-26부터 주 대화와 전역 기본 모델은 Anthropic 플러그인의 `claude-cli` 실행기로 도는
+  `anthropic/claude-opus-5-5`(별칭 `opus`)이고, Codex의 `openai/gpt-6-sol`(별칭 `codex`)은 그
+  다음 fallback이다. 추론 강도는 `high`다. `openai/gpt-6-astra`의 별칭은 `astra`다.
+  자세한 내용은 [운영 문서](OPENCLAW_TELEGRAM.md#claude-opus-55-main-route-migration-2026-09-26-kst).
+- `openai/gpt-5.6-sol`의 별칭은 `sol`이다. 세 모델 모두 네이티브 `codex` 실행기를 사용한다.
 - PDF와 하위 에이전트의 기본 모델은 `openai/gpt-5.6-sol`로 고정했다. 별도 모델 인자가
   빠진 위임 호출에도 적용한다. Summarize는 Sol/low, 매일 기억 정리의 내부 completion은
-  Sol로 지정했다. 기억 정리 예약 작업의 바깥 에이전트 실행은 기본 Astra/high를 상속한다.
-- OpenAI 인증은 선택된 OAuth 프로필 1개로 고정했다. API 키 프로필과 모델 대체 경로가 없다.
+  Sol로 지정했다. 기억 정리 예약 작업의 바깥 에이전트 실행은 전역 기본값(2026-09-26부터 Opus → Sol)/high를 상속한다.
+- OpenAI 인증은 선택된 OAuth 프로필 1개로 고정했다. API 키 프로필은 없다.
 - Codex 자식 프로세스에서 `OPENAI_API_KEY`, `CODEX_API_KEY`를 제거한다.
 - Codex 상태는 OpenClaw 에이전트 단위로 분리한다. 기존 Codex 작업 목록 공유, supervision,
   Codex 플러그인 동기화와 computer use는 활성화하지 않았다.
-- 이 Codex 경로는 **계정의 Codex 사용량**을 사용한다. 한도 소진·로그인 실패 시 다른 유료
-  공급자나 API 키로 우회하지 않고 알려주도록 지시했다. 사용량 한도와 계정 정책은 적용된다.
-- GLM은 `/model glm`으로 수동 선택할 수 있으며 그때 OpenRouter 비용이 발생한다.
-  Codex 기본 대화·요약·기억 정리에 GLM 자동 fallback은 없다. 기존 검증은 인증·실행
-  경로의 증거이며 청구서 대조는 아니다.
+- 이 Codex 경로는 **계정의 Codex 사용량**을 사용한다. API 키로 우회하지 않으며
+  사용량 한도와 계정 정책을 따른다.
+- 주 에이전트의 기본 모델 체인에는 기존 OpenRouter GLM만 단일 fallback으로 허용한다.
+  한도 소진 외의 적격 가용성 오류에도 적용될 수 있으며 OpenRouter 비용이 발생한다.
+  명시적인 `/model` 선택과 요약·PDF·하위 작업·기억 정리에는 적용하지 않는다.
+  GLM은 `/model glm`으로도 수동 선택할 수 있다. 기존 검증은 인증·실행 경로의 증거이며
+  청구서 대조는 아니다.
 
 공식 설명: [Codex 실행기](https://docs.openclaw.ai/plugins/codex-harness),
 [Codex 인증과 사용 방식](https://learn.chatgpt.com/docs/auth).
 
 ## Telegram에서 사용
 
-`/model codex`는 GPT-6 Astra, `/model sol`은 GPT-5.6 Sol, `/model glm`은 GLM을 선택한다.
+`/model codex`는 GPT-6 Sol, `/model astra`는 GPT-6 Astra, `/model sol`은 GPT-5.6 Sol,
+`/model glm`은 GLM을 선택한다.
 `modelSelectionScope=session`이므로 옵션을 생략해도 현재 대화에만 적용하며 `-s`도 사용할 수
 있다. `/think high`로 기본 추론 강도를 선택하고 `/think`로 현재 모델의 지원 값을 확인한다.
 PDF·하위 작업·요약·기억 정리의 별도 모델 지정은 대화 모델 변경과 독립적이다.
@@ -64,6 +73,15 @@ PDF·하위 작업·요약·기억 정리의 별도 모델 지정은 대화 모�
 원본과 경로 제한은 보존한다.
 
 ## 실행 증거와 재검증
+
+2026-09-23 현재 설정에서 전역 및 주 에이전트의 Sol/high 기본값과 주 에이전트의 기존
+OpenRouter GLM fallback을 확인했다. 공식 Codex 0.156.1의 ChatGPT OAuth 경로를 사용한
+격리 Gateway `modelRun`은 요청·실효 모델 `openai/gpt-6-sol`, 응답 모델 `gpt-6-sol`,
+응답 `SOL-READY`, `rerouted=false`, 도구 호출 0건으로 완료됐고 임시 세션을 정리했다.
+이는 GPT-6 Sol의 실제 모델 실행 증거다. 소유자 Telegram 대화의 전송, 할당량 소진 시
+fallback, 사용량 절감이나 기존 모델과의 품질 동등성은 이 실행에서 검증하지 않았다.
+
+아래는 2026-09-07 설치 당시의 합성 작업 실행 기록이다.
 
 비공개 결과는 `~/.openclaw-personaledge/operations/plugins-codex-20260906T155256Z/`에 있다.
 설정과 기존 작업공간 지침을 먼저 백업했고, 인증 이관 전 백업은 원본 상태 디렉터리 밖의

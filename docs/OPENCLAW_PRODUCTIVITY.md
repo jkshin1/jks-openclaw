@@ -54,10 +54,13 @@ then recalculate and inspect cached values before reporting completion.
 2026-09-08 policy. It waits for a successful visible terminal
 answer, rejects reported tool use, and deletes the temporary session. It does not invoke the
 ordinary owner chat or copy API keys into a new provider configuration. This route uses native
-Codex with ChatGPT OAuth and no API-key or GLM fallback. The parent Telegram conversation defaults
-to GPT-6 Astra/high; `/model` changes only that conversation by default, and does not change this
-explicit summary route. PDF, delegated tasks and Dreaming's internal completion separately use
-GPT-5.6 Sol; the scheduled Dreaming agent turn inherits the default Astra/high.
+Codex with ChatGPT OAuth and no API-key or GLM fallback. Under the 2026-09-08 policy, the parent
+Telegram conversation defaulted to GPT-6 Astra/high; `/model` changed only that conversation by
+default and did not change this explicit summary route. PDF, delegated tasks and Dreaming's
+internal completion separately used GPT-5.6 Sol; the scheduled Dreaming agent turn inherited the
+then-default Astra/high. As of 2026-09-23, the verified global and main-agent defaults are GPT-6
+Sol/high, so the scheduled outer turn inherits Sol/high. The explicit GPT-5.6 Sol routes remain
+separate from that default.
 On 2026-09-08, the installed `summarize --force-summary` CLI completed on Sol/low and produced a
 Korean summary preserving confirmed and pending decisions. Updated model guidance was delivered
 to Telegram separately. This does not repeat every Office/media scenario below; the 2026-09-07

@@ -1,8 +1,11 @@
 # 텔레그램 OpenClaw 사용 가이드
 
-2026-09-09, 현재 Mac의 OpenClaw 2026.9.3 설치 기준.
+2026-09-26, Mac의 OpenClaw 2026.9.3 기본 모델을 Claude Opus 5.5(Claude 요금제 사용량)로
+바꾸고, 소진 시 GPT-6 Sol → GLM 순서로 넘어가도록 설정한 기준입니다.
 기존 봇 대화방에서 아래 명령을 보내면 됩니다.
-기본 GPT-6 실행·파일 도구·Sol 요약을 검증했고, 변경 안내의 Telegram 전송도 확인했습니다.
+아래 확인 범위의 GPT-6 Astra 실행·파일 도구·GPT-5.6 Sol 요약 및 Telegram 전송 기록은
+2026-09-08~09의 이전 정책에 대한 검증입니다. 이번 Opus 변경의 소유자 Telegram
+대화 전송은 별도로 확인해야 합니다.
 
 입력창에 `/`를 입력하면 명령 메뉴가 표시됩니다. `/help`는 짧은 도움말,
 `/commands`는 명령 목록입니다. 메뉴에 없는 명령도 직접 입력할 수 있습니다.
@@ -22,7 +25,9 @@
 | `/new` | 새 대화 문맥으로 시작 |
 | `/compact` | 긴 대화 문맥을 요약·압축 |
 | `/model` | 현재 모델 확인과 선택 안내 |
-| `/model codex` | 현재 대화에서 GPT-6 Astra 사용: `openai/gpt-6-astra` |
+| `/model opus` | 현재 대화에서 Claude Opus 5.5 사용: `anthropic/claude-opus-5-5` |
+| `/model codex` | 현재 대화에서 GPT-6 Sol 사용: `openai/gpt-6-sol` |
+| `/model astra` | 현재 대화에서 GPT-6 Astra 사용: `openai/gpt-6-astra` |
 | `/model sol` | 현재 대화에서 GPT-5.6 Sol 사용: `openai/gpt-5.6-sol` |
 | `/model glm` | 현재 대화에서 OpenRouter의 GLM 사용 |
 | `/think` | 현재 생각 강도와 가능한 값 확인 |
@@ -36,24 +41,30 @@
 새 대화 시작은 장기 기억 삭제 요청이 아닙니다. 저장한 기억을 지우려면 대상을 지정해
 “이 내용을 기억에서 삭제해줘”라고 요청하세요.
 
-기본 대화 모델은 **GPT-6 Astra, 생각 강도는 high**입니다. `/model openai/gpt-6-astra`나
-`/model openai/gpt-5.6-sol`처럼 전체 모델 ID로도 선택할 수 있습니다. 실제 대화의 모델과
-추론 강도는 `/model`, `/think`로 확인하세요. 두 Codex 모델의 지원 값은 `low`, `medium`,
-`high`, `xhigh`, `max`, `ultra`입니다. `/think low`처럼 설정하며, 다른 모델에서는 해당
-모델의 `/think` 안내를 따르세요. 강도를 높이면 응답 시간과 사용량이 늘 수 있습니다. `/reasoning off`는 표시
-설정이므로 생각 강도와 별개입니다.
+현재 전역 기본값과 주 대화 모델은 **Claude Opus 5.5, 생각 강도는 high**입니다.
+`/model anthropic/claude-opus-5-5`, `/model openai/gpt-6-sol`, `/model openai/gpt-6-astra`, `/model openai/gpt-5.6-sol`처럼
+전체 모델 ID로도 선택할 수 있습니다. 실제 대화의 모델과 지원하는 추론 강도는 `/model`,
+`/think`로 확인하세요. `/think low`처럼 설정하며, 강도를 높이면 응답 시간과 사용량이
+늘 수 있습니다. `/reasoning off`는 표시 설정이므로 생각 강도와 별개입니다.
 
 | 작업 | 설정한 모델 경로 |
 | --- | --- |
-| 기본 대화·조사·주 작업 | GPT-6 Astra, high |
+| 기본 대화·조사·주 작업 | Claude Opus 5.5, high (소진 시 GPT-6 Sol → GLM) |
 | `/summarize`의 별도 요약 실행 | GPT-5.6 Sol, low |
 | PDF 도구·코딩 하위 작업 | GPT-5.6 Sol |
-| 매일 03:00 기억 정리 | 예약 작업 실행은 GPT-6 Astra/high, 내부 기억 정리는 GPT-5.6 Sol |
+| 매일 03:00 기억 정리 | 예약 작업 실행은 전역 기본값 Opus 5.5/high(소진 시 GPT-6 Sol), 내부 기억 정리는 GPT-5.6 Sol |
 | 음성 전사 | Mac의 로컬 Whisper |
 
-Codex 경로는 연결된 ChatGPT 계정의 Codex 할당량을 사용하고 API 키나 GLM으로 자동 우회하지
-않습니다. GLM을 직접 선택해 실행하면 OpenRouter 비용이 발생합니다. 대화 모델을 바꿔도
-위에 별도로 지정한 요약·PDF·하위 작업·기억 정리 모델은 그대로입니다.
+Opus 경로는 이 Mac에 설치한 Claude Code(`claude`)의 claude.ai 로그인으로 실행되어 Claude
+요금제(현재 Pro) 사용량을 씁니다. 이 Mac과 다른 기기에서 쓰는 Claude·Claude Code 사용량과
+같은 한도를 공유합니다. Codex 경로는 연결된 ChatGPT 계정의 Codex 할당량을 사용합니다.
+어느 쪽도 API 키로 우회하지 않습니다.
+주 에이전트의 기본 체인은 Opus 5.5 → GPT-6 Sol → OpenRouter GLM 순서이고, 전역 기본값은
+Opus → Sol까지만입니다. fallback은 한도 소진 외의 적격 가용성 오류에도 적용될 수 있습니다.
+Claude의 일부 한도 메시지는 한도 오류로 분류되지 않아 대기 시간 없이 다음 모델로 넘어가므로,
+한도가 풀릴 때까지 매 턴 Opus를 먼저 시도해 응답이 몇 초 늦어질 수 있습니다. 명시적인
+`/model opus`, `/model codex`, `/model astra`, `/model sol` 선택과 요약·PDF·하위 작업·기억
+정리에는 이 fallback을 적용하지 않습니다. GLM 경로를 사용하면 OpenRouter 비용이 발생합니다.
 
 ## 기능을 지정하는 방법
 
@@ -97,7 +108,7 @@ Codex 경로는 연결된 ChatGPT 계정의 Codex 할당량을 사용하고 API 
 
 1. `/model codex`
 2. `프로젝트 /정확한/경로에서 오류 원인을 찾고 수정한 뒤 테스트 결과를 알려줘.`
-3. GPT-5.6으로 바꾸고 싶으면 `/model sol`
+3. GPT-6 Astra로 바꾸고 싶으면 `/model astra`, GPT-5.6 Sol로 바꾸고 싶으면 `/model sol`
 
 자료 검토:
 
@@ -108,16 +119,36 @@ Codex 경로는 연결된 ChatGPT 계정의 Codex 할당량을 사용하고 API 
 
 ## 확인 범위와 출처
 
+2026-09-26 설정 변경 후 Gateway가 `anthropic/claude-opus-5-5`를 `claude-cli` 런타임으로
+사용 가능하다고 보고했고, 모델을 지정하지 않은 격리 합성 대화 턴이 `provider=claude-cli
+model=claude-opus-5-5`로 실행되어 `OPUS55-READY`로 응답했습니다(도구·재라우팅 없음, 임시
+세션 삭제). 같은 날 원시 모델 호출(`modelRun`) 시험에서는 OpenClaw가 CLI 런타임을 쓰지 않아
+Opus가 인증 오류로 탈락했고, Codex 한도 소진(429)으로 Sol을 건너뛰어 GLM이 응답했습니다.
+이는 체인 순서의 실제 동작 증거이지만 Opus 경로 검증은 아닙니다. 이어서 소유자가 보낸 실제
+Telegram 메시지가 `claude-cli`/Opus 5.5로 fallback 없이 처리되고 답장이 전송됐습니다
+(messageId 426). 실제 Claude 한도 소진 시 전환은 확인하지 않았습니다.
+
+아래는 2026-09-23 Sol 변경 당시의 검증 기록입니다.
+
+2026-09-23 당시 설정에서 전역 및 주 에이전트 기본값 `openai/gpt-6-sol`/`high`와
+주 에이전트의 기존 GLM fallback을 확인했습니다. 공식 Codex 0.156.1의 ChatGPT OAuth
+경로를 사용한 격리 Gateway `modelRun`은 요청·실효 모델 `openai/gpt-6-sol`, 응답 모델
+`gpt-6-sol`, 응답 `SOL-READY`, `rerouted=false`, 도구 호출 0건으로 완료됐고 임시 세션을
+정리했습니다. 소유자 Telegram 대화의 전송과 할당량 소진 시 fallback은 이번에 확인하지
+않았습니다. 사용량 절감이나 기존 모델과의 품질 동등성도 측정하지 않았습니다.
+
+아래는 가이드 최초 작성 및 2026-09-08 변경 당시의 검증 기록입니다.
+
 최초 가이드 작성 때 설치된 명령 정의와 설정을 대조했습니다. 당시 읽기 전용 점검에서 Gateway ready,
 Telegram polling, 도구 40개를 확인했습니다. 요약·Whisper·Word·Excel 스킬은 실행 요건을
-충족하는 상태였습니다. 위 GPT-6 기본값 변경의 실행 검증과는 별개이며, 각 예시 작업을
+충족하는 상태였습니다. 2026-09-23 Sol 실행과는 별개의 당시 점검이며, 각 예시 작업을
 새로 실행한 것은 아닙니다.
 
 2026-09-08 변경 검증에서는 기본 Astra의 실제 파일 쓰기·읽기, 설치된 요약 CLI의 Sol/low
 한국어 요약, 모델·추론 명령의 현재 대화 적용과 전역 기본값 보존을 확인했습니다.
 기억 정리 내부 모델은 같은 실행 코어의 Sol 격리 시험만 했으며, 예약 작업 실행은 기본
-Astra/high를 상속합니다. 다음 예약은 2026-09-09 03:00 KST이고 실제 예약 시각의 전체 주기는
-아직 실행하지 않았습니다. 변경 안내는 Telegram에 전송됐습니다.
+Astra/high를 상속하도록 설정되어 있었습니다. 다음 예약은 당시 2026-09-09 03:00 KST였고
+해당 시각의 전체 주기는 이 검증에서 실행하지 않았습니다. 변경 안내는 Telegram에 전송됐습니다.
 외부 서비스 로그인, 접근 제한 사이트, 스캔 PDF, 복잡한 문서의 처리 가능 여부는
 실제 입력에 따라 달라집니다.
 

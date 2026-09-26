@@ -139,24 +139,36 @@ The active project is `/Users/jk/projects/python/my-local-agent`.
   authentic owner uploads. Never fabricate an inbound update or consume `getUpdates` beside
   the running polling channel to manufacture a round-trip test.
 
-## Codex coding work
+## Model routes and Codex coding work
 
-- General chat defaults to ChatGPT-authenticated Codex, `openai/gpt-6-astra`, with high thinking.
+- General chat and the global default use Claude Opus 5.5, `anthropic/claude-opus-5-5`, through
+  this Mac's own Claude Code subscription login (the `claude-cli` runtime), with high thinking.
+  When Opus is unavailable or its subscription allowance is exhausted, the main agent falls back
+  to ChatGPT-authenticated Codex, `openai/gpt-6-sol`, and then to the existing OpenRouter GLM; the
+  global default stops at Sol. Explicit model selections and separate summary, PDF, sub-agent,
+  and memory-completion routes do not inherit this chain.
   Do the requested work directly; delegate independent subtasks only when useful. The configured
-  default sub-agent model is also Codex. If the owner explicitly selects GLM for the parent chat,
+  default sub-agent model is Codex. If the owner explicitly selects GLM for the parent chat,
   implementation, debugging, refactoring and test execution can use `sessions_spawn`,
   `runtime: "subagent"`, `model: "openai/gpt-5.6-sol"`, and `mode: "run"`. Include the exact
   project directory, outcome, constraints and relevant evidence; wait for and review the result.
-  Check the resolved provider and model before describing work as Codex execution.
-- `/model codex -s` selects GPT-6 Astra and `/model sol -s` selects GPT-5.6 Sol for this chat.
+  Check the resolved provider and model before describing work as Claude or Codex execution.
+- `/model opus -s` selects Claude Opus 5.5, `/model codex -s` selects GPT-6 Sol,
+  `/model astra -s` selects GPT-6 Astra, and `/model sol -s` selects GPT-5.6 Sol for this chat.
   `/model glm -s` explicitly selects the OpenRouter GLM route. Unqualified model changes are
   session-scoped by default. `/think high` changes thinking; `/reasoning off` controls display.
-  The Codex model is pinned to the native Codex runtime and ChatGPT OAuth authentication.
-  Never add an API key, switch to Platform API billing, or change auth/fallback policy to bypass
-  subscription limits. Report an exhausted allowance or login failure in Korean and any known
-  reset time. Obtain a new owner instruction before using a different paid provider for that work.
-- Codex workspace/session state is scoped to this OpenClaw agent. Other Codex app conversations,
-  memories and connected plugins are not imported by this setup.
+  Opus is pinned to the native Claude Code runtime and that CLI's own login; the Codex models are
+  pinned to the native Codex runtime and ChatGPT OAuth authentication. Never add an Anthropic or
+  OpenAI API key, switch to API billing, or expand the approved main-agent fallback chain to
+  bypass subscription limits. Report use of an approved fallback (Sol or GLM), exhausted
+  allowance, or login failure in Korean, with any known reset time. Outside the approved
+  main-agent chain, obtain a new owner instruction before using a different paid provider for
+  that work.
+- Codex workspace/session state is scoped to this OpenClaw agent. Claude Code keeps this agent's
+  native session files under the Mac user's `~/.claude/projects/`; native Claude session
+  discovery is disabled, so the owner's other Claude Code conversations are not listed or
+  imported. Other Codex app conversations, memories and connected plugins are not imported by
+  this setup.
 
 ## Memory policy
 

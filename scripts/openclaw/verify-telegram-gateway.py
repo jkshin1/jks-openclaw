@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sqlite3
 import sys
@@ -14,11 +15,22 @@ import sys
 
 REQUIRED_TOOLS = {"read", "write", "edit", "exec", "process", "memory_search", "memory_get", "browser", "pdf"}
 REQUIRED_PLUGINS = {"browser", "device-pair", "openrouter", "telegram", "memory-core",
-                    "openai", "codex"}
+                    "openai", "codex", "anthropic"}
 EXTRACTOR_CONTRACTS = {"web-readability": ("webContentExtractors", "readability"),
                        "document-extract": ("documentExtractors", "pdf")}
 RUNTIME_PATCH_SPECS = json.loads(Path(__file__).with_name("runtime-patch-specs.json").read_text())
+APPROVED_CODEX_COMMAND = str(Path.home() / ".local/share/openclaw-codex-runtimes/0.156.1/node_modules/.bin/codex")
 GLM_THINKING_PATCH_PATHS = {"dist/thinking-policy-DI_bnHxv.js", "dist/stream-CGolKR6w.js"}
+OPUS_MODEL = "anthropic/claude-opus-5-5"
+SOL_MODEL = "openai/gpt-6-sol"
+GLM_MODEL = "openrouter/z-ai/glm-5.3-flash"
+# Owner-approved order: Claude subscription, then ChatGPT subscription, then paid OpenRouter GLM.
+MAIN_MODEL_ROUTE = {"primary": OPUS_MODEL, "fallbacks": [SOL_MODEL, GLM_MODEL]}
+DEFAULT_MODEL_ROUTE = {"primary": OPUS_MODEL, "fallbacks": [SOL_MODEL]}
+# The Gateway resolves the plugin-owned `claude` command through its service PATH. Opus 5.5
+# needs Claude Code 2.1.280 or newer, which the stable `claude-code` cask did not yet ship.
+APPROVED_CLAUDE_COMMAND = Path("/opt/homebrew/bin/claude")
+CLAUDE_CASK_ROOT = Path("/opt/homebrew/Caskroom/claude-code@latest")
 
 
 def require(condition, label):
@@ -69,9 +81,8 @@ def owner_policy(config, owner):
     require(isinstance(token, dict) and token.get("source") == "store"
             and token.get("id") == "TELEGRAM_BOT_TOKEN", "Telegram token must remain a store reference")
     agents = config.get("agents", {})
-    require(agents.get("entries", {}) in ({}, {"main": {}}, {"main": {"model": {
-                "primary": "openai/gpt-6-astra",
-                "fallbacks": ["openrouter/z-ai/glm-5.3-flash"]}}}) and not agents.get("list") and not config.get("bindings"),
+    require(agents.get("entries", {}) == {"main": {"model": MAIN_MODEL_ROUTE}} and
+            not agents.get("list") and not config.get("bindings"),
             "agent routing overrides require separate review")
     require(agents.get("defaults", {}).get("sandbox", {}).get("mode") == "off",
             "Mac agent must execute on the host")
@@ -161,17 +172,19 @@ def codex_subscription_policy(config, auth_listing=None):
             and all(profile.get("mode") == "oauth" for profile in profiles.values()),
             "Codex must use exactly one ChatGPT OAuth profile")
     defaults = config.get("agents", {}).get("defaults", {})
-    require(defaults.get("model") == {"primary": "openai/gpt-6-astra", "fallbacks": []},
-            "default conversation must use Codex without a paid fallback")
+    require(defaults.get("model") == DEFAULT_MODEL_ROUTE,
+            "default conversation must use subscription routes without a paid fallback")
     require(defaults.get("thinkingDefault") == "high", "default Codex reasoning effort drifted")
     require(defaults.get("modelSelectionScope") == "session",
             "chat model selection must default to the current session")
-    for model, alias in (("openai/gpt-5.6-sol", "sol"), ("openai/gpt-6-astra", "codex")):
+    for model, alias in (("openai/gpt-5.6-sol", "sol"), ("openai/gpt-6-astra", "astra"),
+                         ("openai/gpt-6-sol", "codex")):
         require(defaults.get("models", {}).get(model) ==
                 {"alias": alias, "agentRuntime": {"id": "codex"}},
                 "Codex model alias or runtime drifted: " + model)
     require(defaults.get("modelPolicy", {}).get("allow") ==
-            ["openrouter/*", "openai/gpt-5.6-sol", "openai/gpt-6-astra"],
+            ["openrouter/*", "openai/gpt-5.6-sol", "openai/gpt-6-astra", "openai/gpt-6-sol",
+             OPUS_MODEL],
             "model override policy drifted")
     require(defaults.get("pdfModel") == {"primary": "openai/gpt-5.6-sol", "fallbacks": []},
             "PDF subscription route drifted")
@@ -187,8 +200,9 @@ def codex_subscription_policy(config, auth_listing=None):
                 "requested plugin unavailable: " + name)
     settings = plugins["entries"]["codex"].get("config", {})
     server = settings.get("appServer", {})
-    require(server == {"homeScope": "agent", "mode": "yolo",
-                       "clearEnv": ["OPENAI_API_KEY", "CODEX_API_KEY"]},
+    expected_server = {"homeScope": "agent", "mode": "yolo",
+                       "clearEnv": ["OPENAI_API_KEY", "CODEX_API_KEY"]}
+    require(server == dict(expected_server, command=APPROVED_CODEX_COMMAND),
             "Codex auth environment or state scope drifted")
     for key in ("sessionCatalog", "supervision", "codexPlugins", "computerUse"):
         require(settings.get(key) == {"enabled": False}, "unreviewed Codex integration: " + key)
@@ -197,6 +211,42 @@ def codex_subscription_policy(config, auth_listing=None):
         require(len(stored) == 1 and stored[0].get("id") == order[0]
                 and stored[0].get("provider") == "openai" and stored[0].get("type") == "oauth",
                 "stored Codex credential is not the selected ChatGPT OAuth profile")
+
+
+def claude_subscription_policy(config, auth_listing=None):
+    """Keep Opus on the host's own Claude Code login; OpenClaw must hold no Anthropic credential."""
+    auth = config.get("auth", {})
+    require(not auth.get("order", {}).get("anthropic")
+            and not any(profile.get("provider") == "anthropic"
+                        for profile in auth.get("profiles", {}).values()),
+            "Claude must use the native Claude Code login, not an OpenClaw credential")
+    require(not config.get("models", {}).get("providers", {}).get("anthropic"),
+            "explicit Anthropic provider override requires billing review")
+    require(config.get("agents", {}).get("defaults", {}).get("models", {}).get(OPUS_MODEL) ==
+            {"alias": "opus", "agentRuntime": {"id": "claude-cli"}},
+            "Claude model alias or runtime drifted")
+    plugins = config.get("plugins", {})
+    # Native session discovery would list the owner's unrelated Claude Code conversations.
+    require("anthropic" in plugins.get("allow", []) and plugins.get("entries", {}).get("anthropic") ==
+            {"enabled": True, "config": {"sessionCatalog": {"enabled": False}}},
+            "Claude plugin must stay enabled without native session discovery")
+    if auth_listing is not None:
+        require(not auth_listing.get("profiles"),
+                "stored Anthropic credential would bypass the Claude Code login")
+
+
+def claude_cli_policy(service_env, approved=APPROVED_CLAUDE_COMMAND, cask_root=CLAUDE_CASK_ROOT):
+    """Require the Gateway's first `claude` on PATH to be the Homebrew Claude Code cask."""
+    private_file(service_env)
+    lines = [line for line in service_env.read_text().splitlines() if line.startswith("export PATH=")]
+    require(len(lines) == 1, "Gateway service PATH missing or ambiguous")
+    match = re.fullmatch(r"export PATH='([^']*)'", lines[0])
+    require(match is not None, "Gateway service PATH is not a plain quoted value")
+    found = next((Path(entry) / "claude" for entry in match.group(1).split(":")
+                  if entry and os.access(Path(entry) / "claude", os.X_OK)), None)
+    require(found == approved, "Gateway resolves an unreviewed claude executable")
+    require(found.resolve().is_relative_to(cask_root.resolve()) and found.resolve().is_file(),
+            "Claude Code executable is not the Homebrew cask")
 
 
 def run_json(cli, *arguments):
@@ -268,7 +318,8 @@ def runtime_policy(state, package, owner):
     require(version in RUNTIME_PATCH_SPECS, "runtime version changed; requalify local patches")
     spec = RUNTIME_PATCH_SPECS[version]
     # Pinned reviewed bytes are authoritative, not self-reported receipt hashes.
-    items = [spec["token"], spec["memory"], *spec["thinking"], *spec["delivery"]]
+    items = [spec["token"], spec["memory"], *spec["thinking"], *spec["delivery"],
+             *spec.get("gpt6Sol", [])]
     if "authReprobe" in spec:
         items.append(spec["authReprobe"])
     for item in items:
@@ -313,6 +364,20 @@ def runtime_policy(state, package, owner):
             "thinking receipt version mismatch")
     glm_thinking_patch_policy(state, package)
     auth_reprobe_patch_policy(state, package, version)
+    if "gpt6Sol" in spec:
+        sol_receipt_path = state / "operations/gpt6-sol-patch.json"
+        private_file(sol_receipt_path)
+        sol_receipt = json.loads(sol_receipt_path.read_text())
+        expected = {item["path"]: (item["before"], item["after"]) for item in spec["gpt6Sol"]}
+        files = sol_receipt.get("files")
+        require(sol_receipt.get("version") == version and sol_receipt.get("installed") is True
+                and sol_receipt.get("package") == str(package.resolve())
+                and type(sol_receipt.get("modelRequests")) is int
+                and sol_receipt["modelRequests"] == 0 and isinstance(files, list)
+                and len(files) == len(expected), "GPT-6 Sol runtime receipt missing or invalid")
+        actual = {item.get("path"): (item.get("beforeSha256"), item.get("afterSha256"))
+                  for item in files if isinstance(item, dict)}
+        require(actual == expected, "GPT-6 Sol runtime receipt differs from reviewed patch")
 
 
 def private_file(path):
@@ -341,6 +406,8 @@ def main():
     owner_policy(config, owner)
     automatic_memory_policy(config)
     codex_subscription_policy(config)
+    claude_subscription_policy(config)
+    claude_cli_policy(args.state_dir / "service-env/ai.openclaw.personaledge.env")
     runtime_policy(args.state_dir, args.package, owner)
     require(config["agents"]["defaults"].get("reasoningDefault") == "off", "reasoning display must be off")
     workspace = Path(config["agents"]["defaults"]["workspace"])
@@ -353,6 +420,8 @@ def main():
     if not args.skip_live:
         codex_subscription_policy(config, run_json(args.cli, "models", "auth", "list",
                                                    "--provider", "openai", "--json"))
+        claude_subscription_policy(config, run_json(args.cli, "models", "auth", "list",
+                                                    "--provider", "anthropic", "--json"))
         # These capability-only plugins load on demand, so Gateway health.loaded is not their
         # availability contract. Inspect actual imported providers and their declared contracts.
         for name, (contract, capability) in EXTRACTOR_CONTRACTS.items():

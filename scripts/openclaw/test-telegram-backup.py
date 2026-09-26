@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic backups only: extraction safety, corruption and restore evidence."""
 
+import copy
 import importlib.util
 from contextlib import closing
 import io
@@ -244,9 +245,14 @@ class RecoverySupplementTest(unittest.TestCase):
                                     cli=self.root / "management/openclaw", launch_agents=self.root / "launchagents")
         self.specs = json.loads(json.dumps(backup.RUNTIME_PATCH_SPECS))
         self.auth = self.specs["2026.9.3"]["authReprobe"]
+        self.sol = self.specs["2026.9.3"]["gpt6Sol"]
         self.write(self.args.package / self.auth["path"], b"synthetic patched auth runtime")
         self.auth["after"] = backup.digest(self.args.package / self.auth["path"])
         self.auth["before"] = "a" * 64
+        for index, entry in enumerate(self.sol):
+            self.write(self.args.package / entry["path"], ("synthetic Sol patch %d" % index).encode())
+            entry["after"] = backup.digest(self.args.package / entry["path"])
+            entry["before"] = "b" * 64
         self.write(self.args.package / "package.json", json.dumps({"version": "2026.9.3"}).encode())
         self.write(self.args.cli, b"synthetic CLI")
         for name in ("ai.openclaw.personaledge.plist", "com.personaledge.openclaw-telegram-watchdog.plist"):
@@ -260,6 +266,11 @@ class RecoverySupplementTest(unittest.TestCase):
                         "beforeSha256": self.auth["before"], "afterSha256": self.auth["after"],
                         "inferenceRequests": 0}
         self.write_receipt("auth-reprobe-patch.json", self.receipt)
+        self.sol_receipt = {"version": "2026.9.3", "package": str(self.args.package),
+                            "installed": True, "modelRequests": 0,
+                            "files": [{"path": entry["path"], "beforeSha256": entry["before"],
+                                       "afterSha256": entry["after"]} for entry in self.sol]}
+        self.write_receipt("gpt6-sol-patch.json", self.sol_receipt)
         for name in ("patch-auth-reprobe.mjs", "test-auth-reprobe.mjs", "runtime-patch-specs.json"):
             self.write(self.operator / name, b"synthetic recovery operator asset")
 
@@ -278,12 +289,14 @@ class RecoverySupplementTest(unittest.TestCase):
                 patch.object(backup.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "v26.0.0\n", "")):
             return backup.recovery_supplement(self.bundle, self.args)
 
-    def test_auth_reprobe_receipt_runtime_and_reapplication_assets_survive_offline_restore(self):
+    def test_auth_and_sol_receipts_runtime_and_reapplication_assets_survive_offline_restore(self):
         # An extra files field must not redirect the single-file auth receipt.
         self.receipt["files"] = [{"relativePath": "dist/unreviewed.mjs", "afterSha256": "0" * 64}]
         self.write_receipt("auth-reprobe-patch.json", self.receipt)
         recovery = self.supplement()
-        expected = {"recovery/receipts/auth-reprobe-patch.json", "recovery/runtime/" + self.auth["path"]}
+        expected = {"recovery/receipts/auth-reprobe-patch.json", "recovery/runtime/" + self.auth["path"],
+                    "recovery/receipts/gpt6-sol-patch.json"}
+        expected.update("recovery/runtime/" + entry["path"] for entry in self.sol)
         expected.update("recovery/operator-scripts/" + name for name in (
             "patch-auth-reprobe.mjs", "test-auth-reprobe.mjs", "runtime-patch-specs.json"))
         self.assertTrue(expected.issubset(recovery["files"]))
@@ -296,6 +309,11 @@ class RecoverySupplementTest(unittest.TestCase):
 
     def test_2026_9_3_requires_auth_receipt(self):
         (self.args.state_dir / "operations/auth-reprobe-patch.json").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.supplement()
+
+    def test_2026_9_3_requires_sol_receipt(self):
+        (self.args.state_dir / "operations/gpt6-sol-patch.json").unlink()
         with self.assertRaises(FileNotFoundError):
             self.supplement()
 
@@ -320,6 +338,34 @@ class RecoverySupplementTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hash drifted"):
             self.supplement()
 
+    def test_unreviewed_sol_receipt_is_rejected(self):
+        changes = [
+            ("installed", False),
+            ("package", str(self.root / "other-package")),
+            ("modelRequests", 1),
+            ("modelRequests", False),
+            ("files", self.sol_receipt["files"][:-1]),
+        ]
+        for field, value in changes:
+            with self.subTest(field=field, value=value):
+                shutil.rmtree(self.bundle, ignore_errors=True)
+                self.write_receipt("gpt6-sol-patch.json", dict(self.sol_receipt, **{field: value}))
+                with self.assertRaisesRegex(ValueError, "GPT-6 Sol receipt"):
+                    self.supplement()
+        for field in ("path", "beforeSha256", "afterSha256"):
+            with self.subTest(file_field=field):
+                shutil.rmtree(self.bundle, ignore_errors=True)
+                receipt = copy.deepcopy(self.sol_receipt)
+                receipt["files"][0][field] = "0" * 64
+                self.write_receipt("gpt6-sol-patch.json", receipt)
+                with self.assertRaisesRegex(ValueError, "GPT-6 Sol receipt"):
+                    self.supplement()
+
+    def test_sol_runtime_drift_is_rejected(self):
+        self.write(self.args.package / self.sol[0]["path"], b"unreviewed Sol runtime")
+        with self.assertRaisesRegex(ValueError, "hash drifted"):
+            self.supplement()
+
     def test_2026_9_2_keeps_four_patch_receipts(self):
         self.write(self.args.package / "package.json", json.dumps({"version": "2026.9.2"}).encode())
         for name in backup.PATCH_RECEIPTS:
@@ -327,7 +373,7 @@ class RecoverySupplementTest(unittest.TestCase):
             receipt = json.loads(path.read_text())
             receipt["version"] = "2026.9.2"
             self.write_receipt(name, receipt)
-        # A leftover newer receipt is neither required nor included for the older runtime.
+        # Leftover newer receipts are neither required nor included for the older runtime.
         recovery = self.supplement()
         names = {name for name in recovery["files"] if name.startswith("recovery/receipts/")}
         self.assertEqual(names, {"recovery/receipts/" + name for name in backup.PATCH_RECEIPTS})

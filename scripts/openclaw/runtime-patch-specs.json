@@ -47,6 +47,28 @@
     }
   },
   "2026.9.3": {
+    "gpt6Sol": [
+      {
+        "path": "dist/extensions/openai/openclaw.plugin.json",
+        "before": "3587126e05f1ebf7640518fb59cf90d5fd76dd7ae735ce22616140b634d5e753",
+        "after": "a662962c79425982821e5e2e3ba568f7550a6b51bcee77090fb0f87207d02a63"
+      },
+      {
+        "path": "dist/thinking-policy-DdkggmZ1.mjs",
+        "before": "0342984d12824d9f9ccbc385d7a81688d5f0a57883e9376ac63c8a3899799a59",
+        "after": "b70032df2b37e395406137a9e66db18483a30c253427cbd5aa49e6940b0c0f35"
+      },
+      {
+        "path": "dist/model-route-contract-pNgq17sM.mjs",
+        "before": "3ec4e0ad6a5da96d459b15a04f7fce2f013e2f38695f5b3acefb8ab5c1e82295",
+        "after": "e544ab32d8dcc7c0ca37345a33ff6cb2eeec4721f93d52a1142b59e1a232994f"
+      },
+      {
+        "path": "dist/openai-chatgpt-provider-BB-cMiBP.mjs",
+        "before": "4cc7725f207168a6c60722ad070ff5b2ad1bb377c9d926404292fca014ab9423",
+        "after": "80b518a723443d68fd1e0565747bfc3e4077cc31eabfb26bc5a889d605db6379"
+      }
+    ],
     "token": {
       "path": "node_modules/@openclaw/ai/dist/openai-prompt-cache-BI0rkM-5.mjs",
       "before": "46f56fe4dd90dac2e6b02231d2f49c63b2cbe8e540bb5cf3c8b536603c8cf3ee",

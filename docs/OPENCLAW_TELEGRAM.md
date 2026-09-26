@@ -1,6 +1,6 @@
 # Mac OpenClaw over Telegram
 
-Updated 2026-09-10 KST. This is the active operating document for this repository.
+Updated 2026-09-26 KST. This is the active operating document for this repository.
 
 The September 10 [Heartbeat recovery record](OPENCLAW_HEARTBEAT_RECOVERY_20260910.md) covers stale
 Codex subscription blocking, the guarded reprobe repair, and retained synthetic-agent startup
@@ -11,14 +11,92 @@ for the current Mac. Work includes coding, research, operations, media, and docu
 source, installed app data, and historical acceptance receipts remain preserved. Its unfinished
 release gates are closed unfinished, not prerequisites for this Mac assistant.
 
+## Claude Opus 5.5 main-route migration, 2026-09-26 KST
+
+At the owner's request the main agent's chain is now `anthropic/claude-opus-5-5` →
+`openai/gpt-6-sol` → `openrouter/z-ai/glm-5.3-flash`, and the global `agents.defaults.model`
+is Opus with Sol as its only fallback (no paid fallback). Opus carries alias `opus` and an
+explicit `claude-cli` runtime, so it runs through this Mac's own Claude Code login and draws
+from the Claude subscription (the account reports `pro`), not an Anthropic API key. Anthropic's
+support article (updated 2026-06-16) states that `claude -p` and third-party app usage still
+draw from subscription limits. Thinking stays `high`; the summary, PDF, sub-agent and Dreaming
+internal routes stay on GPT-5.6 Sol. The bundled `anthropic` plugin was allowed with native
+Claude session discovery disabled, so the owner's other Claude Code conversations are not listed.
+No runtime file was patched: 2026.9.3 already treats `claude-opus-5-5` as an Opus 5 family model.
+
+Claude Code comes from the Homebrew `claude-code@latest` cask (2.1.282) at
+`/opt/homebrew/bin/claude`, the first `claude` on the Gateway service PATH. The stable
+`claude-code` cask (2.1.274) was installed first and rejected by the API: Opus 5.5 requires
+Claude Code 2.1.280 or newer. The owner signed in interactively with `claude auth login`; the
+credential lives in the login keychain and OpenClaw holds no Anthropic credential. Claude Code
+resolves that keychain item through the `USER` environment variable, which the Gateway has.
+Homebrew upgrades change the binary; the verifier checks the cask location, not a version.
+
+Verification. Live Gateway `models.list` reported all three chain models available and Opus
+bound to `claude-cli`. One ordinary synthetic agent turn with no model override logged
+`cli exec: provider=claude-cli model=claude-opus-5-5`, answered `OPUS55-READY` in 2.4 s with
+no fallback decision, and its session was deleted; the native Claude transcript it created was
+moved into the private operation directory. A raw `modelRun` smoke is not valid for this route:
+2026.9.3 forces raw model runs onto the embedded runtime, where Opus failed as
+`missing-provider-auth`. That same run did show the real chain order: Sol then failed with
+Codex's 429 usage limit (allowance exhausted until 2026-09-30) and GLM answered. An offline
+run of the installed fallback runner passed Opus → Sol → GLM for four Claude limit messages.
+Two of them (`You've hit your … limit · resets …`) classify as `unknown`, not `rate_limit`.
+They still fail over while a candidate remains, but without a cooldown, so each turn retries
+Opus first until its limit resets. The source verifier, 16 policy tests and the reinstalled
+observer's first and next scheduled checks passed. At 10:55 KST the owner sent a real Telegram
+message: the existing conversation ran `claude-cli`/`claude-opus-5-5` (15.6 s, no fallback) and
+Telegram accepted the reply (`messageId=426`); the session now records provider `claude-cli`.
+The next heartbeat turn also ran on Opus. Actual Claude limit exhaustion was not exercised.
+
+Known boundaries:
+- A native Claude CLI login exposes no account identity to OpenClaw, so it refuses to replay
+  earlier OpenClaw transcript into a fresh Claude session (`reason=auth-unknown`). The owner's
+  existing conversation therefore starts its Claude session without the earlier Sol/GLM turns;
+  workspace files and memory still load, and later Opus turns resume that Claude session.
+- Claude Code keeps this agent's native session files under `~/.claude/projects/`, outside the
+  OpenClaw backup. The OpenClaw transcript remains authoritative.
+- Opus shares the owner's Claude subscription limits with Claude and Claude Code on any device.
+  With Claude CLI auth, OpenClaw's default heartbeat cadence becomes one hour while
+  `heartbeat.every` is unset; those heartbeat turns also use Opus first.
+
+Private backups (configuration, workspace policy, memory note, observer bundle), the applied
+patch, smoke scripts and receipts are in
+`~/.openclaw-personaledge/operations/opus-default-20260926T014034Z/`. Rollback: restore
+`openclaw.json.before` and `AGENTS.md.before`, restart the Gateway, and reinstall the observer
+from the matching verifier revision.
+
+## GPT-6 Sol main-route migration, 2026-09-23 KST
+
+The installed global `agents.defaults.model` now selects `openai/gpt-6-sol` without a fallback.
+The main agent's explicit `agents.entries.main.model` also selects `openai/gpt-6-sol`, retaining
+`openrouter/z-ai/glm-5.3-flash` as its sole configured fallback. Default thinking remains `high`.
+The separately configured GPT-5.6 Sol routes for summaries, PDF work, delegated work, and
+Dreaming's internal completion were not changed. The scheduled Dreaming agent turn inherits the
+new default Sol route when it has no model override.
+
+A separate GPT-6 Sol compatibility patch is installed in four OpenClaw 2026.9.3 files: the
+plugin manifest, thinking policy, model route contract, and ChatGPT/Codex resolver. The exact
+source and installed hashes are pinned in `scripts/openclaw/runtime-patch-specs.json`; the private
+installation receipt is `~/.openclaw-personaledge/operations/gpt6-sol-patch.json`. This is
+distinct from the four earlier runtime repairs. The Codex runtime is 0.156.1 and uses the
+existing ChatGPT OAuth route; no API-key billing route was added.
+
+An isolated Gateway `modelRun` returned `SOL-READY` with requested and effective model
+`openai/gpt-6-sol`, response model `gpt-6-sol`, `rerouted=false`, and zero successful tools.
+Its synthetic session and run-owned state were cleaned up. This verifies that bounded model
+path, not the owner's Telegram conversation or Telegram delivery. Actual quota exhaustion and
+fallback under the new Sol route were not exercised. The historical Astra receipts below remain
+evidence for their original dates and models. Comparative usage savings have not been measured.
+
 ## Main conversation GLM fallback, 2026-09-11
 
 The owner authorized automatic fallback to the already configured OpenRouter GLM when Codex
 allowance is exhausted. This supersedes the earlier no-GLM-fallback policy for the main agent,
 not for the separately configured PDF, summary, delegated-model, or Hermes routes.
-`agents.entries.main.model` now explicitly selects `openai/gpt-6-astra` with
-`openrouter/z-ai/glm-5.3-flash` as its sole fallback. Global defaults remain unchanged.
-The current Telegram session's model override was cleared through `session_status(model=default)`;
+At that time, `agents.entries.main.model` explicitly selected `openai/gpt-6-astra` with
+`openrouter/z-ai/glm-5.3-flash` as its sole fallback. Global defaults remained unchanged.
+The then-current Telegram session's model override was cleared through `session_status(model=default)`;
 conversation history was preserved and the Gateway required no restart.
 
 The built-in fallback is turn-local and also covers eligible availability errors, not exclusively
@@ -42,10 +120,10 @@ owner-routing check still allowed only empty agent entries, so it rejected the n
 approved main model object with `agent routing overrides require separate review`.
 This was a monitoring-policy mismatch, not evidence that Gateway or Telegram was down.
 
-The routing check now accepts exactly the approved Astra-primary/GLM-only-fallback main
+The repaired routing check then accepted exactly the approved Astra-primary/GLM-only-fallback main
 entry as well as the prior inherited-default forms. Alternate models, extra fallback
-providers, extra agents, per-agent tool overrides and bindings remain rejected. Global,
-PDF, delegated and credential policies are unchanged. Thirteen gateway policy tests and
+providers, extra agents, per-agent tool overrides and bindings remained rejected. Global,
+PDF, delegated and credential policies were unchanged by that repair. Thirteen gateway policy tests and
 45 observer tests passed; the repaired source verifier passed live Gateway/Telegram checks.
 Private pre-edit backups: `~/.openclaw-personaledge/operations/fallback-observer-fix-izjay679/`.
 Installation/live receipts remain in `operations/telegram-observer-install-latest.json`
@@ -63,7 +141,7 @@ in that guide. The existing five-minute observer continues without model calls.
 The optional [Hermes operations-report worker](OPENCLAW_HERMES_PILOT.md) handles one explicitly
 requested event-JSON report through `/skill hermes-operations-report`. It has a separate ChatGPT
 OAuth profile, Sol/high model route and procedure skill. OpenClaw retains conversation ownership,
-the Astra/high default, and final Telegram delivery. Native Hermes learning/reuse and a real main
+the current Sol/high default, and final Telegram delivery. Native Hermes learning/reuse and a real main
 agent-to-worker report call passed; credentials and long-term memories are not synchronized.
 
 - Profile: `personaledge`; state: `~/.openclaw-personaledge`.
@@ -73,8 +151,9 @@ agent-to-worker report call passed; credentials and long-term memories are not s
   The 2026-09-09 update also aligned the official Codex plugin to 2026.9.3.
   Four scoped compatibility/recovery/memory patches described below were requalified for 2026.9.3 and installed. This is not
   a claim of byte identity with the upstream package.
-- Configured conversation model: `openai/gpt-6-astra` (alias `codex`), thinking `high`.
-  `openai/gpt-5.6-sol` is available as `sol`; GLM is also the main-agent fallback under the September 11 policy above.
+- Configured conversation model: `anthropic/claude-opus-5-5` via `claude-cli`, thinking `high`,
+  then `openai/gpt-6-sol`, then GLM for the main agent. `openai/gpt-5.6-sol` remains a separate
+  specialist route.
   `modelSelectionScope=session` keeps unqualified `/model` changes in the current conversation.
 - Telegram bot: `@ForEverything_Gogh_bot`; owner identity is in private configuration, not this repo.
 - Gateway: loopback port 18789, token authentication, Tailscale off.
@@ -88,10 +167,10 @@ for versions, commands and bounded test evidence. GitHub was excluded from this 
 
 Codex, Web Readability and Document Extract are also installed and execution-verified. Codex uses
 the account's ChatGPT OAuth login, without API-key backup. The September 11 main-agent GLM
-fallback exception is documented above. The saved 2026-09-08 policy
-sets general chat to GPT-6 Astra/high; Summarize uses GPT-5.6 Sol/low, and PDF, delegated work and
-Dreaming's internal completion use GPT-5.6 Sol. The scheduled Dreaming agent turn inherits
-GPT-6 Astra/high. The 2026-09-08 checks below verified default Astra execution,
+fallback exception is documented above. The 2026-09-08 policy then set general chat to GPT-6
+Astra/high; Summarize used GPT-5.6 Sol/low, and PDF, delegated work and Dreaming's internal
+completion used GPT-5.6 Sol. Its scheduled Dreaming agent turn then inherited Astra/high. The
+2026-09-08 checks below verified default Astra execution,
 Sol summaries, isolated Dreaming-core execution and Telegram delivery of the updated guidance;
 the earlier execution receipts keep their original model scope.
 See [OPENCLAW_PLUGINS.md](OPENCLAW_PLUGINS.md) for usage, authentication policy and evidence.
@@ -287,8 +366,10 @@ reviewed workspace instructions, required live plugins, positive `exec`/file/bro
 inventory for the existing owner session, Telegram polling readiness, and loopback listeners.
 It also checks the automatic-memory configuration, qualified runtime version, and hashes of all
 four local runtime fixes (delivery recovery, GLM token compatibility, GLM max thinking, and memory admission), plus the
-Codex OAuth-only policy, GPT-6/high conversation default, session-scoped model selection, both
-Codex model aliases and native runtime bindings, PDF tool and both lazy extraction providers.
+Codex OAuth-only policy, the exact Opus → Sol → GLM main chain and Opus → Sol default at high,
+session-scoped model selection, the Codex and Opus aliases and native runtime bindings, the
+absence of any OpenClaw-held Anthropic credential, the Homebrew Claude Code executable first on
+the Gateway PATH, PDF tool and both lazy extraction providers.
 It creates no sessions, sends no messages, and makes no model calls. Live checks require access
 to the local RPC socket; a sandbox denial is not a Gateway failure.
 
@@ -490,3 +571,23 @@ supporting executable was installed in this memory-policy change.
 
 Configuration, plugin loading, and a successful health response do not prove model tool use,
 research-provider availability, document/media quality, Telegram file delivery, or 24-hour uptime.
+
+
+## Terminal Telegram reply closure, 2026-09-23
+
+A turn containing only progress sends (`final=false`) reached automatic finalization;
+the finalizer was then blocked by a provenance check, producing the generic English
+missing-summary notice. The source and active SOUL response contract now require the
+last completed reply (including acknowledgement after an accepted scheduled handoff)
+to use `final=true`, with bookkeeping performed before it and no tools afterward.
+No provenance guard or missing-reply detector was disabled; runtime code was not changed.
+
+Verification: 10 installed-context projection checks and 14 gateway policy tests passed.
+The first model check failed before restart (RuntimeError); subsequent checks exposed an
+ambiguous handoff scenario. The clarified scenario specifies an already accepted schedule
+and no remaining current-turn work. Final isolated Astra verification passed all 10 fields,
+with no tools, rerouting, image generation or Telegram delivery; its synthetic session was
+removed. Receipt: `operations/response-contract-smoke-pvc96cvk/receipt.json` in the private
+OpenClaw state directory. Operational installation passed static/live Gateway verification;
+the unrelated `backup-stale` warning remains. Live Telegram delivery is verified separately
+by the final message receipt, not by this synthetic test.

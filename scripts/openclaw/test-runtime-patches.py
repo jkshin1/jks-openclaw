@@ -66,6 +66,13 @@ class RuntimePatchTest(unittest.TestCase):
     def receipt_names(self):
         return RECEIPTS + (['auth-reprobe-patch.json'] if 'authReprobe' in self.specs[self.version] else [])
 
+    def sol_receipt(self):
+        # patch-gpt6-sol.py installs these separately from qualify-runtime-patches.py.
+        return {'version': self.version, 'installed': True, 'package': str(self.package.resolve()),
+                'modelRequests': 0, 'files': [
+                    {'path': item['path'], 'beforeSha256': item['before'], 'afterSha256': item['after']}
+                    for item in self.specs[self.version].get('gpt6Sol', [])]}
+
     def prepare_fixture(self, version):
         self.version = version
         self.write_json(self.package / 'package.json', {'version': version})
@@ -79,9 +86,25 @@ class RuntimePatchTest(unittest.TestCase):
             if item.get('before'):
                 target.write_bytes(original); item['before'] = digest(original)
             item['after'] = digest(modified)
+        for item in self.specs[version].get('gpt6Sol', []):
+            name = item['path']
+            modified = ('reviewed-sol-patched:' + name).encode()
+            self.after[name] = modified
+            item['before'] = digest(('original:' + name).encode())
+            item['after'] = digest(modified)
+            target = self.package / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(modified)
+        if 'gpt6Sol' in self.specs[version]:
+            self.write_json(self.state / 'operations/gpt6-sol-patch.json', self.sol_receipt())
         self.write_json(self.source / 'runtime-patch-specs.json', self.specs)
         for name in self.receipt_names():
             self.write_json(self.state / 'operations' / name, {'previousReceipt': name})
+
+    def write_delivery_policy(self, owner):
+        self.write_json(self.state / 'operations/telegram-delivery-policy.json', {
+            'schemaVersion': 1, 'ownerId': owner, 'accountId': 'default', 'allowAmbiguousReplay': True,
+            'maxAttempts': 1008, 'maxAgeMs': 604800000})
 
     def runner(self, argv, output):
         script = Path(argv[1]).name
@@ -332,9 +355,7 @@ class RuntimePatchTest(unittest.TestCase):
     def test_runtime_verifier_rejects_forged_receipt_matching_unreviewed_bytes(self):
         self.apply()
         owner = '12345'
-        self.write_json(self.state / 'operations/telegram-delivery-policy.json', {
-            'schemaVersion': 1, 'ownerId': owner, 'accountId': 'default', 'allowAmbiguousReplay': True,
-            'maxAttempts': 1008, 'maxAgeMs': 604800000})
+        self.write_delivery_policy(owner)
         with patch.object(verifier, 'RUNTIME_PATCH_SPECS', self.specs):
             verifier.runtime_policy(self.state, self.package, owner)
             token = self.specs[self.version]['token']
@@ -342,6 +363,47 @@ class RuntimePatchTest(unittest.TestCase):
             self.write_json(self.state / 'operations/glm-token-field-patch.json', {
                 'version': self.version, 'relativePath': token['path'], 'afterSha256': digest(b'forged-runtime')})
             with self.assertRaisesRegex(ValueError, 'reviewed runtime patch bytes drifted'):
+                verifier.runtime_policy(self.state, self.package, owner)
+
+    def test_runtime_verifier_rejects_drifted_or_forged_sol_patch(self):
+        self.apply()
+        owner = '12345'
+        self.write_delivery_policy(owner)
+        path = self.state / 'operations/gpt6-sol-patch.json'
+        receipt = self.sol_receipt()
+        first = self.specs[self.version]['gpt6Sol'][0]
+        target = self.package / first['path']
+        with patch.object(verifier, 'RUNTIME_PATCH_SPECS', self.specs):
+            verifier.runtime_policy(self.state, self.package, owner)
+            # A receipt rewritten to match unreviewed bytes cannot hide the drift.
+            target.write_bytes(b'forged-sol-runtime')
+            forged_files = [dict(entry, afterSha256=digest(b'forged-sol-runtime'))
+                            if entry['path'] == first['path'] else entry for entry in receipt['files']]
+            self.write_json(path, {**receipt, 'files': forged_files})
+            with self.assertRaisesRegex(ValueError, 'reviewed runtime patch bytes drifted'):
+                verifier.runtime_policy(self.state, self.package, owner)
+            target.write_bytes(self.after[first['path']])
+            forged_receipts = [
+                {**receipt, 'version': '2026.9.2'},
+                {**receipt, 'installed': False},
+                {**receipt, 'package': str(self.root / 'other-package')},
+                {**receipt, 'modelRequests': 1},
+                {**receipt, 'modelRequests': True},
+                {**receipt, 'files': receipt['files'][1:]},
+                {**receipt, 'files': [*receipt['files'], {'path': 'dist/unreviewed.mjs',
+                                                          'beforeSha256': '0' * 64, 'afterSha256': '1' * 64}]},
+                {**receipt, 'files': forged_files},
+            ]
+            for forged in forged_receipts:
+                self.write_json(path, forged)
+                with self.subTest(forged=forged), self.assertRaisesRegex(ValueError, 'GPT-6 Sol runtime receipt'):
+                    verifier.runtime_policy(self.state, self.package, owner)
+            self.write_json(path, receipt)
+            path.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, 'private file permissions'):
+                verifier.runtime_policy(self.state, self.package, owner)
+            path.unlink()
+            with self.assertRaisesRegex(ValueError, 'missing or symlinked private file'):
                 verifier.runtime_policy(self.state, self.package, owner)
 
     def test_legacy_release_remains_supported(self):
