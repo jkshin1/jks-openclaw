@@ -258,8 +258,13 @@ def idle_sessions(result):
     rows = result.get("sessions")
     require(isinstance(rows, list), "idle-sample-schema-unverified")
     require(not result.get("hasMore") and not result.get("nextCursor"), "idle-sample-truncated")
-    total = result.get("total", result.get("count", len(rows)))
-    require(not isinstance(total, int) or total <= len(rows), "idle-sample-truncated")
+    # Every reported counter must be a real non-negative integer equal to the returned rows; a string,
+    # null, bool or disagreeing counter means the sample cannot prove the gateway is idle.
+    for count_key in ("total", "count"):
+        if count_key in result:
+            value = result[count_key]
+            require(type(value) is int and value >= 0, "idle-sample-count-invalid")
+            require(value == len(rows), "idle-sample-truncated")
     for row in rows:
         require(isinstance(row, dict), "idle-session-schema-unverified")
         status = row.get("status")

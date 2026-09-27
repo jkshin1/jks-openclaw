@@ -164,12 +164,19 @@ class LiveTests(unittest.TestCase):
         self.assertTrue(all(value is None for value in observation["usage"].values()))
         self.assertTrue(live.PILOT.read_json(self.out / "cleanup.json")["ok"])
 
-    def test_training_recovery_uses_retained_terminal_without_inference(self):
+    def failed_training_attempt(self, error="SYNTHETIC_HISTORY_INVALID"):
         out = self.root / "live/openclaw/train"
         out.mkdir(mode=0o700, parents=True)
-        live.run_openclaw(live.common_request("train", live.PILOT.procedure()), out, FakeGateway(), self.state)
+        request = live.common_request("train", live.PILOT.procedure(False), {"candidate_rejected": True})
+        live.PILOT.write_new(out / "common-request.json", request)
+        live.run_openclaw(request, out, FakeGateway(), self.state)
         live.PILOT.write_new(out / "acceptance.json", {"ok": False, "phase": "train", "elapsed_seconds": 10,
-                            "comparison_limit": "raw model baseline"})
+                            "comparison_limit": "raw model baseline", "error": error, "error_type": "ValueError",
+                            "common_request_sha256": live.PILOT.digest(request)})
+        return out
+
+    def test_training_recovery_uses_retained_terminal_without_inference(self):
+        self.failed_training_attempt()
         with patch.object(live, "run_openclaw") as inference:
             result = live.recover_training_output(self.root)
         self.assertTrue(result["ok"])
@@ -177,6 +184,29 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(result["verification"]["status"], "training_validated")
         self.assertTrue(all(value is None for value in result["usage"].values()))
         inference.assert_not_called()
+
+    def test_recovery_refuses_non_telemetry_failures(self):
+        self.failed_training_attempt("OPENCLAW_TOOL_CALL_REFUSED")
+        with self.assertRaisesRegex(ValueError, "NON_TELEMETRY_FAILURE_NOT_RECOVERABLE"):
+            live.recover_training_output(self.root)
+
+    def test_recovery_refuses_a_request_that_is_not_the_recorded_train_request(self):
+        out = self.failed_training_attempt()
+        tampered = live.PILOT.read_json(out / "common-request.json")
+        tampered["prompt"] += " extra"
+        (out / "common-request.json").write_text(json.dumps(tampered))
+        with self.assertRaisesRegex(ValueError, "TRAIN_REQUEST_PROVENANCE_INVALID"):
+            live.recover_training_output(self.root)
+
+    def test_hermes_calls_must_be_successful_skill_reads_only(self):
+        live.verify_read_only_calls([{"name": "skills_list", "succeeded": True},
+                                     {"name": "skill_view", "succeeded": True}])
+        for calls in ([], None, [{"name": "skill_view", "succeeded": False}],
+                      [{"name": "skill_view", "succeeded": True}, {"name": "terminal", "succeeded": True}],
+                      [{"name": "skill_view", "succeeded": True}, {"name": "web_fetch", "succeeded": False}],
+                      [{"name": "skill_view", "succeeded": True}, "malformed"]):
+            with self.subTest(calls=calls), self.assertRaisesRegex(ValueError, "HERMES_READ_ONLY_REUSE_UNVERIFIED"):
+                live.verify_read_only_calls(calls)
 
     def test_hermes_public_skill_gate_rejects_added_content_and_support_files(self):
         profile = self.parent / "profile"

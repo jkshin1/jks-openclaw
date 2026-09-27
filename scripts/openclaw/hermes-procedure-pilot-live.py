@@ -144,9 +144,7 @@ def run_hermes(request, out, worker_root=WORKER_ROOT):
             and receipt.get("provider") == "openai-codex" and receipt.get("api_mode") == "codex_responses"
             and receipt.get("response_models") and all(m == MODEL for m in receipt["response_models"]),
             "HERMES_EFFECTIVE_ROUTE_UNVERIFIED")
-    calls = receipt.get("tool_calls", [])
-    require(any(c.get("name") == "skill_view" and c.get("succeeded") is True for c in calls)
-            and not any(c.get("name") == "skill_manage" for c in calls), "HERMES_READ_ONLY_REUSE_UNVERIFIED")
+    verify_read_only_calls(receipt.get("tool_calls"))
     output = parse_output(receipt["final_response"])
     return output, {"run_id": request["request_id"] + "-" + out.name,
                     "runtime_version": receipt["hermes_version"], "native_provider": receipt["provider"],
@@ -251,13 +249,39 @@ def run_openclaw(request, out, gateway=None, state=None):
         require(cleanup["ok"], "OPENCLAW_CLEANUP_OR_PRESERVATION_FAILED")
 
 
+# Failures raised only after the terminal output was verified: history/usage collection. A tool call,
+# route, schema, deadline or cleanup failure is never recoverable from the retained output.
+TELEMETRY_FAILURES = frozenset({"SYNTHETIC_HISTORY_INVALID"})
+TELEMETRY_ERROR_TYPES = frozenset({"KeyError", "TypeError", "AttributeError"})
+
+
+def verify_read_only_calls(calls):
+    """Hermes may list skills and must successfully read its report skill; any other call is refused."""
+    require(isinstance(calls, list) and calls and all(isinstance(call, dict) for call in calls),
+            "HERMES_READ_ONLY_REUSE_UNVERIFIED")
+    require(all(call.get("name") in {"skills_list", "skill_view"} for call in calls)
+            and any(call.get("name") == "skill_view" and call.get("succeeded") is True for call in calls),
+            "HERMES_READ_ONLY_REUSE_UNVERIFIED")
+
+
 def recover_training_output(root):
     """Verify a completed train output after telemetry failed; never reinfer."""
     root = PILOT.validate_root(root)
     out = root / "live/openclaw/train"
     prior = PILOT.read_json(out / "acceptance.json")
     require(prior.get("ok") is False and prior.get("phase") == "train", "FAILED_TRAIN_ATTEMPT_REQUIRED")
+    require(prior.get("error") in TELEMETRY_FAILURES or prior.get("error_type") in TELEMETRY_ERROR_TYPES,
+            "NON_TELEMETRY_FAILURE_NOT_RECOVERABLE")
     require(PILOT.read_json(out / "cleanup.json").get("ok") is True, "CLEANUP_REQUIRED")
+    # The retained output must answer exactly the recorded train request for this candidate.
+    common = PILOT.read_json(out / "common-request.json")
+    require(PILOT.digest(common) == prior.get("common_request_sha256")
+            and common.get("request_id") == "procedure-pilot-train"
+            and ("CANDIDATE_PROCEDURE=" + PILOT.FIXTURES.canonical(PILOT.read_json(root / "train/candidate-procedure.json")))
+            in common.get("prompt", ""), "TRAIN_REQUEST_PROVENANCE_INVALID")
+    native = PILOT.read_json(out / "native-request.json")
+    require(native.get("message") == json.dumps(common, ensure_ascii=False, sort_keys=True)
+            and native.get("modelRun") is True and native.get("promptMode") == "none", "TRAIN_REQUEST_PROVENANCE_INVALID")
     terminal = PILOT.read_json(out / "native-terminal.json")
     output = GATEWAY.verify_terminal(terminal, MODEL, allowed_tools=frozenset())
     require(set(output) == {"report", "procedure"}, "OUTER_OUTPUT_SCHEMA_INVALID")

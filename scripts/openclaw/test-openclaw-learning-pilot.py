@@ -26,10 +26,15 @@ class EvidenceTest(unittest.TestCase):
                       {"sessions": [{"status": "done", "activeRunIds": ["other"]}]},
                       {"sessions": [], "hasActiveRun": True},
                       {"sessions": [], "activeRunIds": ["other"]},
-                      {"sessions": [], "total": 1}, {"sessions": [], "hasMore": True}, {}):
+                      {"sessions": [], "total": 1}, {"sessions": [], "hasMore": True}, {},
+                      {"sessions": [], "total": "5"}, {"sessions": [], "total": None},
+                      {"sessions": [], "count": True}, {"sessions": [{"status": "done"}], "total": 1, "count": 3},
+                      {"sessions": [{"status": "done"}], "count": 2}, {"sessions": [], "total": -1}):
             with self.subTest(value=value), self.assertRaises(pilot.PilotError):
                 pilot.idle_sessions(value)
         self.assertEqual(pilot.idle_sessions({"sessions": [{"status": "done"}]}),
+                         {"sessionCount": 1, "active": 0})
+        self.assertEqual(pilot.idle_sessions({"sessions": [{"status": "done"}], "total": 1, "count": 1}),
                          {"sessionCount": 1, "active": 0})
 
     def test_unexpected_shell_or_memory_tool_blocks_inference(self):
