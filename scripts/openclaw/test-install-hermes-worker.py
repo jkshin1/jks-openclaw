@@ -45,6 +45,67 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(env["HERMES_DISABLE_LAZY_INSTALLS"], "1")
 
 
+class FailureRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve() / "worker"
+
+    def test_failed_install_moves_partial_root_aside_so_retry_is_possible(self):
+        calls = []
+
+        def run(command, *, env, log=None, timeout=900):
+            calls.append(command[1] if len(command) > 1 else command[0])
+            if command[0] == "git" and "rev-parse" in command and len(calls) == 1:
+                return installer.COMMIT
+            if command[0] == "git" and "status" in command:
+                return ""
+            if str(command[0]).endswith("uv"):
+                raise ValueError("installation command failed; inspect private install.log")
+            return ""
+        with patch.object(installer, "run", run), patch.object(installer, "PYTHON", Path(sys.executable)), \
+                patch.object(installer, "UV", Path("/nonexistent/bin/uv")), \
+                patch.object(Path, "is_file", lambda self: True):
+            with self.assertRaisesRegex(ValueError, "installation command failed"):
+                installer.install(self.root, Path(self.tmp.name))
+        self.assertFalse(self.root.exists())
+        failed = list(self.root.parent.glob("worker.failed-*"))
+        self.assertEqual(len(failed), 1)
+        self.assertTrue((failed[0] / "install.log").is_file())
+
+    def configure_fixture(self):
+        profile = self.root / "profile"
+        (profile / "codex-disabled-import").mkdir(parents=True, mode=0o700)
+        (profile / "skills" / "bundled").mkdir(parents=True)
+        (profile / "skills" / "bundled" / "SKILL.md").write_text("seeded")
+        (profile / "SOUL.md").write_text("seeded soul")
+        (profile / "codex-disabled-import" / "config.toml").write_text("# No shared Codex authentication.\n")
+        (profile / "auth.json").write_text('{"credential_pool": {}}')
+        (self.root / "installation.json").write_text('{"commit": "%s"}' % installer.COMMIT)
+        return profile
+
+    def test_failed_configure_restores_startup_files_and_keeps_auth_bytes(self):
+        profile = self.configure_fixture()
+        before_auth = (profile / "auth.json").read_bytes()
+        fake_worker = type("Worker", (), {"validate_auth": staticmethod(lambda auth: None),
+                                          "REQUIRED_CONFIG": {"toolsets": []},
+                                          "validate_profile": staticmethod(lambda *a: (_ for _ in ()).throw(
+                                              ValueError("profile validation failed")))})
+        real_spec = importlib.util.spec_from_file_location
+        with patch.object(installer.importlib.util, "module_from_spec", lambda spec: fake_worker), \
+                patch.object(type(real_spec("x", __file__).loader), "exec_module", lambda self, module: None):
+            with self.assertRaisesRegex(ValueError, "profile validation failed"):
+                installer.configure(self.root)
+        self.assertEqual((profile / "auth.json").read_bytes(), before_auth)
+        self.assertEqual((profile / "SOUL.md").read_text(), "seeded soul")
+        self.assertEqual((profile / "skills/bundled/SKILL.md").read_text(), "seeded")
+        self.assertTrue((profile / "codex-disabled-import/config.toml").is_file())
+        self.assertFalse((profile / "config.yaml").exists())
+        self.assertFalse((profile / ".no-bundled-skills").exists())
+        self.assertFalse((self.root / "startup-backup").exists())
+        self.assertFalse((self.root / "configuration.json").exists())
+
+
 class SourceQualificationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

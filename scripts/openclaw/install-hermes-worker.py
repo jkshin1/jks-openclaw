@@ -77,18 +77,26 @@ def install(root, source):
             "reviewed Hermes source has modifications")
     require(not root.exists(), "installation already exists; refusing to replace it")
     private_directory(root)
-    for relative in ("profile", "profile/codex-disabled-import", "runs", "cache", "bin"):
-        private_directory(root / relative)
-    # The empty Codex home prevents Hermes's automatic recovery from borrowing a refresh grant.
-    runtime = root / "runtime"
-    log_path = root / "install.log"
-    with log_path.open("x") as log:
-        log_path.chmod(0o600)
-        run(["git", "clone", "--no-hardlinks", "--no-checkout", source, runtime], env=env, log=log)
-        run(["git", "-C", runtime, "checkout", "--detach", COMMIT], env=env, log=log)
-        run([UV, "sync", "--frozen", "--no-dev", "--no-default-groups", "--python", PYTHON,
-             "--project", runtime], env=env, log=log)
-    require(run(["git", "-C", runtime, "rev-parse", "HEAD"], env=env) == COMMIT, "runtime revision drift")
+    try:
+        for relative in ("profile", "profile/codex-disabled-import", "runs", "cache", "bin"):
+            private_directory(root / relative)
+        # The empty Codex home prevents Hermes's automatic recovery from borrowing a refresh grant.
+        runtime = root / "runtime"
+        log_path = root / "install.log"
+        with log_path.open("x") as log:
+            log_path.chmod(0o600)
+            run(["git", "clone", "--no-hardlinks", "--no-checkout", source, runtime], env=env, log=log)
+            run(["git", "-C", runtime, "checkout", "--detach", COMMIT], env=env, log=log)
+            run([UV, "sync", "--frozen", "--no-dev", "--no-default-groups", "--python", PYTHON,
+                 "--project", runtime], env=env, log=log)
+        require(run(["git", "-C", runtime, "rev-parse", "HEAD"], env=env) == COMMIT, "runtime revision drift")
+    except BaseException:
+        # This call created the root (it did not exist above). Keep the partial tree and its log for
+        # inspection under a new name so a retry is not blocked; no credentials exist yet.
+        failed = root.with_name(root.name + ".failed-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+        if root.is_dir() and not root.is_symlink() and not failed.exists():
+            root.rename(failed)
+        raise
     manifest = {
         "schemaVersion": 1, "installedAt": datetime.now(timezone.utc).isoformat(),
         "source": "https://github.com/NousResearch/hermes-agent", "commit": COMMIT,
@@ -117,6 +125,26 @@ def authenticate(root):
     os.execve(command[0], command, clean_environment(root))
 
 
+def restore_startup(profile, backup, moved, placeholder, marker, marker_existed):
+    """Undo a failed configure in reverse order; never touch auth.json. The backup is removed only
+    once every moved file is back, so a partial restore still leaves the originals recoverable."""
+    if (profile / "config.yaml").is_file() and not (profile / "config.yaml").is_symlink():
+        (profile / "config.yaml").unlink()
+    if not marker_existed and marker.is_file() and not marker.is_symlink():
+        marker.unlink()
+    skills = profile / "skills"
+    # configure always creates an empty skills directory; an original one is restored from the backup below.
+    if skills.is_dir() and not skills.is_symlink() and not any(skills.iterdir()):
+        skills.rmdir()
+    if placeholder is not None and not placeholder.exists():
+        shutil.move(str(backup / "codex-placeholder.toml"), str(placeholder))
+    for name in reversed(moved):
+        if not (profile / name).exists():
+            shutil.move(str(backup / name), str(profile / name))
+    if not any(backup.iterdir()):
+        backup.rmdir()
+
+
 def configure(root):
     """Seal a newly installed profile after independent login; retain seeded files privately."""
     require(not (root / "configuration.json").exists(), "profile already configured")
@@ -135,25 +163,33 @@ def configure(root):
     require(not backup.exists(), "startup backup already exists")
     private_directory(backup)
     moved = []
-    for name in ("SOUL.md", "hooks", "skills", "config.yaml"):
-        source = profile / name
-        if source.exists():
-            require(not source.is_symlink(), "redirected startup file")
-            shutil.move(str(source), str(backup / name))
-            moved.append(name)
     placeholder = profile / "codex-disabled-import/config.toml"
-    if placeholder.exists():
-        require(placeholder.read_text() == "# No shared Codex authentication.\n", "unexpected Codex startup config")
-        shutil.move(str(placeholder), str(backup / "codex-placeholder.toml"))
-    private_directory(profile / "skills")
+    placeholder_moved = False
+    marker = profile / ".no-bundled-skills"
+    marker_existed = marker.exists()
     config = profile / "config.yaml"
-    config.write_text(json.dumps(worker.REQUIRED_CONFIG, indent=2) + "\n")
-    config.chmod(0o600)
-    # Supported upstream marker prevents the auth CLI from reseeding bundled skills later.
-    (profile / ".no-bundled-skills").write_text("Isolated operations-report worker; bundled skills are not used.\n")
-    (profile / ".no-bundled-skills").chmod(0o600)
-    require(auth_path.read_bytes() == before_auth, "authentication changed during configuration")
-    worker.validate_profile(profile, clean_environment(root))
+    try:
+        for name in ("SOUL.md", "hooks", "skills", "config.yaml"):
+            source = profile / name
+            if source.exists():
+                require(not source.is_symlink(), "redirected startup file")
+                shutil.move(str(source), str(backup / name))
+                moved.append(name)
+        if placeholder.exists():
+            require(placeholder.read_text() == "# No shared Codex authentication.\n", "unexpected Codex startup config")
+            shutil.move(str(placeholder), str(backup / "codex-placeholder.toml"))
+            placeholder_moved = True
+        private_directory(profile / "skills")
+        config.write_text(json.dumps(worker.REQUIRED_CONFIG, indent=2) + "\n")
+        config.chmod(0o600)
+        # Supported upstream marker prevents the auth CLI from reseeding bundled skills later.
+        marker.write_text("Isolated operations-report worker; bundled skills are not used.\n")
+        marker.chmod(0o600)
+        require(auth_path.read_bytes() == before_auth, "authentication changed during configuration")
+        worker.validate_profile(profile, clean_environment(root))
+    except BaseException:
+        restore_startup(profile, backup, moved, placeholder if placeholder_moved else None, marker, marker_existed)
+        raise
     receipt = {"schemaVersion": 1, "configuredAt": datetime.now(timezone.utc).isoformat(),
                "commit": COMMIT, "configSha256": hashlib.sha256(config.read_bytes()).hexdigest(),
                "startupFilesPreserved": moved, "independentOAuth": True,
