@@ -1,9 +1,17 @@
 # Telegram 운영 점검·백업·첨부 검증
 
-현재 `personaledge` Mac 배포용 명령입니다. 2026-09-23 기준 설정된 기본 모델은
-GPT-6 Sol/high이며, Codex 0.156.1의 ChatGPT OAuth 경로를 사용합니다. owner allowlist와
-기존 대화는 유지합니다. 구형 Android relay 명령에는
-아래의 `--telegram`을 반드시 붙이세요.
+현재 `personaledge` Mac 배포용 명령입니다. owner allowlist와 기존 대화는 유지합니다.
+구형 Android relay 명령과 구분하려면 아래의 `--telegram`을 반드시 붙이세요.
+
+**현재 모델 경로 (2026-09-28 기준, OpenClaw 2026.9.6)**
+
+- main 대화: Claude Opus 5.5(`claude-cli`, Claude Code 구독 로그인) → GPT-6 Sol(Codex ChatGPT
+  OAuth) → OpenRouter GLM. 전역 기본값은 Opus → Sol.
+- 요약기(`summarize-openclaw.py`, 주간 브리핑·회의록): GPT-5.6 Sol → 사용 한도 시 도구 없는
+  Opus → 그것도 한도면 도구 없는 GLM. 자세한 조건은 [주간 브리핑 문서](OPENCLAW_WEEKLY_BRIEFING.md).
+- Hermes 운영 검토: 별도 OAuth의 GPT-5.6 Sol/high.
+
+아래의 날짜별 절은 당시 기록이며 현재 기본값이 아닙니다.
 
 ## Claude Opus 5.5 전환 (2026-09-26)
 

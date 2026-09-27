@@ -8,6 +8,7 @@ The default action only stages original files and candidate replacements. Run
 import argparse
 import hashlib
 import json
+import subprocess
 import os
 from pathlib import Path
 import stat
@@ -279,15 +280,30 @@ def apply(package, output, rollback=False):
     return receipt
 
 
+def require_gateway_stopped(state_dir, runner=None):
+    """Refuse to rewrite runtime files while the Gateway listens or when that cannot be checked."""
+    config = json.loads((state_dir / "openclaw.json").read_text())
+    port = config["gateway"]["port"]
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError("invalid Gateway port")
+    listener = (runner or subprocess.run)(["/usr/sbin/lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                                          capture_output=True, timeout=10)
+    # lsof exits 1 with no output when nothing listens; anything else is active or uninspectable.
+    if listener.returncode != 1 or listener.stdout:
+        raise ValueError("Gateway must be stopped before patch activation")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--state-dir", type=Path, default=Path.home() / ".openclaw-personaledge")
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--install", action="store_true", help="install a prepared patch into a stopped Gateway")
     action.add_argument("--rollback", action="store_true", help="restore the reviewed original bytes")
     args = parser.parse_args()
     if args.install or args.rollback:
+        require_gateway_stopped(args.state_dir)
         result = apply(args.package, args.output, rollback=args.rollback)
         print(json.dumps({"installed": result["installed"], "files": len(result["files"]),
                           "receipt": str((args.output.absolute() / "patch-receipt.json"))}))

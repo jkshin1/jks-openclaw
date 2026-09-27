@@ -8,7 +8,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import sys
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("patch-gpt6-sol.py")
@@ -76,6 +78,29 @@ def qualified_package():
         return json.loads((PACKAGE / "package.json").read_text())["version"] == PATCH.VERSION
     except (OSError, ValueError, KeyError):
         return False
+
+
+class GatewayStopGateTest(unittest.TestCase):
+    """Runs without the retired 2026.9.3 package: the gate precedes any runtime write."""
+
+    def test_install_requires_a_stopped_and_inspectable_gateway(self):
+        state = Path(tempfile.mkdtemp()) / "state"
+        state.mkdir()
+        self.addCleanup(__import__("shutil").rmtree, state.parent)
+        (state / "openclaw.json").write_text(json.dumps({"gateway": {"port": 18789}}))
+        def lsof(code, output=b""):
+            return lambda *a, **k: subprocess.CompletedProcess(a, code, output, b"")
+        PATCH.require_gateway_stopped(state, lsof(1))
+        for runner in (lsof(0, b"node 123 LISTEN"), lsof(2), lsof(1, b"node")):
+            with self.assertRaisesRegex(ValueError, "Gateway must be stopped"):
+                PATCH.require_gateway_stopped(state, runner)
+        with patch.object(PATCH, "require_gateway_stopped", side_effect=ValueError("Gateway must be stopped")), \
+                patch.object(PATCH, "apply") as apply, \
+                patch.object(sys, "argv", ["patch", "--package", "/p", "--output", "/o", "--install"]):
+            with self.assertRaises(ValueError):
+                PATCH.main()
+        apply.assert_not_called()
+
 
 
 @unittest.skipUnless(qualified_package(), "exact installed OpenClaw 2026.9.3 package unavailable")

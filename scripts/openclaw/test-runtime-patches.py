@@ -33,6 +33,27 @@ def digest(content):
     return hashlib.sha256(content).hexdigest()
 
 
+class DeliverySpecTest(unittest.TestCase):
+    def test_duplicate_module_kind_is_refused_before_any_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            package, output = root / 'package', root / 'output'
+            (package / 'dist').mkdir(parents=True)
+            (package / 'package.json').write_text(json.dumps({'version': '9999.1.1'}))
+            prefix = preparer.KINDS[0][0]
+            specs = {'9999.1.1': {'delivery': []}}
+            for name in (prefix + 'a.js', prefix + 'b.js'):
+                (package / 'dist' / name).write_text('module ' + name)
+                specs['9999.1.1']['delivery'].append({'path': 'dist/' + name,
+                                                     'before': digest(('module ' + name).encode())})
+            real = Path.read_text
+            with patch.object(Path, 'read_text', lambda self, *a, **k: json.dumps(specs)
+                              if self.name == 'runtime-patch-specs.json' else real(self, *a, **k)):
+                with self.assertRaisesRegex(ValueError, 'more than one'):
+                    preparer.prepare(package, output)
+            self.assertFalse(output.exists())
+
+
 class RuntimePatchTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -260,6 +281,15 @@ class RuntimePatchTest(unittest.TestCase):
         target.unlink(); target.write_bytes(external.read_bytes())
         dist = self.package / 'dist'; shutil.move(str(dist), str(self.root / 'outside-dist'))
         dist.symlink_to(self.root / 'outside-dist', target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'redirected'):
+            self.apply()
+
+    def test_parent_symlink_inside_the_package_is_rejected(self):
+        item = self.items()[0]
+        parent = (self.package / item['path']).parent
+        moved = self.package / 'moved-dist'
+        shutil.move(str(parent), str(moved))
+        parent.symlink_to(moved, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, 'redirected'):
             self.apply()
 

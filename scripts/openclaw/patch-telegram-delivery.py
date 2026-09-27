@@ -81,7 +81,11 @@ def prepare(package, output):
         source = package / spec["path"]
         if hashlib.sha256(source.read_bytes()).hexdigest() != spec["before"]:
             raise ValueError("unreviewed delivery source; requalify after upgrade")
-        files[kind_of(source.name)] = source
+        kind = kind_of(source.name)
+        # A second module of the same kind would silently replace the first and leave it unpatched.
+        if kind in files:
+            raise ValueError("delivery patch spec names more than one " + kind + " module")
+        files[kind] = source
     worker_claim = "kernel" in files
     if set(files) != ({"recovery", "storage", "kernel"} if worker_claim else {"recovery", "storage"}):
         raise ValueError("delivery patch spec must name recovery and storage modules")

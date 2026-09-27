@@ -6,6 +6,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import plistlib
@@ -216,6 +217,23 @@ class OperationsTest(unittest.TestCase):
         result=self.collect()
         self.assertEqual(result['backup']['status'],'INVALID')
         self.assertIn('backup-unavailable',result['issues'])
+
+    def test_future_dated_receipts_are_not_fresh(self):
+        future = datetime.fromtimestamp((NOW + 3600000) / 1000, timezone.utc).isoformat()
+        path=self.state/'operations/telegram-backup-latest.json'
+        path.write_text(json.dumps({'schemaVersion':1,'status':'VERIFIED','verifiedAt':future,
+                                    'archivePath':str(self.archive),'archiveSha256':'a'*64}))
+        (self.state/'operations/telegram-watchdog-status.json').write_text(json.dumps({
+            'observedAt':future,'lastSuccessAt':future,'healthy':True,'gateway':{'ok':True},'consecutiveFailures':0}))
+        result=self.collect()
+        self.assertEqual(result['backup']['status'],'INVALID')
+        self.assertTrue(result['observer']['stale'])
+        self.assertIn('observer-snapshot-stale',result['warnings'])
+        # Ordinary clock skew within five minutes is still accepted.
+        near = datetime.fromtimestamp((NOW + 60000) / 1000, timezone.utc).isoformat()
+        path.write_text(json.dumps({'schemaVersion':1,'status':'VERIFIED','verifiedAt':near,
+                                    'archivePath':str(self.archive),'archiveSha256':'a'*64}))
+        self.assertEqual(self.collect()['backup']['status'],'VERIFIED')
 
     def test_failed_dreaming_receipt_is_not_promotion_proof(self):
         self.connection.execute("UPDATE cron_jobs SET state_json=?",(json.dumps({'lastRunStatus':'error','consecutiveErrors':2}),))

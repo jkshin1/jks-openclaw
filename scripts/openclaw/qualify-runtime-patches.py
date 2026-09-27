@@ -45,7 +45,11 @@ def qualify(package, output, state=None):
     for item in items:
         target = package / item["path"]
         relative = Path(item["path"])
-        if relative.is_absolute() or ".." in relative.parts or target.is_symlink() or not target.resolve().is_relative_to(package):
+        # Every component below the package root must be a real directory: a symlink that points
+        # elsewhere inside the package would still resolve "inside" but patch the wrong file.
+        components = [package.joinpath(*relative.parts[:index]) for index in range(1, len(relative.parts) + 1)]
+        if (relative.is_absolute() or ".." in relative.parts or any(path.is_symlink() for path in components)
+                or not target.resolve().is_relative_to(package)):
             raise ValueError("runtime patch path redirected")
         if item.get("before") and digest(target) != item["before"]:
             raise ValueError("unreviewed or already patched runtime bytes")

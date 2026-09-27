@@ -382,6 +382,19 @@ class RecoverySupplementTest(unittest.TestCase):
         self.assertEqual(names, {"recovery/receipts/" + name for name in THINKING_ERA_RECEIPTS})
         self.assertNotIn("recovery/runtime/" + self.auth["path"], recovery["files"])
 
+    def test_malformed_recovery_metadata_fails_as_a_validation_error(self):
+        for recovery in (None, [], {"files": []}, {"files": {"recovery/x": "sha"}}, {"files": {"recovery/x": {}}}):
+            with self.subTest(recovery=recovery), self.assertRaisesRegex(ValueError, "recovery manifest shape invalid"):
+                backup.restore_recovery(self.bundle, self.bundle / "target", recovery)
+
+    def test_malformed_generic_patch_receipt_fails_as_a_validation_error(self):
+        self.write(self.args.package / "package.json", json.dumps({"version": "2026.9.6"}).encode())
+        claude = self.specs["2026.9.6"]["claudeCliArgs"]
+        self.write(self.args.package / claude["path"], b"synthetic Claude CLI patch")
+        self.write_receipt("claude-cli-agent-patch.json", {"version": "2026.9.6", "files": "not-a-list"})
+        with self.assertRaises(ValueError):
+            self.supplement()
+
     def test_2026_9_6_keeps_only_runtime_patch_receipts(self):
         self.write(self.args.package / "package.json", json.dumps({"version": "2026.9.6"}).encode())
         for name in backup.PATCH_RECEIPTS:

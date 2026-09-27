@@ -352,6 +352,8 @@ def recovery_supplement(bundle, args):
                            for entry in gpt6_sol]
         else:
             patch_files = receipt.get("files", [receipt])
+        require(isinstance(patch_files, list) and all(isinstance(entry, dict) for entry in patch_files),
+                "runtime patch receipt shape invalid")
         for entry in patch_files:
             relative = entry.get("relativePath") or "dist/" + entry.get("name", "")
             relative = member_name(relative)
@@ -381,8 +383,17 @@ def recovery_supplement(bundle, args):
     return metadata
 
 
-def restore_recovery(bundle, target, recovery):
+def recovery_entries(recovery):
+    """Shape-check recovery metadata before use; a malformed manifest fails as a validation error."""
+    require(isinstance(recovery, dict) and isinstance(recovery.get("files"), dict), "recovery manifest shape invalid")
     for name, entry in recovery["files"].items():
+        require(isinstance(name, str) and isinstance(entry, dict) and isinstance(entry.get("sha256"), str),
+                "recovery manifest shape invalid")
+    return recovery["files"].items()
+
+
+def restore_recovery(bundle, target, recovery):
+    for name, entry in recovery_entries(recovery):
         name = member_name(name)
         require(name.startswith("recovery/"), "recovery file escapes supplement root")
         source = bundle / name
@@ -453,7 +464,8 @@ def rehearse(args):
     require(digest(manifest_path) == receipt.get("manifestSha256"), "recovery manifest checksum mismatch")
     require(digest(args.archive) == manifest.get("archiveSha256") == receipt.get("archiveSha256"),
             "archive checksum mismatch")
-    for name, entry in manifest["recovery"]["files"].items():
+    require(isinstance(manifest, dict), "recovery manifest shape invalid")
+    for name, entry in recovery_entries(manifest.get("recovery")):
         source = args.archive.parent / member_name(name)
         private_file(source)
         require(digest(source) == entry["sha256"], "runtime recovery file checksum mismatch")
@@ -500,7 +512,8 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, sqlite3.Error, tarfile.TarError, subprocess.TimeoutExpired) as error:
+    except (ValueError, OSError, sqlite3.Error, tarfile.TarError, subprocess.TimeoutExpired,
+            TypeError, KeyError, AttributeError) as error:
         # Error classes identify failure without printing data from credential-bearing archives.
         print("FAIL Telegram backup/rehearsal: " + type(error).__name__ + ": "
               + (str(error) if isinstance(error, ValueError) else "local backup validation failed"), file=sys.stderr)

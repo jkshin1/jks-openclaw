@@ -83,6 +83,14 @@ def iso(milliseconds):
     return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).isoformat()
 
 
+# Clock skew tolerated for receipts; anything further in the future is not evidence of freshness.
+FUTURE_SKEW_MS = 5 * 60 * 1000
+
+
+def from_future(now, timestamp_ms):
+    return timestamp_ms > now + FUTURE_SKEW_MS
+
+
 def age_seconds(now, timestamp):
     return max(0, int((now - timestamp) / 1000)) if timestamp is not None else None
 
@@ -222,7 +230,8 @@ def backup_status(state, connection, now):
             if (receipt.get("schemaVersion") == 1 and receipt.get("status") == "VERIFIED"
                     and verified.tzinfo is not None and len(digest) == 64
                     and all(char in "0123456789abcdef" for char in digest)
-                    and archive.is_file() and not archive.is_symlink()):
+                    and archive.is_file() and not archive.is_symlink()
+                    and not from_future(now, verified.timestamp() * 1000)):
                 return {"source": "telegram-verified-receipt", "status": "VERIFIED",
                         "verifiedAt": iso(verified.timestamp() * 1000),
                         "ageSeconds": age_seconds(now, verified.timestamp() * 1000),
@@ -358,7 +367,8 @@ def collect(state=DEFAULT_STATE, now=None, queue_stale_seconds=900, long_task_se
         result["observer"] = {"lastCheckAt": saved.get("observedAt"), "lastSuccessAt": saved.get("lastSuccessAt"),
                               "healthy": saved.get("healthy"), "gatewayHealthy": saved.get("gateway", {}).get("ok"),
                               "consecutiveFailures": saved.get("consecutiveFailures", 0),
-                              "ageSeconds": check_age, "stale": check_age > 900}
+                              "ageSeconds": check_age,
+                              "stale": check_age > 900 or from_future(now, checked.timestamp() * 1000)}
     except (OSError, ValueError, TypeError, KeyError):
         result["observer"] = {"lastCheckAt": None, "lastSuccessAt": None, "healthy": None,
                               "gatewayHealthy": None, "consecutiveFailures": 0, "ageSeconds": None, "stale": True}
