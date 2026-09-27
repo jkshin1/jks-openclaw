@@ -318,7 +318,8 @@ class OpsWorkerTest(unittest.TestCase):
         # The failing weekly run had spent 72,278 before its 47,027-token
         # fourth dispatch. That response requested another large source batch.
         budget.metrics.update(dispatch_attempts=3, completed_responses=3, estimated_input_tokens=72278)
-        payload = {"model": worker.MODEL, "input": [{"role": "user", "content": "x" * 187800}],
+        # 187,800 bytes against the original 60,000 limit; keep the same share of the current limit.
+        payload = {"model": worker.MODEL, "input": [{"role": "user", "content": "x" * (worker.MAX_MODEL_INPUT_ESTIMATE * 3 + 7800)}],
                    "instructions": "Original contract", "tools": [{"type": "function", "name": "ops_read_source"}]}
         original = copy.deepcopy(payload)
         prepared = budget.reserve_dispatch(payload)
@@ -525,8 +526,10 @@ class OpsWorkerTest(unittest.TestCase):
         self.request["sources"][self.source] = {"sha256": hashlib.sha256(content.encode()).hexdigest(),
                                                 "content": content}
         budget = worker.ModelInputBudget({})
+        # Keep that incident's remaining per-dispatch headroom (60,000 - 27,702) at the current limit.
+        last = worker.MAX_MODEL_INPUT_ESTIMATE - 60000 + 27702
         budget.metrics["estimated_input_tokens"] = 76371 - 27702
-        budget.reserve({"input": "z" * (27702 * 4 - 16)})
+        budget.reserve({"input": "z" * (last * 4 - 16)})
         allowance = budget.round_allowance_bytes()
         tools = worker.BundleTools(self.request)
         tools.start_round(allowance)
@@ -743,7 +746,7 @@ class OpsWorkerTest(unittest.TestCase):
             from agent.codex_responses_adapter import _preflight_codex_api_kwargs
             reply = copy.deepcopy(self.result)
             reply["analysis"] = "입력 예산 때문에 소스 검토를 조기 종료했습니다. 읽지 않은 소스는 검증되지 않았습니다."
-            original_input = [{"role": "user", "content": "synthetic-evidence " * 9000}]
+            original_input = [{"role": "user", "content": "synthetic-evidence " * (9000 * worker.MAX_MODEL_INPUT_ESTIMATE // 60000)}]
 
             def transport(agent, api_kwargs):
                 normalized = _preflight_codex_api_kwargs(api_kwargs)

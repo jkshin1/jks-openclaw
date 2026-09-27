@@ -39,17 +39,19 @@ MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_RESPONSE_BYTES = 256 * 1024
 MAX_SOURCE_BYTES = 512 * 1024
 MAX_PAGE_BYTES = 16 * 1024
-MAX_READ_BYTES = 128 * 1024
-MAX_REREAD_BYTES = 24 * 1024
-MAX_MODEL_INPUT_ESTIMATE = 60000
-MAX_CUMULATIVE_MODEL_INPUT_ESTIMATE = 180000
+MAX_READ_BYTES = 384 * 1024
+MAX_REREAD_BYTES = 64 * 1024
+# Codex OAuth serves gpt-5.6-sol with a 272K window. 180K leaves room for reasoning, output and
+# the bytes/4 estimate undercounting Korean text; finalization starts at half of it.
+MAX_MODEL_INPUT_ESTIMATE = 180000
+MAX_CUMULATIVE_MODEL_INPUT_ESTIMATE = 1200000
 # A source page grows about 1.03-1.15x once it is a JSON tool result inside the next request.
 # Reserve covers the assistant turn, reasoning items and the finalization instruction.
 TOOL_RESULT_EXPANSION = 1.25
 ROUND_RESERVE_ESTIMATE = 6000
-MAX_ITERATIONS = 16
-MAX_TOOL_CALLS = 40
-RUN_BUDGET_SECONDS = 240
+MAX_ITERATIONS = 24
+MAX_TOOL_CALLS = 96
+RUN_BUDGET_SECONDS = 900
 # Hermes 0.21.1 gateway.run is imported by native conversation startup. Its
 # config bridge publishes max_turns and the pinned default lease wait, even for
 # this CLI worker. These are allowed only after the strict inherited-env check.

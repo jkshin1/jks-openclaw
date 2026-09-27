@@ -538,7 +538,8 @@ def run_worker(root, request_path, receipt_path, log_path, runner=subprocess.Pop
         process = runner(command, env=installer.clean_environment(root), cwd=root / "profile",
                          stdout=log, stderr=log, start_new_session=True)
         try:
-            code = process.wait(timeout=300)
+            # Outlive the worker's own 900 s run budget so its receipt is written first.
+            code = process.wait(timeout=960)
         except BaseException:
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
