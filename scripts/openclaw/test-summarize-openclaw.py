@@ -146,11 +146,13 @@ class OpusFallbackTest(unittest.TestCase):
 
     def test_codex_usage_limit_falls_back_to_tool_free_opus_and_still_deletes_session(self):
         limit = summary.UsageLimit("OpenClaw agent hit a usage limit")
-        result, rpc, calls = self.run_main([{}, limit, {}], self.claude_result())
+        # A failed dispatch is aborted defensively before the session is deleted.
+        result, rpc, calls = self.run_main([{}, limit, {}, {}], self.claude_result())
         self.assertEqual(result["result"]["payloads"], [{"text": "오퍼스 요약"}])
         self.assertEqual(result["route"], {"provider": "claude-cli", "model": "claude-opus-5-5",
                                            "fallback": True, "reason": "usage-limit"})
-        self.assertEqual([call.args[0] for call in rpc.call_args_list], ["sessions.create", "agent", "sessions.delete"])
+        self.assertEqual([call.args[0] for call in rpc.call_args_list],
+                         ["sessions.create", "agent", "chat.abort", "sessions.delete"])
         command, kwargs = calls[0]
         self.assertEqual(command[command.index("--tools") + 1], "")
         for flag in ("--strict-mcp-config", "--safe-mode", "--no-session-persistence"):
@@ -191,7 +193,40 @@ class OpusFallbackTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     summary.fallback_text(self.claude_result(**changes))
         with self.assertRaises(RuntimeError):
-            self.run_main([{}, summary.UsageLimit("limit"), {}], self.claude_result(), claude_code=1)
+            self.run_main([{}, summary.UsageLimit("limit"), {}, {}], self.claude_result(), claude_code=1)
+
+
+class GlmFallbackTest(OpusFallbackTest):
+    def glm_result(self):
+        route = {"provider": "openrouter", "model": "z-ai/glm-5.3-flash"}
+        return {"status": "ok", "endedAt": 10,
+                "terminalReceipt": {"requested": route, "effective": {**route, "responseModel": "z-ai/glm-5.3-flash"},
+                                    "rerouted": False, "successfulToolNames": []},
+                "terminalReply": {"disposition": "visible", "text": "GLM 요약"}}
+
+    def test_opus_usage_limit_falls_back_to_isolated_glm(self):
+        opus_limited = self.claude_result(is_error=True, result="You've hit your session limit · resets 9:50pm")
+        limit = summary.UsageLimit("codex limit")
+        result, rpc, calls = self.run_main([{}, limit, {}, {}, {}, {}, self.glm_result(), {}], opus_limited)
+        self.assertEqual(result["result"]["payloads"], [{"text": "GLM 요약"}])
+        self.assertEqual(result["route"], {"provider": "openrouter", "model": "z-ai/glm-5.3-flash",
+                                           "fallback": True, "reason": "usage-limit"})
+        self.assertEqual(len(calls), 1)
+        glm_create = rpc.call_args_list[4].args[1]
+        self.assertEqual(glm_create["model"], "openrouter/z-ai/glm-5.3-flash")
+        self.assertIs(rpc.call_args_list[5].args[1]["modelRun"], True)
+        self.assertEqual(rpc.call_args_list[-1].args[0], "sessions.delete")
+
+    def test_opus_non_limit_failure_does_not_reach_glm(self):
+        with self.assertRaises(RuntimeError):
+            self.run_main([{}, summary.UsageLimit("codex limit"), {}, {}],
+                          self.claude_result(is_error=True, result="Invalid request"))
+
+    def test_glm_must_prove_its_own_route(self):
+        wrong = self.glm_result()
+        wrong["terminalReceipt"]["effective"]["model"] = "other"
+        with self.assertRaises(RuntimeError):
+            summary.completed_text(wrong, "openrouter", "z-ai/glm-5.3-flash")
 
 
 if __name__ == "__main__":

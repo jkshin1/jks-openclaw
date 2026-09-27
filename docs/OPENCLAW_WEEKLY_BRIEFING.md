@@ -165,3 +165,9 @@ RSS 제공 범위가 제한되므로 일주일 전체 기사나 인기 순위의
 전달했다(Telegram messageId 492, 기준점 갱신). 설치본 대체 경로는 도구 없는 Opus 호출로 따로
 확인했다.
 
+같은 날 소유자 요청으로 Opus도 사용 한도를 보고하면(`claude -p`의 한도 오류) OpenRouter GLM
+(`openrouter/z-ai/glm-5.3-flash`)을 별도 incognito·도구 없는 OpenClaw 모델 실행으로 호출한다.
+GLM도 요청·실행 경로 영수증과 도구 미사용을 확인한다. 세 경로 전체가 호출자 제한 시간 안에서
+돌며, 한도가 아닌 실패는 다음 경로로 넘기지 않는다. GLM은 OpenRouter 크레딧을 사용한다.
+04:4x KST 설치 전 GLM 경로로 짧은 실제 요약이 성공했다.
+
