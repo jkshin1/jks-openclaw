@@ -795,3 +795,12 @@ controller에 영역별 검토를 추가했다. `run --mode manual --area <영�
 예외로 끝나는 결함을 발견했다(모델 호출·주간 기록 변경 없음). 거절 처리와 시험을 추가해 다시
 설치했고(백업 `operations-install-backups/20260927T134401Z-9468efe141`), 설치본이 저장소와 같고
 같은 명령이 모델 호출 없이 `AREA_REQUIRES_MANUAL_MODE`를 반환하는 것을 확인했다.
+
+실제 실행 확인: 22:44~23:36 KST 설치본으로 `--area all`을 한 번 실행했다. 11개 영역이 모두
+`reviewed`로 끝났고(`failedAreas` 없음), 모델 호출은 83회, 공급자 보고 사용량은 비캐시 입력
+1,125,916·캐시 읽기 2,175,616·출력 152,903, 총 3,454,435 tokens다. 모든 영역에서 127개 소스
+전부를 처음부터 끝까지 읽었다(`read_metrics` 기준 부분 읽기·미열람 0). 4개 영역
+(telegram-gateway-delivery, gateway-install, gateway-acceptance, learning-pilots)은 전부 읽은 뒤
+`per_dispatch_headroom` 조기 최종 작성으로 끝났다. 발견사항은 65개(high 3, medium 20 등)이며
+모델 진단으로서 독립 재현 전이다. telegram 3개 영역의 코드 후보 3건은 스냅샷 검사를 통과했지만
+설치하지 않았다. 요약은 `operations/latest-area-audit.json`에 있다. Telegram 전송은 없었다.
