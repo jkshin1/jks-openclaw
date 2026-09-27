@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -79,7 +80,8 @@ class SummaryBoundaryTest(unittest.TestCase):
                 patch.object(summary.sys, "stdout", output):
             summary.main()
         self.assertEqual(json.loads(output.getvalue()),
-                         {"status": "ok", "result": {"payloads": [{"text": "요약 결과"}]}})
+                         {"status": "ok", "result": {"payloads": [{"text": "요약 결과"}]},
+                          "route": {"provider": "openai", "model": "gpt-5.6-sol", "fallback": False}})
         self.assertEqual([call.args[0] for call in rpc.call_args_list],
                          ["sessions.create", "agent", "agent.wait", "sessions.delete"])
         created = rpc.call_args_list[0].args[1]
@@ -119,6 +121,77 @@ class SummaryBoundaryTest(unittest.TestCase):
         self.assertEqual(aborted, {"sessionKey": request["sessionKey"],
                                    "runId": request["idempotencyKey"]})
         self.assertEqual(deleted["key"], request["sessionKey"])
+
+
+class OpusFallbackTest(unittest.TestCase):
+    def claude_result(self, **changes):
+        result = {"is_error": False, "num_turns": 1, "permission_denials": [], "result": "오퍼스 요약",
+                  "modelUsage": {"claude-opus-5-5": {"inputTokens": 1}}}
+        result.update(changes)
+        return json.dumps(result)
+
+    def run_main(self, rpc_effects, claude_stdout, claude_code=0):
+        output = io.StringIO()
+        calls = []
+
+        def runner(command, **kwargs):
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, claude_code, claude_stdout, "")
+        with patch.object(summary.sys, "argv", ["summary", "agent", "-m", "synthetic text"]), \
+                patch.object(summary, "rpc", side_effect=rpc_effects) as rpc, \
+                patch.object(summary.sys, "stdout", output), \
+                patch.object(summary.subprocess, "run", side_effect=runner):
+            summary.main()
+        return json.loads(output.getvalue()), rpc, calls
+
+    def test_codex_usage_limit_falls_back_to_tool_free_opus_and_still_deletes_session(self):
+        limit = summary.UsageLimit("OpenClaw agent hit a usage limit")
+        result, rpc, calls = self.run_main([{}, limit, {}], self.claude_result())
+        self.assertEqual(result["result"]["payloads"], [{"text": "오퍼스 요약"}])
+        self.assertEqual(result["route"], {"provider": "claude-cli", "model": "claude-opus-5-5",
+                                           "fallback": True, "reason": "usage-limit"})
+        self.assertEqual([call.args[0] for call in rpc.call_args_list], ["sessions.create", "agent", "sessions.delete"])
+        command, kwargs = calls[0]
+        self.assertEqual(command[command.index("--tools") + 1], "")
+        for flag in ("--strict-mcp-config", "--safe-mode", "--no-session-persistence"):
+            self.assertIn(flag, command)
+        self.assertEqual(kwargs["input"], "synthetic text")
+        self.assertNotIn("synthetic text", command)
+        self.assertNotIn("ANTHROPIC_API_KEY", kwargs["env"])
+
+    def test_limit_reported_by_the_run_itself_also_falls_back(self):
+        failed = {"status": "error", "endedAt": 10, "error": "⚠️ API rate limit reached. Please try again later."}
+        result, rpc, _calls = self.run_main([{}, {}, failed, {}], self.claude_result())
+        self.assertTrue(result["route"]["fallback"])
+        self.assertEqual(rpc.call_args_list[-1].args[0], "sessions.delete")
+
+    def test_rpc_limit_text_is_classified_but_other_failures_are_not(self):
+        for text, expected in (("API rate limit reached", summary.UsageLimit),
+                               ("You've hit your usage limit", summary.UsageLimit),
+                               ("model not allowed", RuntimeError)):
+            with self.subTest(text=text), patch.object(summary.subprocess, "run",
+                    return_value=subprocess.CompletedProcess([], 1, text, "")):
+                with self.assertRaises(RuntimeError) as caught:
+                    summary.rpc("agent", {})
+                self.assertIs(type(caught.exception), expected)
+
+    def test_non_limit_failure_never_uses_the_fallback(self):
+        with patch.object(summary.sys, "argv", ["summary", "agent", "-m", "synthetic text"]), \
+                patch.object(summary, "rpc", side_effect=[{}, RuntimeError("route rejected"), {}, {}]), \
+                patch.object(summary.subprocess, "run") as run:
+            with self.assertRaises(RuntimeError):
+                summary.main()
+        run.assert_not_called()
+
+    def test_fallback_rejects_tool_turns_other_models_and_errors(self):
+        for changes in ({"num_turns": 2}, {"permission_denials": [{"tool_name": "Bash"}]},
+                        {"modelUsage": {"claude-opus-5-5": {}, "claude-haiku-4-5": {}}}, {"is_error": True},
+                        {"result": ""}):
+            with self.subTest(changes=changes):
+                with self.assertRaises(RuntimeError):
+                    summary.fallback_text(self.claude_result(**changes))
+        with self.assertRaises(RuntimeError):
+            self.run_main([{}, summary.UsageLimit("limit"), {}], self.claude_result(), claude_code=1)
 
 
 if __name__ == "__main__":

@@ -41,10 +41,33 @@ def digest_bytes(content):
     return hashlib.sha256(content).hexdigest()
 
 
+KST = timezone(timedelta(hours=9))
+
+
+def briefing_window(observed):
+    """Previous Saturday 09:00 to the latest Saturday 09:00 KST at or before collection start.
+
+    Derived from the persisted observation, so a resumed run selects the same candidates.
+    An observation without a start time (older engine) keeps the unfiltered behaviour.
+    """
+    if 'startedAt' not in observed:
+        return None
+    try:
+        started = datetime.fromisoformat(observed['startedAt'].replace('Z', '+00:00')).astimezone(KST)
+    except (TypeError, KeyError, AttributeError, ValueError):
+        raise ValueError('COLLECTION_TIMESTAMP_INVALID') from None
+    end = started.replace(hour=9, minute=0, second=0, microsecond=0) - timedelta(days=(started.weekday() - 5) % 7)
+    if end > started:
+        end -= timedelta(days=7)
+    return end - timedelta(days=7), end
+
+
 def public_candidates(engine, observed):
     """Only selected public changes enter model input, never the workflow/owner state."""
     candidates = []
     source_truncated = False
+    window = briefing_window(observed)
+    outside_window = 0
     for item in observed['sources']:
         if item.get('status') != 'CHANGED' or not item.get('importance', {}).get('selected'):
             continue
@@ -81,6 +104,11 @@ def public_candidates(engine, observed):
                     if date.tzinfo is None:
                         date = date.replace(tzinfo=timezone.utc)
                     published_score = date.timestamp()
+                    # A missed week leaves older changes in the diff; the briefing covers one week.
+                    # Undated items stay eligible because their age cannot be judged.
+                    if window and not window[0] <= date < window[1]:
+                        outside_window += 1
+                        continue
             score = engine.importance({'addedText': line}, 'high-impact').get('score') or 0
             candidates.append({'url': article or feed, 'sourceFeedUrl': feed,
                                'citationScope': 'article' if article else 'listing', 'title': title,
@@ -112,7 +140,9 @@ def public_candidates(engine, observed):
         item.pop('_score'); item.pop('_publishedScore')
         item['id'] = 'S' + str(index)
     return candidates, {'candidateCount': len(candidates), 'omittedCandidates': max(0, eligible - len(candidates)),
-                        'sourceTextTruncated': source_truncated, 'inputTruncated': any(item['truncated'] for item in candidates)}
+                        'sourceTextTruncated': source_truncated, 'inputTruncated': any(item['truncated'] for item in candidates),
+                        'window': {'start': window[0].isoformat(), 'end': window[1].isoformat()} if window else None,
+                        'outsideWindow': outside_window}
 
 
 def build_prompt(candidates):
@@ -176,6 +206,10 @@ def render_message(summary, candidates, observed, coverage=None):
     except (TypeError, KeyError, AttributeError, ValueError):
         raise ValueError('COLLECTION_TIMESTAMP_INVALID') from None
     lines = ['AI·LLM 주간 기술 브리핑', '확인: ' + checked_at]
+    window = (coverage or {}).get('window')
+    if window:
+        start, end = (datetime.fromisoformat(window[key]).astimezone(KST) for key in ('start', 'end'))
+        lines.append('기간: {} ~ {} KST'.format(start.strftime('%m/%d %H:%M'), end.strftime('%m/%d %H:%M')))
     failures = [item for item in observed['sources'] if item.get('status') == 'FAILED']
     if failures:
         lines.append('일부 출처 수집 실패: {}개 중 {}개. 확인된 출처만 정리했습니다.'.format(

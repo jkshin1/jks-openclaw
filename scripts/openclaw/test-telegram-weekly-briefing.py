@@ -290,6 +290,32 @@ class WeeklyBriefingTest(unittest.TestCase):
         self.assertNotIn(self.urls[0], rendered)
         self.assertIn('확인: 2026-09-12 09:00 KST', rendered)
 
+    def test_window_is_previous_to_latest_saturday_nine_kst(self):
+        for started, start, end in (
+                ('2026-09-26T00:00:00.462358Z', '2026-09-19T09:00:00+09:00', '2026-09-26T09:00:00+09:00'),
+                ('2026-09-27T15:05:00Z', '2026-09-19T09:00:00+09:00', '2026-09-26T09:00:00+09:00'),
+                ('2026-09-25T23:59:59Z', '2026-09-12T09:00:00+09:00', '2026-09-19T09:00:00+09:00')):
+            with self.subTest(started=started):
+                window = weekly.briefing_window({'startedAt': started})
+                self.assertEqual([value.isoformat() for value in window], [start, end])
+        with self.assertRaisesRegex(ValueError, 'COLLECTION_TIMESTAMP_INVALID'):
+            weekly.briefing_window({'startedAt': 'yesterday'})
+
+    def test_missed_week_changes_are_limited_to_the_briefing_week(self):
+        observed = {'startedAt': '2026-09-27T15:05:00Z', 'finishedAt': '2026-09-27T15:05:10Z',
+            'sources': [{'status': 'CHANGED', 'importance': {'selected': True}, 'url': self.urls[0],
+            'resolvedUrl': self.urls[0], 'fetchedAt': '2026-09-27T15:05:00Z', 'diff': {'addedText':
+            'In week | https://example.com/a/in | 2026-09-22T12:00:00Z | Released a new reasoning model.\n'
+            'Stale | https://example.com/a/old | 2026-09-15T12:00:00Z | Released a new reasoning model.\n'
+            'Too new | https://example.com/a/new | 2026-09-27T01:00:00Z | Released a new reasoning model.\n'
+            'Undated | https://example.com/a/undated |  | Released a new reasoning model.'}}]}
+        candidates, coverage = weekly.public_candidates(self.engine, observed)
+        self.assertEqual(sorted(item['url'] for item in candidates),
+                         ['https://example.com/a/in', 'https://example.com/a/undated'])
+        self.assertEqual(coverage['outsideWindow'], 2)
+        rendered = weekly.render_message(self.summary_result, candidates, observed, coverage)
+        self.assertIn('기간: 09/19 09:00 ~ 09/26 09:00 KST', rendered)
+
     def test_invalid_or_unzoned_collection_timestamp_fails_explicitly(self):
         for value in ['yesterday', '2026-09-12T09:00:00', None]:
             with self.assertRaisesRegex(ValueError, 'COLLECTION_TIMESTAMP_INVALID'):
