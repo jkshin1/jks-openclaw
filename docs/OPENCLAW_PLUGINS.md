@@ -12,12 +12,15 @@
 2026-09-23에는 전역 및 주 에이전트 기본 모델을 `openai/gpt-6-sol` / `high`로 적용하고
 현재 설정과 격리된 Gateway 실행을 확인했다. 아래의 9월 7~9일 실행 기록은 당시 모델의
 증거로 남긴다.
+2026-09-27에는 코어와 Codex 플러그인을 2026.9.6으로 올리고, 9.6 번들 추출기(한국어 기사,
+합성 한국어 2쪽 PDF, 이미지 대체, 잘못된 쪽 거부)와 Codex bootstrap projection을 다시 확인했다.
+[2026.9.6 기록](OPENCLAW_UPDATE_20260927.md)을 보라.
 
 | 플러그인 | 현재 설치 출처 / 버전 | 용도와 9월 7일 실행 검증 |
 | --- | --- | --- |
-| Codex | 공식 `@openclaw/codex@2026.9.3` (9월 9일 코어와 버전 정렬) | ChatGPT 로그인으로 네이티브 Codex 실행. 합성 Python 코드의 결함을 수정하고 테스트 4개 통과 |
-| Web Readability | OpenClaw 번들 2026.9.3 | 웹 본문 추출. 한국어 HTML의 메뉴·푸터 제거와 실제 `web_fetch` 실행 확인 |
-| Document Extract | OpenClaw 번들 2026.9.3 | PDF 텍스트·페이지 이미지 추출. 한국어 2쪽 PDF 추출과 실제 `pdf` 분석 확인 |
+| Codex | 공식 `@openclaw/codex@2026.9.6` (9월 27일 코어와 버전 정렬) | ChatGPT 로그인으로 네이티브 Codex 실행. 합성 Python 코드의 결함을 수정하고 테스트 4개 통과 |
+| Web Readability | OpenClaw 번들 2026.9.6 | 웹 본문 추출. 한국어 HTML의 메뉴·푸터 제거와 실제 `web_fetch` 실행 확인 |
+| Document Extract | OpenClaw 번들 2026.9.6 | PDF 텍스트·페이지 이미지 추출. 한국어 2쪽 PDF 추출과 실제 `pdf` 분석 확인 |
 
 Codex에 필요한 공식 `openai` 공급자 플러그인도 활성화했다. 두 추출 플러그인은 필요할 때
 로딩되는 기능 제공자이므로 `health.plugins.loaded`에 이름이 없어도 고장으로 판단하지 않는다.

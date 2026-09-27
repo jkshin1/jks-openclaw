@@ -1,6 +1,23 @@
 # Project status
 
 **Current Mac/Telegram operations and evidence:** [OPENCLAW_TELEGRAM.md](OPENCLAW_TELEGRAM.md).
+On 2026-09-27 KST the runtime moved from OpenClaw 2026.9.3 to **2026.9.6** (`eb377ac`, Codex plugin
+2026.9.6) at the owner's request; the model chain and owner routing were unchanged. The reviewed
+patch set became: GLM token field, memory admission and owner Telegram delivery (now including the
+shared-state worker kernel) ported, plus a new claude-cli `Agent` denial for upstream #158626; GLM
+`/think max` moved to model `compat` configuration; the auth-reprobe and GPT-6 Sol patches retired
+because 2026.9.6 ships them. A fresh backup first required repairing two non-traversable operation
+directories that had silently broken `backup create` since 2026-09-26; it then reached `VERIFIED`
+(42 databases, 64,306 files). A sandboxed fresh-state canary, the official updater canary, live
+verification, the reinstalled observer, a real browser tool call, one GLM max response and the
+owner's real Telegram message (Opus hit its session limit, Sol answered, no error banner) passed.
+Open: the `tools.effective` browser omission (tolerated only as a recorded known gap). At the
+owner's request the stale `untrusted` MEMORY.md provenance stamp left by a 2026-09-06 synthetic
+test was removed with the Gateway stopped; a fresh tool-free session then saw all five curated
+sections at startup. A later tracked write from a network-tainted or non-owner turn can re-stamp it
+by design, so the five-minute observer now raises `memory-bootstrap-untrusted` (owner alert, no Hermes
+review) when MEMORY.md or USER.md is stamped untrusted; both installed status collectors were updated
+and a scheduled run executed the new check. Record: [OPENCLAW_UPDATE_20260927.md](OPENCLAW_UPDATE_20260927.md).
 On 2026-09-27 KST, the PowerPoint/PPTX skill 1.0.1 and python-pptx 1.0.2 were installed after a
 fresh `pass/clean` registry check. The workspace instructions and their byte-identical repository
 template/observer copy were updated together. One synthetic Opus agent edit passed an independent

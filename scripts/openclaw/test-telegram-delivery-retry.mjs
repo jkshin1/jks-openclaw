@@ -34,16 +34,26 @@ process.env.OPENCLAW_STATE_DIR = state;
 process.env.OPENCLAW_CONFIG_PATH = join(state, 'openclaw.json');
 writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg), { mode: 0o600 });
 assert.deepEqual(loadRetryPolicy(), policy);
-const packageFixture = join(root, 'package'); mkdirSync(packageFixture);
-for (const name of readdirSync(packagePath)) {
-    if (name !== 'dist') symlinkSync(join(packagePath, name), join(packageFixture, name));
-}
-const dist = join(packageFixture, 'dist'); mkdirSync(dist);
+const packageFixture = join(root, 'package');
 const receipt = JSON.parse(readFileSync(join(candidatePath, 'patch-receipt.json'), 'utf8'));
 const patchedNames = new Set(receipt.files.map(file => file.name));
-for (const name of readdirSync(join(packagePath, 'dist'))) {
-    if (!patchedNames.has(name)) symlinkSync(join(packagePath, 'dist', name), join(dist, name));
+// 2026.9.6 claims inside the shared-state worker thread. Node resolves symlinked modules to their
+// real path, so a symlinked fixture would load the unpatched kernel there. Clone the package instead.
+const workerClaim = receipt.files.some(file => file.name.startsWith('delivery-queue-sqlite-namespace.kernel-'));
+if (workerClaim) {
+    const clone = spawnSync('/bin/cp', ['-cR', packagePath, packageFixture], { encoding: 'utf8' });
+    assert.equal(clone.status, 0, clone.stderr);
+} else {
+    mkdirSync(packageFixture);
+    for (const name of readdirSync(packagePath)) {
+        if (name !== 'dist') symlinkSync(join(packagePath, name), join(packageFixture, name));
+    }
+    mkdirSync(join(packageFixture, 'dist'));
+    for (const name of readdirSync(join(packagePath, 'dist'))) {
+        if (!patchedNames.has(name)) symlinkSync(join(packagePath, 'dist', name), join(packageFixture, 'dist', name));
+    }
 }
+const dist = join(packageFixture, 'dist');
 for (const name of patchedNames) copyFileSync(join(candidatePath, name), join(dist, name));
 async function moduleExports(prefix) {
     const name = receipt.files.find(file => file.name.startsWith(prefix)).name;
@@ -54,6 +64,10 @@ async function moduleExports(prefix) {
 }
 const storage = await moduleExports('delivery-queue-storage-');
 const recovery = await moduleExports('delivery-queue-recovery-');
+// The worker-claim layout inserts the state context before the owner-retry flag.
+const claim = (id, startedAt, attemptId, ownerRetry) => workerClaim
+    ? storage.claimDeliveryPlatformSendAttempt(id, state, startedAt, attemptId, undefined, ownerRetry)
+    : storage.claimDeliveryPlatformSendAttempt(id, state, startedAt, attemptId, ownerRetry);
 async function failedEntry() {
     const id = await storage.enqueueDelivery({ channel: 'telegram', to: '12345', accountId: 'default',
         queuePolicy: 'required', requiresProducerClaim: true, payloads: [{ text: 'synthetic retry fixture' }] }, state);
@@ -66,11 +80,9 @@ async function failedEntry() {
 }
 const first = await failedEntry();
 assert.equal(first.saved.recoveryState, 'unknown_after_send');
-assert.equal(await storage.claimDeliveryPlatformSendAttempt(first.id, state,
-    first.saved.platformSendStartedAt, first.saved.platformSendAttemptId), undefined);
-assert.equal(await storage.claimDeliveryPlatformSendAttempt(first.id, state,
-    first.saved.platformSendStartedAt, 'wrong-attempt', true), undefined);
-const claims = await Promise.all([0, 1].map(() => storage.claimDeliveryPlatformSendAttempt(first.id, state,
+assert.equal(await claim(first.id, first.saved.platformSendStartedAt, first.saved.platformSendAttemptId), undefined);
+assert.equal(await claim(first.id, first.saved.platformSendStartedAt, 'wrong-attempt', true), undefined);
+const claims = await Promise.all([0, 1].map(() => claim(first.id,
     first.saved.platformSendStartedAt, first.saved.platformSendAttemptId, true)));
 assert.equal(claims.filter(Boolean).length, 1);
 await storage.ackDelivery(first.id, state, { expectedPlatformSendAttemptId: claims.find(Boolean) });
@@ -103,17 +115,21 @@ assert.equal(sends, 1, 'persisted backoff must defer immediate retry');
 // A new OS process recovers only from the persisted SQLite queue, after an interrupted producer.
 const recoveryFile = receipt.files.find(file => file.name.startsWith('delivery-queue-recovery-')).name;
 const storageFile = receipt.files.find(file => file.name.startsWith('delivery-queue-storage-')).name;
+const exportName = (file, name) => readFileSync(join(dist, file), 'utf8').match(new RegExp(`\\b${name} as (\\w+)`))[1];
+const drainExport = exportName(recoveryFile, 'drainPendingDeliveriesCore');
+const startedExport = exportName(storageFile, 'markDeliveryPlatformSendAttemptStarted');
+const loadExport = exportName(storageFile, 'loadPendingDelivery');
 const childSource = `
 import * as recovery from ${JSON.stringify(pathToFileURL(join(dist, recoveryFile)).href)};
 import * as storage from ${JSON.stringify(pathToFileURL(join(dist, storageFile)).href)};
 const state = ${JSON.stringify(state)};
 let sends = 0;
-await recovery.t({stateDir:state,cfg:${JSON.stringify(cfg)},drainKey:'after-restart',logLabel:'fixture',
+await recovery[${JSON.stringify(drainExport)}]({stateDir:state,cfg:${JSON.stringify(cfg)},drainKey:'after-restart',logLabel:'fixture',
  log:{info(){},warn(){},error(){}},selectEntry:entry=>({match:entry.id===${JSON.stringify(second.id)},bypassBackoff:true}),
- deliver:async params=>{sends++;await storage.v(params.deliveryQueueId,state,{},params.deliveryProducerClaimId);
+ deliver:async params=>{sends++;await storage[${JSON.stringify(startedExport)}](params.deliveryQueueId,state,{},params.deliveryProducerClaimId);
  const result={channel:'telegram',messageId:'synthetic-message-id',chatId:'12345'};
  await params.onDeliveryResult(result);return [result];}});
-if(sends!==1 || await storage.f(${JSON.stringify(second.id)},state)) process.exit(1);
+if(sends!==1 || await storage[${JSON.stringify(loadExport)}](${JSON.stringify(second.id)},state)) process.exit(1);
 console.log('PASS fresh-process recovery and queue acknowledgement');process.exit(0);`;
 const child = spawnSync(process.execPath, ['--input-type=module', '-e', childSource], { env: process.env, encoding: 'utf8', timeout: 30000 });
 assert.equal(child.status, 0, child.stderr + child.stdout);
@@ -123,3 +139,5 @@ await recovery.drainPendingDeliveriesCore(options);
 assert.equal(sends, 1);
 console.log('PASS transient failure retained, subsequent recovery sent, acknowledged entry not replayed');
 console.log(`Fixture retained for review: ${root}`);
+// 2026.9.6 keeps shared-state worker threads alive after the last operation.
+process.exit(0);

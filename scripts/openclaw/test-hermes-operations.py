@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -98,7 +99,7 @@ class OperationsTests(unittest.TestCase):
         artifact.symlink_to(outside)
         self.assertEqual(ops.review_baseline(operations, previous), (None, "unavailable"))
         artifact.unlink()
-        artifact.hardlink_to(outside)
+        os.link(outside, artifact)  # Path.hardlink_to needs Python 3.10; macOS ships 3.9
         self.assertEqual(ops.review_baseline(operations, previous), (None, "unavailable"))
 
     def test_failed_dispatch_counts_attempts_separately_from_provider_responses(self):

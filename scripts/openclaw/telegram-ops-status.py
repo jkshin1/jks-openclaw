@@ -3,6 +3,7 @@
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -44,6 +45,12 @@ ERROR_CLASSES_CONTAINED = (
     ("tool-error", re.compile(r"\btool\b", re.I)),
 )
 CLASSIFY_PREFIX = 80
+# OpenClaw injects these curated roots at session start only while their recorded provenance is
+# trusted. Its provenance is a one-way ratchet: once a root is stamped untrusted, later writes keep
+# it untrusted and the file silently drops out of every new session's bootstrap context.
+MEMORY_PROVENANCE_OWNER = "core:memory-artifact-provenance"
+MEMORY_PROVENANCE_NAMESPACE = "workspace-files"
+CURATED_MEMORY_ROOTS = ("MEMORY.md", "memory.md", "USER.md")
 ISSUE_LABELS = {
     "delivery-failed": "전송 실패", "delivery-stale": "전송 대기 15분 초과",
     "task-long-running": "작업 실행 1시간 초과", "dreaming-unhealthy": "야간 예약 작업 오류",
@@ -54,6 +61,7 @@ ISSUE_LABELS = {
     "gateway-policy-or-runtime-check-failed": "Gateway 설정 또는 실행 검사 실패",
     "gateway-check-timeout": "Gateway 검사 시간 초과", "gateway-check-unavailable": "Gateway 검사 실행 불가",
     "exec-dependency-missing": "실행 도구 누락", "hermes-worker-unavailable": "Hermes 호출 불가",
+    "memory-bootstrap-untrusted": "기억 파일 자동 주입 제외(출처 untrusted)",
 }
 
 
@@ -233,6 +241,27 @@ def backup_status(state, connection, now):
             "archivePresent": bool(row and Path(row[1]).is_file()), "verifiedAt": None}
 
 
+def memory_bootstrap_provenance(state, connection):
+    """Name curated memory roots OpenClaw will leave out of session bootstrap; never read content."""
+    config = json.loads((state / "openclaw.json").read_text())
+    workspace = config.get("agents", {}).get("defaults", {}).get("workspace")
+    if not isinstance(workspace, str) or not workspace:
+        return {"scope": "unavailable", "untrusted": []}
+    # Same address OpenClaw uses: sha256(realpath(workspace)) + ":" + sha256(relative path).
+    workspace_key = hashlib.sha256(os.path.realpath(workspace).encode()).hexdigest()
+    untrusted = []
+    for name in CURATED_MEMORY_ROOTS:
+        row = connection.execute("SELECT value_json FROM plugin_state_entries WHERE plugin_id=? "
+                                 "AND namespace=? AND entry_key=?",
+                                 (MEMORY_PROVENANCE_OWNER, MEMORY_PROVENANCE_NAMESPACE,
+                                  workspace_key + ":" + hashlib.sha256(name.encode()).hexdigest())).fetchone()
+        value = json.loads(row[0]) if row else {}
+        if (isinstance(value, dict) and value.get("relativePath") == name
+                and value.get("workspaceKey") == workspace_key and value.get("originClass") == "untrusted"):
+            untrusted.append(name)
+    return {"scope": "curated-roots", "untrusted": untrusted}
+
+
 def collect(state=DEFAULT_STATE, now=None, queue_stale_seconds=900, long_task_seconds=3600,
             include_observer=True, include_failure_detail=False, hermes_root=DEFAULT_HERMES_ROOT):
     now = int(time.time() * 1000) if now is None else now
@@ -283,6 +312,12 @@ def collect(state=DEFAULT_STATE, now=None, queue_stale_seconds=900, long_task_se
                                            "consecutiveErrors": int(dream_state.get("consecutiveErrors", 0)),
                                            "scope": "scheduler-receipt"}}
             result["backup"] = backup_status(state, connection, now)
+            # A schema or config this check cannot read must not discard the other aggregates.
+            try:
+                result["memoryProvenance"] = memory_bootstrap_provenance(state, connection)
+            except (sqlite3.Error, OSError, ValueError, TypeError, AttributeError) as error:
+                result["memoryProvenance"] = {"scope": "unavailable", "untrusted": [],
+                                              "errorType": type(error).__name__}
             if include_failure_detail:
                 # An upgrade may add or rename task columns. Losing the grouping is acceptable;
                 # letting that failure discard every other aggregate in this block is not.
@@ -311,6 +346,8 @@ def collect(state=DEFAULT_STATE, now=None, queue_stale_seconds=900, long_task_se
             result["issues"].append("backup-stale")
         if backup["status"] == "UNVERIFIED":
             result["warnings"].append("backup-restore-unverified")
+        if result["memoryProvenance"]["untrusted"]:
+            result["issues"].append("memory-bootstrap-untrusted")
         result["ok"] = not result["issues"]
     except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, OverflowError):
         result["issues"] = ["operations-read-failed"]

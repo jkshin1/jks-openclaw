@@ -7,11 +7,23 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 const plugin = process.argv[2];
 assert(plugin, 'Pass the installed Codex plugin root');
-const dist = path.join(plugin, 'dist');
-const names = (await fs.readdir(dist)).filter(n => /^attempt-context-.*\.js$/.test(n));
-assert.equal(names.length, 1);
-const {i: buildContext} = await import(pathToFileURL(path.join(dist, names[0])));
-assert.equal(typeof buildContext, 'function', '2026.9.3 context export changed');
+// The plugin opens OpenClaw's shared state on import; keep that away from every real profile.
+const isolatedState = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'codex-response-state-'));
+process.env.OPENCLAW_STATE_DIR = isolatedState;
+process.env.OPENCLAW_CONFIG_PATH = path.join(isolatedState, 'openclaw.json');
+// 2026.9.3 bundled the builder in dist/attempt-context-*.js; 2026.9.6 moved it under dist/.setup/.
+const matches = [];
+for (const dir of [path.join(plugin, 'dist'), path.join(plugin, 'dist', '.setup')]) {
+  for (const name of await fs.readdir(dir).catch(() => [])) {
+    if (!/\.m?js$/.test(name)) continue;
+    const exported = (await fs.readFile(path.join(dir, name), 'utf8'))
+      .match(/export \{[^}]*\bbuildCodexWorkspaceBootstrapContext as (\w+)/);
+    if (exported) matches.push([path.join(dir, name), exported[1]]);
+  }
+}
+assert.equal(matches.length, 1, 'Codex workspace bootstrap builder missing or ambiguous');
+const buildContext = (await import(pathToFileURL(matches[0][0])))[matches[0][1]];
+assert.equal(typeof buildContext, 'function', 'Codex context export changed');
 const dir = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'codex-response-context-'));
 let checks = 0;
 try {
@@ -37,4 +49,5 @@ try {
   console.log(JSON.stringify({ok:true, checks, sameSessionRefresh:true, modelCalled:false, telegramDelivered:false}));
 } finally {
   await fs.rm(dir, {recursive:true, force:true});
+  await fs.rm(isolatedState, {recursive:true, force:true});
 }

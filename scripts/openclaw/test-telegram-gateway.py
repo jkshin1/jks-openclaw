@@ -372,6 +372,32 @@ class TelegramPolicyTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             verifier.live_policy(bad, effective)
 
+    def test_known_browser_inventory_gap_is_narrow(self):
+        health = {"ok": True, "plugins": {"loaded": list(verifier.REQUIRED_PLUGINS)},
+                  "channels": {"telegram": {"running": True, "connected": True,
+                                             "lifecycle": "ready", "mode": "polling"}}}
+        tools = [{"id": x} for x in verifier.REQUIRED_TOOLS if x != "browser"]
+        gap = {"agentId": "main", "groups": [{"tools": tools}],
+               "notices": [{"id": "browser-filtered-by-profile"}]}
+        # Without a reviewed release record the missing browser tool still fails.
+        with self.assertRaisesRegex(ValueError, "browser"):
+            verifier.live_policy(health, gap)
+        self.assertNotIn("browser", verifier.live_policy(health, gap, tolerate_browser_inventory_gap=True))
+        denied = copy.deepcopy(gap)
+        denied["notices"] = [{"id": "browser-denied-by-policy"}]
+        unloaded = copy.deepcopy(health)
+        unloaded["plugins"]["loaded"] = [p for p in unloaded["plugins"]["loaded"] if p != "browser"]
+        with self.assertRaisesRegex(ValueError, "browser"):
+            verifier.live_policy(health, denied, tolerate_browser_inventory_gap=True)
+        # An unloaded browser plugin already fails the required-plugin check.
+        with self.assertRaisesRegex(ValueError, "required live plugins"):
+            verifier.live_policy(unloaded, gap, tolerate_browser_inventory_gap=True)
+        # The tolerance never excuses any other required tool.
+        other = copy.deepcopy(gap)
+        other["groups"][0]["tools"] = [t for t in tools if t["id"] != "exec"]
+        with self.assertRaisesRegex(ValueError, "exec"):
+            verifier.live_policy(health, other, tolerate_browser_inventory_gap=True)
+
     def test_host_approval_overlay_cannot_hide_behind_full_config(self):
         scope = {"host": {"requested": "gateway"}, "security": {"effective": "full"},
                  "ask": {"effective": "off"}}

@@ -118,5 +118,72 @@
       "completions": "node_modules/@openclaw/ai/dist/openai-completions-KuoZyx0d.mjs",
       "thinking": "dist/thinking-DXBjerSL.mjs"
     }
+  },
+  "2026.9.6": {
+    "token": {
+      "path": "node_modules/@openclaw/ai/dist/openai-completions-compat-CUollwl6.mjs",
+      "before": "cff847b1f4bf6b3acaf52156324d278e83e7a5873891803950194a486343fe56",
+      "export": "i",
+      "after": "1d44bb1d1d2bbb173973eb5dfc4da9878b4c637c6d722f5d852846e6a15b7b71"
+    },
+    "memory": {
+      "path": "dist/session-ingestion-DpO4dDkE.mjs",
+      "before": "db759c72f4932cbbf31c4f70d0a62fb226eec2220c7a593bab269c2489d618cf",
+      "after": "a796642ae1c2ef44b28be3ea4a16d4459a00224c5f0c4a4c656273ddff333306"
+    },
+    "claudeCliArgs": {
+      "path": "dist/cli-backend-CP9ybtr0.mjs",
+      "before": "8781c96359b2b5c67040716de43a7a5472ad89cb5e2bd7ed9395415777e10afc",
+      "export": "t",
+      "sharedModule": "./cli-shared-BBdnRLY0.mjs",
+      "resolveExport": "a",
+      "after": "0756d45526b5ef23eb5815b124479c1872aa790ec1dde9f06c7828ea281bc258"
+    },
+    "glmThinkingConfig": {
+      "model": "openrouter/z-ai/glm-5.3-flash",
+      "supportedReasoningEfforts": [
+        "none",
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    "superseded": {
+      "authReprobe": "dist/model-fallback-runner-C-B-h8RR.mjs reprobes WHAM-blocked profiles for every candidate before the provider-cooldown gate",
+      "gpt6Sol": "GPT-6 Sol ships in the OpenAI manifest, thinking catalog, route contract and ChatGPT resolver",
+      "thinking": "compat.supportedReasoningEfforts on the configured GLM model drives the /think levels and request effort"
+    },
+    "knownInventoryGaps": {
+      "browser": "tools.effective omits the plugin browser tool on this deployment although agent turns receive and call it; a registration-name repair (openclaw/openclaw#156864) did not change the inventory"
+    },
+    "delivery": [
+      {
+        "path": "dist/delivery-queue-recovery-Dud1kzH1.mjs",
+        "before": "6e89c7e0505de4f5a129da68c7602ab0743f23065746f780e6f44b9894740982",
+        "after": "1c6f0e8b09f72c700e400cdf847036732bb9c5d7af8edde6f70b0a9ec6e797a5"
+      },
+      {
+        "path": "dist/delivery-queue-storage-j8JnhuyK.mjs",
+        "before": "095f1c3aea6e9044c1ba0f7ff8df72846f6259a8cdac16ec475fa477bfed7fc7",
+        "after": "d115fb7aa2eba9ab6c528ac3acc442bf0ba752ab90f9da51ac7dc719b8f7fbc3"
+      },
+      {
+        "path": "dist/delivery-queue-sqlite-namespace.kernel-CbSzRfE6.mjs",
+        "before": "208179be96df7379fc8f738aab07617eee4cd232f17d6ea4ec37c5803b8ea949",
+        "after": "ad360680834b16ab867a84f10a201729b48e75ab6a7fe9c2e015b2941d059fe9"
+      },
+      {
+        "path": "dist/telegram-delivery-retry.mjs",
+        "after": "7fcac0fc3e3197861efba98e580ddbe14010ada1815d7196712440600c483d28"
+      }
+    ],
+    "test": {
+      "host": "node_modules/@openclaw/ai/dist/host-yTvBrYM2.mjs",
+      "completions": "node_modules/@openclaw/ai/dist/openai-completions-BO6D_hrB.mjs",
+      "thinking": "dist/thinking-iJooX3g2.mjs",
+      "thinkingExport": "u",
+      "openrouterPolicy": "dist/thinking-policy-aSZFQbVe.mjs",
+      "openrouterStream": "dist/stream--JGWwbqH.mjs"
+    }
   }
 }

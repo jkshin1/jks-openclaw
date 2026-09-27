@@ -22,6 +22,8 @@ plugin manifest, thinking policy, model route contract, ChatGPT/Codex resolver �
 `scripts/openclaw/runtime-patch-specs.json`, 설치 영수증은 비공개
 `~/.openclaw-personaledge/operations/gpt6-sol-patch.json`에 있습니다. 기존 네 가지
 런타임 복구 패치와 별개이며, API 키 과금 경로는 추가하지 않았습니다.
+2026-09-27 OpenClaw 2026.9.6은 Sol을 기본 지원하므로 이 패치는 더 이상 설치하지 않습니다.
+아래 원복 절차는 2026.9.3 설치에만 해당하며, 현재 기준은 [2026.9.6 기록](OPENCLAW_UPDATE_20260927.md)입니다.
 
 격리된 Gateway `modelRun`은 요청·적용 모델 `openai/gpt-6-sol`, 응답 모델 `gpt-6-sol`,
 `rerouted=false`, 성공 도구 0개와 `SOL-READY` 응답을 반환했고 임시 실행 상태를
@@ -63,6 +65,13 @@ scripts/openclaw/status-gateway.sh --telegram --json
 구분합니다. 개인 대화 본문이나 계정 식별자는 출력하지 않습니다. 감시 기록이 오래됐으면
 이전 정상 결과를 현재 정상으로 표시하지 않습니다. 야간 작업의 scheduler 성공은
 모델이 기억을 실제 승격했다는 뜻과 다릅니다.
+
+2026-09-27부터는 대화 시작 시 주입되는 기억 파일(`MEMORY.md`, `USER.md`)의 출처 기록도
+확인합니다. OpenClaw가 이 파일을 `untrusted`로 기록하면 새 대화에서 경고 없이 빼고, 이후
+쓰기로도 풀리지 않습니다. 이 경우 `memory-bootstrap-untrusted`("기억 파일 자동 주입 제외")가
+이슈로 잡혀 아래 규칙대로 알림이 갑니다. Hermes 자동 점검은 호출하지 않습니다. 검사는 파일 이름과
+판정만 읽고 기억 내용이나 세션 정보는 출력하지 않습니다. 해제 절차는
+[2026.9.6 기록](OPENCLAW_UPDATE_20260927.md)에 있습니다.
 
 감시기는 5분마다 모델 호출 없이 검사합니다. 연속 3회 실패하면 한 번 알리고,
 실패 알림이 전달된 사건이 정상화되면 복구를 한 번 알립니다. 기존 장애가 지속되는 중에

@@ -36,9 +36,12 @@ def qualify(package, output, state=None):
     if version not in specs:
         raise ValueError("unreviewed runtime release")
     spec = specs[version]
-    items = [spec["token"], spec["memory"], *spec["thinking"], *spec["delivery"]]
+    # From 2026.9.6 GLM thinking is configuration and the auth/Sol repairs ship upstream.
+    items = [spec["token"], spec["memory"], *spec.get("thinking", []), *spec["delivery"]]
     if "authReprobe" in spec:
         items.append(spec["authReprobe"])
+    if "claudeCliArgs" in spec:
+        items.append(spec["claudeCliArgs"])
     for item in items:
         target = package / item["path"]
         relative = Path(item["path"])
@@ -67,11 +70,16 @@ def qualify(package, output, state=None):
                           ("memory", "patch-memory-admission.mjs", "memory-admission-patch.json")]
     if "authReprobe" in spec:
         single_file_patches.append(("authReprobe", "patch-auth-reprobe.mjs", "auth-reprobe-patch.json"))
+    if "claudeCliArgs" in spec:
+        single_file_patches.append(("claudeCliArgs", "patch-claude-cli-agent.mjs", "claude-cli-agent-patch.json"))
     for key, script, receipt in single_file_patches:
         run([NODE, str(SOURCE / script), str(package / spec[key]["path"]), str(output / (key + ".mjs"))],
             output / receipt)
-    run([NODE, str(SOURCE / "patch-glm-thinking.mjs"), str(package), str(output / "thinking")],
-        output / "thinking-prepare.json")
+    if "thinking" in spec:
+        run([NODE, str(SOURCE / "patch-glm-thinking.mjs"), str(package), str(output / "thinking")],
+            output / "thinking-prepare.json")
+    else:
+        run([NODE, str(SOURCE / "test-glm-thinking.mjs"), str(package)], output / "thinking-config-tests.json")
     run([NODE, str(SOURCE / "test-telegram-delivery-retry.mjs"), str(package), str(output / "delivery")],
         output / "delivery-tests.txt")
     if "authReprobe" in spec:
@@ -89,7 +97,9 @@ def qualify(package, output, state=None):
     replacements = {spec["token"]["path"]: output / "token.mjs", spec["memory"]["path"]: output / "memory.mjs"}
     if "authReprobe" in spec:
         replacements[spec["authReprobe"]["path"]] = output / "authReprobe.mjs"
-    replacements.update({item["path"]: output / "thinking" / item["path"] for item in spec["thinking"]})
+    if "claudeCliArgs" in spec:
+        replacements[spec["claudeCliArgs"]["path"]] = output / "claudeCliArgs.mjs"
+    replacements.update({item["path"]: output / "thinking" / item["path"] for item in spec.get("thinking", [])})
     replacements.update({item["path"]: output / "delivery" / Path(item["path"]).name for item in spec["delivery"]})
     for item in items:
         if digest(replacements[item["path"]]) != item["after"]:
@@ -102,11 +112,14 @@ def qualify(package, output, state=None):
         previous = output / "previous"
         previous.mkdir(mode=0o700)
         receipts = {"telegram-delivery-patch.json": output / "delivery/patch-receipt.json",
-                    "glm-thinking-patch.json": output / "thinking/glm-thinking-patch.json",
                     "glm-token-field-patch.json": output / "glm-token-field-patch.json",
                     "memory-admission-patch.json": output / "memory-admission-patch.json"}
+        if "thinking" in spec:
+            receipts["glm-thinking-patch.json"] = output / "thinking/glm-thinking-patch.json"
         if "authReprobe" in spec:
             receipts["auth-reprobe-patch.json"] = output / "auth-reprobe-patch.json"
+        if "claudeCliArgs" in spec:
+            receipts["claude-cli-agent-patch.json"] = output / "claude-cli-agent-patch.json"
         writes = list((package / name, source) for name, source in replacements.items())
         writes += [(state / "operations" / name, source) for name, source in receipts.items()]
         before = []

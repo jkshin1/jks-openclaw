@@ -27,8 +27,7 @@ DEFAULT_STATE = USER_ROOT / ".openclaw-personaledge"
 DEFAULT_PACKAGE = USER_ROOT / ".local/openclaw-2026.8.1/lib/node_modules/openclaw"
 DEFAULT_CLI = USER_ROOT / ".local/openclaw-2026.8.1/.personal-edge-management/bin/openclaw"
 DEFAULT_BACKUPS = USER_ROOT / "Library/Application Support/PersonalEdge/OpenClawBackups/telegram"
-PATCH_RECEIPTS = ("telegram-delivery-patch.json", "glm-token-field-patch.json",
-                  "glm-thinking-patch.json", "memory-admission-patch.json")
+PATCH_RECEIPTS = ("telegram-delivery-patch.json", "glm-token-field-patch.json", "memory-admission-patch.json")
 RUNTIME_PATCH_SPECS = json.loads(Path(__file__).with_name("runtime-patch-specs.json").read_text())
 GLOBAL_TABLES = {"schema_meta", "config_machine_state", "secret_store_entries", "cron_jobs",
                  "delivery_queue_entries", "task_runs"}
@@ -314,8 +313,11 @@ def recovery_supplement(bundle, args):
     require(version in RUNTIME_PATCH_SPECS, "unreviewed runtime release for backup recovery")
     auth_reprobe = RUNTIME_PATCH_SPECS[version].get("authReprobe")
     gpt6_sol = RUNTIME_PATCH_SPECS[version].get("gpt6Sol")
+    # From 2026.9.6 GLM thinking is configuration, so only earlier releases carry its receipt.
     receipts = (PATCH_RECEIPTS
+                + (("glm-thinking-patch.json",) if "thinking" in RUNTIME_PATCH_SPECS[version] else ())
                 + (("auth-reprobe-patch.json",) if auth_reprobe is not None else ())
+                + (("claude-cli-agent-patch.json",) if "claudeCliArgs" in RUNTIME_PATCH_SPECS[version] else ())
                 + (("gpt6-sol-patch.json",) if gpt6_sol is not None else ()))
     add(args.package / "package.json", "recovery/runtime/package.json")
     add(args.cli, "recovery/management/openclaw")

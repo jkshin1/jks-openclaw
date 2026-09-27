@@ -112,7 +112,7 @@ def owner_policy(config, owner):
     return telegram
 
 
-def live_policy(health, effective):
+def live_policy(health, effective, tolerate_browser_inventory_gap=False):
     require(health.get("ok") is True, "gateway RPC unhealthy")
     plugins = health.get("plugins", {})
     require(REQUIRED_PLUGINS <= set(plugins.get("loaded", [])) and not plugins.get("errors")
@@ -123,7 +123,16 @@ def live_policy(health, effective):
             and not telegram.get("lastError"), "Telegram transport not ready")
     require(effective.get("agentId") == "main", "unexpected effective agent")
     ids = {tool["id"] for group in effective.get("groups", []) for tool in group.get("tools", [])}
-    require(REQUIRED_TOOLS <= ids, "required effective tools missing: " + ", ".join(sorted(REQUIRED_TOOLS - ids)))
+    required = REQUIRED_TOOLS
+    if tolerate_browser_inventory_gap and "browser" not in ids:
+        # 2026.9.6 omits the plugin browser tool from this inventory on this deployment although
+        # agent turns receive and call it. Only a release whose reviewed spec records that gap
+        # qualifies, and the plugin must still be loaded.
+        notices = {notice.get("id") for notice in effective.get("notices", []) if isinstance(notice, dict)}
+        require(notices == {"browser-filtered-by-profile"} and "browser" in plugins.get("loaded", []),
+                "required effective tools missing: browser")
+        required = REQUIRED_TOOLS - {"browser"}
+    require(required <= ids, "required effective tools missing: " + ", ".join(sorted(required - ids)))
     require("computer" not in ids, "computer exclusion not effective")
     return sorted(ids)
 
@@ -318,10 +327,12 @@ def runtime_policy(state, package, owner):
     require(version in RUNTIME_PATCH_SPECS, "runtime version changed; requalify local patches")
     spec = RUNTIME_PATCH_SPECS[version]
     # Pinned reviewed bytes are authoritative, not self-reported receipt hashes.
-    items = [spec["token"], spec["memory"], *spec["thinking"], *spec["delivery"],
+    items = [spec["token"], spec["memory"], *spec.get("thinking", []), *spec["delivery"],
              *spec.get("gpt6Sol", [])]
     if "authReprobe" in spec:
         items.append(spec["authReprobe"])
+    if "claudeCliArgs" in spec:
+        items.append(spec["claudeCliArgs"])
     for item in items:
         target = package / item["path"]
         require(target.is_file() and not target.is_symlink()
@@ -337,7 +348,7 @@ def runtime_policy(state, package, owner):
     receipt_path = state / "operations/telegram-delivery-patch.json"
     private_file(receipt_path)
     receipt = json.loads(receipt_path.read_text())
-    require(receipt.get("version") == version and len(receipt.get("files", [])) == 3,
+    require(receipt.get("version") == version and len(receipt.get("files", [])) == len(spec["delivery"]),
             "delivery patch receipt missing or invalid")
     require({entry.get("name") for entry in receipt["files"]} ==
             {Path(entry["path"]).name for entry in spec["delivery"]}, "delivery receipt paths drifted")
@@ -360,9 +371,12 @@ def runtime_policy(state, package, owner):
     require(admission.get("version") == version and admission.get("relativePath") == spec["memory"]["path"], "memory admission receipt missing or invalid")
     require(hashlib.sha256((package / admission["relativePath"]).read_bytes()).hexdigest() ==
             admission.get("afterSha256"), "memory admission patch drifted; requalify after upgrade")
-    require(json.loads((state / "operations/glm-thinking-patch.json").read_text()).get("version") == version,
-            "thinking receipt version mismatch")
-    glm_thinking_patch_policy(state, package)
+    if "thinking" in spec:
+        require(json.loads((state / "operations/glm-thinking-patch.json").read_text()).get("version") == version,
+                "thinking receipt version mismatch")
+        glm_thinking_patch_policy(state, package)
+    else:
+        require("glmThinkingConfig" in spec, "GLM thinking contract missing for this release")
     auth_reprobe_patch_policy(state, package, version)
     if "gpt6Sol" in spec:
         sol_receipt_path = state / "operations/gpt6-sol-patch.json"
@@ -378,6 +392,23 @@ def runtime_policy(state, package, owner):
         actual = {item.get("path"): (item.get("beforeSha256"), item.get("afterSha256"))
                   for item in files if isinstance(item, dict)}
         require(actual == expected, "GPT-6 Sol runtime receipt differs from reviewed patch")
+    return {"knownInventoryGaps": sorted(spec.get("knownInventoryGaps", {}))}
+
+
+def glm_thinking_config_policy(config, package):
+    """From 2026.9.6 the configured GLM model's efforts carry /think max, not a runtime patch."""
+    version = json.loads((package / "package.json").read_text()).get("version")
+    contract = RUNTIME_PATCH_SPECS.get(version, {}).get("glmThinkingConfig")
+    if contract is None:
+        return
+    provider, model_id = contract["model"].split("/", 1)
+    models = config.get("models", {}).get("providers", {}).get(provider, {}).get("models", [])
+    matches = [model for model in models if isinstance(model, dict) and model.get("id") == model_id]
+    require(len(matches) == 1, "configured GLM model missing or ambiguous")
+    compat = matches[0].get("compat", {})
+    require(compat.get("maxTokensField") == "max_tokens"
+            and compat.get("supportedReasoningEfforts") == contract["supportedReasoningEfforts"],
+            "GLM thinking efforts drifted from the reviewed configuration")
 
 
 def private_file(path):
@@ -408,7 +439,8 @@ def main():
     codex_subscription_policy(config)
     claude_subscription_policy(config)
     claude_cli_policy(args.state_dir / "service-env/ai.openclaw.personaledge.env")
-    runtime_policy(args.state_dir, args.package, owner)
+    runtime_state = runtime_policy(args.state_dir, args.package, owner)
+    glm_thinking_config_policy(config, args.package)
     require(config["agents"]["defaults"].get("reasoningDefault") == "off", "reasoning display must be off")
     workspace = Path(config["agents"]["defaults"]["workspace"])
     policy = workspace / "AGENTS.md"
@@ -435,7 +467,10 @@ def main():
         health = run_json(args.cli, "gateway", "call", "health", "--json")
         effective = run_json(args.cli, "gateway", "call", "tools.effective", "--json", "--params",
                              json.dumps({"agentId": "main", "sessionKey": f"agent:main:telegram:direct:{owner}"}))
-        receipt["tools"] = live_policy(health, effective)
+        browser_gap = "browser" in runtime_state["knownInventoryGaps"]
+        receipt["tools"] = live_policy(health, effective, tolerate_browser_inventory_gap=browser_gap)
+        if browser_gap and "browser" not in receipt["tools"]:
+            receipt["browserInventory"] = "known-inventory-gap"
         approvals_policy(run_json(args.cli, "exec-policy", "show", "--json"))
         # CLI policy omits /exec session overrides. Inspect only the owner's metadata, not chat.
         database = args.state_dir / "agents/main/agent/openclaw-agent.sqlite"

@@ -3,6 +3,7 @@
 
 import argparse
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -92,6 +93,48 @@ class OperationsTest(unittest.TestCase):
         self.assertNotIn('private-owner',output)
         self.assertNotIn('private-job',output)
         self.assertNotIn('123456',output)
+
+    def provenance(self, relative, origin, workspace=None):
+        workspace = workspace or str(self.workspace)
+        key = hashlib.sha256(os.path.realpath(workspace).encode()).hexdigest()
+        self.connection.execute('INSERT INTO plugin_state_entries VALUES(?,?,?,?,?,?)', (
+            'core:memory-artifact-provenance', 'workspace-files',
+            key + ':' + hashlib.sha256(relative.encode()).hexdigest(),
+            json.dumps({'version': 1, 'workspaceKey': key, 'relativePath': relative, 'fileHash': 'a' * 64,
+                        'originClass': origin, 'observedAt': NOW, 'sessionKey': 'agent:main:private-session'}),
+            NOW, None))
+
+    def test_untrusted_curated_memory_raises_owner_alert_without_content(self):
+        self.workspace = self.root / 'private-workspace'; self.workspace.mkdir()
+        path = self.state/'openclaw.json'; config = json.loads(path.read_text())
+        config['agents'] = {'defaults': {'workspace': str(self.workspace)}}; path.write_text(json.dumps(config))
+        # Without the provenance table (older schema) the check reports itself unavailable, not a fault.
+        result = self.collect()
+        self.assertTrue(result['ok']); self.assertEqual(result['memoryProvenance']['scope'], 'unavailable')
+        self.connection.execute('CREATE TABLE plugin_state_entries(plugin_id TEXT,namespace TEXT,'
+                                'entry_key TEXT,value_json TEXT,created_at INTEGER,expires_at INTEGER)')
+        self.provenance('MEMORY.md', 'agent')
+        self.provenance('memory/2026-09-06.md', 'untrusted')
+        self.provenance('USER.md', 'untrusted', workspace=str(self.root / 'other-workspace'))
+        result = self.collect()
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['memoryProvenance'], {'scope': 'curated-roots', 'untrusted': []})
+        self.connection.execute('DELETE FROM plugin_state_entries')
+        self.provenance('MEMORY.md', 'untrusted')
+        result = self.collect()
+        self.assertFalse(result['ok'])
+        self.assertIn('memory-bootstrap-untrusted', result['issues'])
+        self.assertEqual(result['memoryProvenance']['untrusted'], ['MEMORY.md'])
+        self.assertIn('기억 파일 자동 주입 제외', status.human(result))
+        output = json.dumps(result)
+        for private in ('private-workspace', 'private-session', 'a' * 64):
+            self.assertNotIn(private, output)
+        # Three consecutive observations open one owner alert; it is not an automatic Hermes review.
+        saved = {}
+        for _ in range(3):
+            saved = watchdog.transition(saved, False, result['issues'], AT)
+        self.assertEqual(saved['pendingNotification']['kind'], 'failure')
+        self.assertNotIn('memory-bootstrap-untrusted', watchdog.HERMES_INCIDENT_ISSUES)
 
     def test_stale_snapshot_does_not_claim_current_gateway_health(self):
         result = status.collect(self.state,now=NOW+901000)

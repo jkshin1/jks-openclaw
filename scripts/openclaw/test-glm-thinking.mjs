@@ -19,6 +19,11 @@ export async function verifyGlmThinking(packageRoot, candidates = {}) {
     const load = relativePath => import(pathToFileURL(`${packageRoot}/${relativePath}`).href);
     const { t: configureAiTransportHost } = await load(spec.test.host);
     configureAiTransportHost({ buildModelFetch: () => blockFetch });
+    if (!spec.thinking) {
+        checks = await verifyConfiguredGlmThinking(spec, load);
+        assert.equal(networkAttempts, 0);
+        return checks;
+    }
     const { r: streamSimple } = await load(spec.test.completions);
     const { c: resolveProfile } = await load(spec.test.thinking);
     const policy = candidates.policy ?? await load(spec.thinking[0].path);
@@ -94,6 +99,66 @@ export async function verifyGlmThinking(packageRoot, candidates = {}) {
         { reasoning: { effort: 'high' } }), { reasoning: { effort: 'high' } });
     equal(fakePayload(undefined, model, { reasoning: { effort: 'low' } }), { reasoning: { effort: 'low' } });
     equal(networkAttempts, 0);
+    return checks;
+}
+
+// From 2026.9.6 the model's configured compat.supportedReasoningEfforts drives both the /think
+// levels and the request effort, so max is a configuration contract rather than a runtime patch.
+async function verifyConfiguredGlmThinking(spec, load) {
+    const { r: streamSimple } = await load(spec.test.completions);
+    const resolveProfile = (await load(spec.test.thinking))[spec.test.thinkingExport];
+    const policy = await load(spec.test.openrouterPolicy);
+    const stream = await load(spec.test.openrouterStream);
+    const configured = spec.glmThinkingConfig;
+    assert.equal(configured.model, 'openrouter/z-ai/glm-5.3-flash');
+    const base = {
+        id: 'z-ai/glm-5.3-flash', name: 'GLM 5.3 Flash', provider: 'openrouter',
+        api: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1', reasoning: true,
+        input: ['text'], maxTokens: 131072, contextWindow: 1048576,
+        compat: { maxTokensField: 'max_tokens' },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+    const model = { ...base, compat: { ...base.compat,
+        supportedReasoningEfforts: configured.supportedReasoningEfforts } };
+    let checks = 0;
+    const equal = (actual, expected) => { assert.deepEqual(actual, expected); checks += 1; };
+    const profileFor = descriptor => resolveProfile({
+        provider: descriptor.provider, model: descriptor.id, catalog: [descriptor], agentRuntime: 'openclaw',
+        providerPolicySource: { providers: [{ provider: {
+            id: 'openrouter', resolveThinkingProfile: ctx => policy.t(ctx.modelId, ctx),
+        } }] },
+    });
+    // Without the configured efforts the release offers no max level; this is why config carries it.
+    equal(profileFor(base).levels.some(level => level.id === 'max'), false);
+    const profile = profileFor(model);
+    equal(profile.levels.map(level => level.id), ['off', 'low', 'high', 'max']);
+    equal(profile.defaultLevel, 'high');
+    async function capture(level, descriptor = model, extraParams) {
+        let payload;
+        const wrapped = stream.t({ streamFn: streamSimple, modelId: descriptor.id,
+            thinkingLevel: level, extraParams });
+        const events = wrapped(descriptor, {
+            messages: [{ role: 'user', content: 'Synthetic offline probe.', timestamp: 1 }],
+        }, {
+            apiKey: 'dummy-offline-not-a-credential', reasoning: level, maxTokens: 131072,
+            onPayload(value) { payload = structuredClone(value); throw new Error('PAYLOAD_CAPTURED'); },
+        });
+        for await (const event of events) { /* Drain the intentional local capture terminal. */ }
+        assert(payload, `No payload for ${level}`);
+        return payload;
+    }
+    for (const [level, effort] of [['max', 'max'], ['high', 'high'], ['low', 'low'], ['off', 'none']]) {
+        const payload = await capture(level);
+        equal(payload.reasoning, { effort });
+        equal(payload.reasoning_effort, undefined);
+        equal(payload.max_tokens, 131072);
+        equal(payload.max_completion_tokens, undefined);
+    }
+    const routed = await capture('max', model, { provider: { order: ['z-ai'] } });
+    equal(routed.provider, { order: ['z-ai'] });
+    equal(routed.reasoning.effort, 'max');
+    // The unconfigured catalog entry still clamps max to high, so a missing config is visible.
+    equal((await capture('max', base)).reasoning, { effort: 'high' });
     return checks;
 }
 

@@ -23,6 +23,9 @@ backup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(backup)
 
 
+# 2026.9.2 and 2026.9.3 also carry the GLM thinking runtime patch receipt.
+THINKING_ERA_RECEIPTS = backup.PATCH_RECEIPTS + ("glm-thinking-patch.json",)
+
 class BackupTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -257,7 +260,7 @@ class RecoverySupplementTest(unittest.TestCase):
         self.write(self.args.cli, b"synthetic CLI")
         for name in ("ai.openclaw.personaledge.plist", "com.personaledge.openclaw-telegram-watchdog.plist"):
             self.write(self.args.launch_agents / name, b"synthetic launch agent")
-        for index, name in enumerate(backup.PATCH_RECEIPTS):
+        for index, name in enumerate(THINKING_ERA_RECEIPTS):
             relative = "dist/base-%d.mjs" % index
             self.write(self.args.package / relative, ("synthetic patch %d" % index).encode())
             self.write_receipt(name, {"version": "2026.9.3", "relativePath": relative,
@@ -368,7 +371,7 @@ class RecoverySupplementTest(unittest.TestCase):
 
     def test_2026_9_2_keeps_four_patch_receipts(self):
         self.write(self.args.package / "package.json", json.dumps({"version": "2026.9.2"}).encode())
-        for name in backup.PATCH_RECEIPTS:
+        for name in THINKING_ERA_RECEIPTS:
             path = self.args.state_dir / "operations" / name
             receipt = json.loads(path.read_text())
             receipt["version"] = "2026.9.2"
@@ -376,8 +379,29 @@ class RecoverySupplementTest(unittest.TestCase):
         # Leftover newer receipts are neither required nor included for the older runtime.
         recovery = self.supplement()
         names = {name for name in recovery["files"] if name.startswith("recovery/receipts/")}
-        self.assertEqual(names, {"recovery/receipts/" + name for name in backup.PATCH_RECEIPTS})
+        self.assertEqual(names, {"recovery/receipts/" + name for name in THINKING_ERA_RECEIPTS})
         self.assertNotIn("recovery/runtime/" + self.auth["path"], recovery["files"])
+
+    def test_2026_9_6_keeps_only_runtime_patch_receipts(self):
+        self.write(self.args.package / "package.json", json.dumps({"version": "2026.9.6"}).encode())
+        for name in backup.PATCH_RECEIPTS:
+            path = self.args.state_dir / "operations" / name
+            receipt = json.loads(path.read_text())
+            receipt["version"] = "2026.9.6"
+            self.write_receipt(name, receipt)
+        claude = self.specs["2026.9.6"]["claudeCliArgs"]
+        self.write(self.args.package / claude["path"], b"synthetic Claude CLI patch")
+        self.write_receipt("claude-cli-agent-patch.json", {
+            "version": "2026.9.6", "relativePath": claude["path"],
+            "afterSha256": backup.digest(self.args.package / claude["path"])})
+        # Thinking, auth and Sol receipts left by 2026.9.3 describe repairs 2026.9.6 no longer needs.
+        recovery = self.supplement()
+        names = {name for name in recovery["files"] if name.startswith("recovery/receipts/")}
+        self.assertEqual(names, {"recovery/receipts/" + name
+                                 for name in (*backup.PATCH_RECEIPTS, "claude-cli-agent-patch.json")})
+        self.assertIn("recovery/runtime/" + claude["path"], recovery["files"])
+        for entry in self.sol:
+            self.assertNotIn("recovery/runtime/" + entry["path"], recovery["files"])
 
 
 if __name__ == "__main__":

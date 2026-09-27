@@ -90,7 +90,8 @@ hypothesise; read them before asking for evidence that is deliberately withheld.
   install-gateway.sh and old deployment manifest retain that relay's version defaults.
   The active Mac/Telegram path uses docs/OPENCLAW_TELEGRAM.md and the Telegram verifier;
   its installed management wrapper has a separate deployment context. A directory named
-  openclaw-2026.8.1 can contain the qualified 2026.9.3 package. Check package.json and
+  openclaw-2026.8.1 can contain a newer qualified package (2026.9.6 since 2026-09-27; its reviewed
+  patch set is in runtime-patch-specs.json). Check package.json and
   the actual active command path. A legacy version constant or directory name alone is
   not active configuration drift and is not a reason to rewrite the archived relay.
 - Subscription-limit text does not establish current quota exhaustion. Compare a fresh authorized

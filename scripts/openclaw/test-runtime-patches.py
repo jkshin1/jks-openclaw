@@ -50,6 +50,7 @@ class RuntimePatchTest(unittest.TestCase):
         self.corrupt_candidate = False
         self.forge_auth_receipt = False
         self.fail_auth_tests = False
+        self.fail_thinking_config = False
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -60,11 +61,15 @@ class RuntimePatchTest(unittest.TestCase):
 
     def items(self):
         spec = self.specs[self.version]
-        return [spec['token'], spec['memory'], *spec['thinking'], *spec['delivery']] + (
-            [spec['authReprobe']] if 'authReprobe' in spec else [])
+        return [spec['token'], spec['memory'], *spec.get('thinking', []), *spec['delivery']] + (
+            [spec['authReprobe']] if 'authReprobe' in spec else []) + (
+            [spec['claudeCliArgs']] if 'claudeCliArgs' in spec else [])
 
     def receipt_names(self):
-        return RECEIPTS + (['auth-reprobe-patch.json'] if 'authReprobe' in self.specs[self.version] else [])
+        spec = self.specs[self.version]
+        names = [name for name in RECEIPTS if name != 'glm-thinking-patch.json' or 'thinking' in spec]
+        return names + (['auth-reprobe-patch.json'] if 'authReprobe' in spec else []) + (
+            ['claude-cli-agent-patch.json'] if 'claudeCliArgs' in spec else [])
 
     def sol_receipt(self):
         # patch-gpt6-sol.py installs these separately from qualify-runtime-patches.py.
@@ -116,9 +121,10 @@ class RuntimePatchTest(unittest.TestCase):
             self.write_json(directory / 'patch-receipt.json', {'version': self.version, 'files': [
                 {'name': Path(item['path']).name, 'afterSha256': item['after']} for item in spec['delivery']]})
             output.write_text('{}')
-        elif script in {'patch-glm-token-field.mjs', 'patch-memory-admission.mjs', 'patch-auth-reprobe.mjs'}:
+        elif script in {'patch-glm-token-field.mjs', 'patch-memory-admission.mjs', 'patch-auth-reprobe.mjs',
+                        'patch-claude-cli-agent.mjs'}:
             key = {'patch-glm-token-field.mjs': 'token', 'patch-memory-admission.mjs': 'memory',
-                   'patch-auth-reprobe.mjs': 'authReprobe'}[script]
+                   'patch-auth-reprobe.mjs': 'authReprobe', 'patch-claude-cli-agent.mjs': 'claudeCliArgs'}[script]
             content = self.after[spec[key]['path']]
             if self.corrupt_candidate and key == 'memory': content += b'changed'
             Path(argv[-1]).write_bytes(content)
@@ -137,9 +143,13 @@ class RuntimePatchTest(unittest.TestCase):
                                        'afterSha256': item['after']} for item in spec['thinking']]})
             output.write_text('{}')
         else:
-            self.assertIn(script, {'test-telegram-delivery-retry.mjs', 'test-auth-reprobe.mjs'})
+            self.assertIn(script, {'test-telegram-delivery-retry.mjs', 'test-auth-reprobe.mjs', 'test-glm-thinking.mjs'})
             if script == 'test-auth-reprobe.mjs' and self.fail_auth_tests:
                 raise ValueError('offline auth reprobe qualification failed')
+            if script == 'test-glm-thinking.mjs':
+                self.assertNotIn('thinking', spec)
+                if self.fail_thinking_config:
+                    raise ValueError('offline GLM thinking configuration check failed')
             output.write_text('synthetic offline tests passed')
 
     def apply(self, **kwargs):
@@ -416,6 +426,68 @@ class RuntimePatchTest(unittest.TestCase):
         self.assertNotIn('authReprobe', self.specs['2026.9.2'])
         with patch.object(verifier, 'RUNTIME_PATCH_SPECS', self.specs):
             verifier.auth_reprobe_patch_policy(self.state, self.package, '2026.9.2')
+
+    def use_2026_9_6(self):
+        shutil.rmtree(self.package); self.package.mkdir()
+        for name in RECEIPTS + ['auth-reprobe-patch.json', 'gpt6-sol-patch.json', 'claude-cli-agent-patch.json']:
+            (self.state / 'operations' / name).unlink(missing_ok=True)
+        self.prepare_fixture('2026.9.6')
+
+    def test_2026_9_6_installs_worker_kernel_without_superseded_repairs(self):
+        self.use_2026_9_6()
+        spec = self.specs['2026.9.6']
+        self.assertNotIn('thinking', spec); self.assertNotIn('authReprobe', spec); self.assertNotIn('gpt6Sol', spec)
+        result = self.apply()
+        self.assertTrue(result['installed'])
+        self.assertEqual({Path(item['path']).name.split('-')[0] for item in spec['delivery']}, {'delivery', 'telegram'})
+        self.assertEqual(len(result['files']), 3 + len(spec['delivery']))
+        self.assertEqual(self.receipt_names(), ['telegram-delivery-patch.json', 'glm-token-field-patch.json',
+                                                'memory-admission-patch.json', 'claude-cli-agent-patch.json'])
+        for name in ('glm-thinking-patch.json', 'auth-reprobe-patch.json', 'gpt6-sol-patch.json'):
+            self.assertFalse((self.state / 'operations' / name).exists(), name)
+        owner = '12345'
+        self.write_delivery_policy(owner)
+        kernel = next(item for item in spec['delivery'] if '.kernel-' in item['path'])
+        with patch.object(verifier, 'RUNTIME_PATCH_SPECS', self.specs):
+            verifier.runtime_policy(self.state, self.package, owner)
+            self.assertEqual(verifier.runtime_policy(self.state, self.package, owner),
+                             {'knownInventoryGaps': ['browser']})
+            for item in (kernel, spec['claudeCliArgs']):
+                reviewed = (self.package / item['path']).read_bytes()
+                (self.package / item['path']).write_bytes(b'unreviewed-runtime')
+                with self.subTest(path=item['path']), \
+                        self.assertRaisesRegex(ValueError, 'reviewed runtime patch bytes drifted'):
+                    verifier.runtime_policy(self.state, self.package, owner)
+                (self.package / item['path']).write_bytes(reviewed)
+
+    def test_2026_9_6_thinking_config_failure_prevents_activation(self):
+        self.use_2026_9_6()
+        self.fail_thinking_config = True
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'GLM thinking configuration'):
+            self.apply()
+        self.assert_snapshot(before)
+
+    def test_glm_thinking_config_policy_pins_reviewed_efforts(self):
+        self.write_json(self.package / 'package.json', {'version': '2026.9.6'})
+        efforts = self.specs['2026.9.6']['glmThinkingConfig']['supportedReasoningEfforts']
+        def config(*models):
+            return {'models': {'providers': {'openrouter': {'models': list(models)}}}}
+        reviewed = {'id': 'z-ai/glm-5.3-flash', 'compat': {'maxTokensField': 'max_tokens',
+                                                           'supportedReasoningEfforts': efforts}}
+        with patch.object(verifier, 'RUNTIME_PATCH_SPECS', self.specs):
+            verifier.glm_thinking_config_policy(config(reviewed), self.package)
+            for compat in [{'maxTokensField': 'max_tokens'},
+                           {'maxTokensField': 'max_tokens', 'supportedReasoningEfforts': ['low', 'high']},
+                           {'maxTokensField': 'max_completion_tokens', 'supportedReasoningEfforts': efforts}]:
+                with self.subTest(compat=compat), self.assertRaisesRegex(ValueError, 'GLM thinking efforts drifted'):
+                    verifier.glm_thinking_config_policy(config({**reviewed, 'compat': compat}), self.package)
+            for models in [(), (reviewed, reviewed)]:
+                with self.assertRaisesRegex(ValueError, 'configured GLM model'):
+                    verifier.glm_thinking_config_policy(config(*models), self.package)
+            # Releases that still carry the runtime thinking patch have no configuration contract.
+            self.write_json(self.package / 'package.json', {'version': '2026.9.3'})
+            verifier.glm_thinking_config_policy(config(), self.package)
 
     def test_standalone_delivery_prepare_cannot_target_runtime(self):
         with self.assertRaisesRegex(ValueError, 'outside'):

@@ -1,6 +1,6 @@
 # Mac OpenClaw over Telegram
 
-Updated 2026-09-26 KST. This is the active operating document for this repository.
+Updated 2026-09-27 KST. This is the active operating document for this repository.
 
 The September 10 [Heartbeat recovery record](OPENCLAW_HEARTBEAT_RECOVERY_20260910.md) covers stale
 Codex subscription blocking, the guarded reprobe repair, and retained synthetic-agent startup
@@ -10,6 +10,28 @@ The owner retired the Android app at `rc11-final` and selected Telegram as the r
 for the current Mac. Work includes coding, research, operations, media, and documents. The Android
 source, installed app data, and historical acceptance receipts remain preserved. Its unfinished
 release gates are closed unfinished, not prerequisites for this Mac assistant.
+
+## OpenClaw 2026.9.6 upgrade, 2026-09-27 KST
+
+The runtime is now OpenClaw 2026.9.6 (`eb377ac`) with the official Codex plugin 2026.9.6; the model
+chain, owner routing and state were not changed. The reviewed local patch set changed: the GLM
+token field, memory admission and owner Telegram delivery repairs were ported (delivery now spans
+recovery, storage and the shared-state worker kernel); a new repair adds `Agent` to claude-cli's
+default `--disallowedTools` so native background agents cannot strand a Telegram reply
+([#158626](https://github.com/openclaw/openclaw/issues/158626)); GLM `/think max` moved to
+`compat.supportedReasoningEfforts` configuration; and the Codex auth reprobe and GPT-6 Sol patches
+were retired because 2026.9.6 ships both behaviours. The GPT-6 Sol section below is historical.
+
+Verified on the live Gateway: patched bytes, live verifier, reinstalled observer, a synthetic
+claude-cli Opus turn without the native `Agent` tool, a real browser tool call, one GLM max-thinking
+response, Codex bootstrap projection and extractors. The owner's real Telegram message at 13:45 KST
+hit the Claude session limit on Opus, fell back to Sol and was delivered with no error banner.
+Update this installation under `umask 077`; the updater fingerprints the launcher mode. The
+`tools.effective` inventory omits the browser tool although turns receive it. The owner's MEMORY.md
+had been kept out of session bootstrap since a 2026-09-06 synthetic test stamped it `untrusted`; at
+the owner's request that single provenance row was removed and startup injection re-verified.
+Details, evidence and rollback:
+[the 2026.9.6 upgrade record](OPENCLAW_UPDATE_20260927.md).
 
 ## Claude Opus 5.5 main-route migration, 2026-09-26 KST
 
@@ -57,8 +79,8 @@ Known boundaries:
 - Claude Code keeps this agent's native session files under `~/.claude/projects/`, outside the
   OpenClaw backup. The OpenClaw transcript remains authoritative.
 - Opus shares the owner's Claude subscription limits with Claude and Claude Code on any device.
-  With Claude CLI auth, OpenClaw's default heartbeat cadence becomes one hour while
-  `heartbeat.every` is unset; those heartbeat turns also use Opus first.
+  Heartbeat turns also use Opus first. Logs show a 30-minute cadence on both 2026.9.3 and
+  2026.9.6 (corrected 2026-09-27; an earlier note here claimed one hour).
 
 Private backups (configuration, workspace policy, memory note, observer bundle), the applied
 patch, smoke scripts and receipts are in
@@ -146,11 +168,12 @@ agent-to-worker report call passed; credentials and long-term memories are not s
 
 - Profile: `personaledge`; state: `~/.openclaw-personaledge`.
 - CLI: `~/.local/openclaw-2026.8.1/.personal-edge-management/bin/openclaw`.
-- Runtime: OpenClaw **2026.9.3** and Homebrew Node 26.5.0. The official stable updater upgraded
-  2026.8.1 in place on 2026-09-06; the historical installation directory name did not change.
-  The 2026-09-09 update also aligned the official Codex plugin to 2026.9.3.
-  Four scoped compatibility/recovery/memory patches described below were requalified for 2026.9.3 and installed. This is not
-  a claim of byte identity with the upstream package.
+- Runtime: OpenClaw **2026.9.6** and Homebrew Node 26.5.0. The official stable updater upgraded
+  2026.8.1 in place on 2026-09-06, to 2026.9.3 on 2026-09-09 and to 2026.9.6 on 2026-09-27; the
+  historical installation directory name did not change. The official Codex plugin is 2026.9.6.
+  Four reviewed repairs (GLM token field, memory admission, Telegram delivery, claude-cli `Agent`
+  denial) are pinned in `runtime-patch-specs.json` and installed. This is not a claim of byte
+  identity with the upstream package.
 - Configured conversation model: `anthropic/claude-opus-5-5` via `claude-cli`, thinking `high`,
   then `openai/gpt-6-sol`, then GLM for the main agent. `openai/gpt-5.6-sol` remains a separate
   specialist route.
