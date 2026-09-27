@@ -828,3 +828,17 @@ Telegram 워크플로, Telegram 감시기)로 설치했고 5개 설치본이 저
 `healthy-no-incident`였다. 과거 실제 영수증에 새 읽기 판정을 적용하면 gateway-install 영역은
 24/24 완료, 22:34 전체 검토는 8/127로 미완료로 판정된다. `rollback-gateway.sh`는 설치본 없이
 저장소에서 실행한다. Gateway 재시작·모델 호출·Telegram 전송은 없었다. 사용자 커밋 `eac3a49`.
+
+### 2026-09-28 영역별 검토 나머지 발견사항 처리
+
+첫 영역별 검토의 실행 가능한 발견사항 31건(high 3건과 후보 3건은 앞 절에서 처리) 중 나머지를
+04:4x~04:58 KST에 처리했다. 각 수정은 이전 코드에서 실패하는 시험을 먼저 확인했다.
+
+| 결과 | 발견 |
+| --- | --- |
+| 수정 | 수용 시험 messageId 재사용 거부, 응답 계약 smoke의 assert 제거·정리 실패 fail-closed·기본 경로 Opus, fixture 루트 정규화, soak 수집기 시간 제한(`soak_bounded`), OpenRouter 자격 도우미의 런타임 버전을 patch spec으로 판정(2026.9.6 `.mjs` resolver), 영역 검토의 삭제 파일 보고, 사용 불가 절차의 재사용 무결성 집계, 운영 결과 JSON 중복 키·비유한 수 거부, 보고서 worker 스킬 범위(지원 파일·경로 인수 거부), 도구 결과 크기 상한을 최악 이스케이프 기준으로, 영역 요청의 후보 정책 문구, Hermes 파일럿 도구 호출·복구 출처 검증, 유휴 세션 개수 엄격 검사, Hermes worker 설치·구성 실패 원복, 미래 시각 영수증 거부, 백업 복구 메타데이터 형태 검사, delivery 패치 kind 중복 거부, 패치 경로 내부 부모 symlink 거부, 구형 Sol 설치기 Gateway 정지 확인, 운영 문서 첫머리 경로 정리 |
+| 이미 처리 | 주간 브리핑 수신자 결속(작업 상태 게시가 소유자 변경 시 전송 전 거부, 기존 시험 존재), 독립 패치 스크립트 덮어쓰기(`flag: 'wx'`로 이미 거부), 브리핑 route 기록, 롤백 재시작 회귀 시험 |
+| 오판 | 빈 replacement 계약: "빈 목록"을 뜻하는 문구를 빈 내용으로 읽음. 문구만 명확히 고침 |
+| 보류 | `telegram-delivery-retry.mjs`의 `O_NOFOLLOW` 단일 descriptor 읽기: OpenClaw 런타임에 설치된 패치 파일이라 수정하려면 patch spec 재자격·설치와 Gateway 재시작이 필요하다. 정책 파일은 소유자 전용 0700 디렉터리에 있어 위험이 낮아 다음 런타임 패치 재자격 때 함께 처리한다 |
+
+검증: Python 시험 26개 파일(Hermes runtime), 시스템 Python 3.9로 요약·브리핑·작업 상태·운영·백업·수용·설치·smoke·패치 시험, `test-openrouter-diagnostic.mjs` 7개, 배포 자산 전체 시험이 통과했다. 인수 없이 실행한 기존 Node 패치 시험 5개는 설치 패키지 경로 인수가 필요한 설계라 실행 대상에서 제외했다(변경 없음). `hermes-report-worker.py`와 `install-hermes-worker.py`는 운영 설치기가 보존 의존성으로 요구하므로 `preserved-update-backup.sLsWUY`에 백업 후 `bin/`에 먼저 배치하고 `deployment.json`에 이전·현재 해시를 기록했다. 이후 공식 설치기 3개(Hermes 운영 백업 `operations-install-backups/20260927T195755Z-9867134a4e`, Telegram 워크플로, 감시기)로 설치했고 설치본 14개가 저장소와 같다. 설치 후 운영 상태 `ok`, 작업 상태 조회 정상, `--mode incident`는 모델 없이 `healthy-no-incident`였다. 새 집계로 보면 두 학습 절차는 2026.9.6 업그레이드 후 `version-mismatch`로 제공되지 않으며 재사용 증거 손상은 0건이다. 실제 보고서 프로필의 스킬 스냅샷은 학습 스킬 해시와 같았다. Gateway 재시작·Telegram 전송은 없었다.
