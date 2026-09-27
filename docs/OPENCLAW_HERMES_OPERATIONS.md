@@ -665,3 +665,57 @@ SQLite 42개와 파일 57,678개, archive·manifest SHA-256과 최신 영수증�
 코드 검사·설치·설치본의 mock 동작·Gateway 확인을 연결한다. 두 파일은 위
 `verificationRef` 규격의 경로와 SHA-256으로 경험에 등록하며, `completion.json`에서
 원본 주간 실패, 백업 복구, 코드 설치, 실제 모델 수용 대기를 구분한다.
+
+### 2026-09-27 장애 분석 범위 한정과 근거 불충분 보존
+
+9월 11~27일 자동 장애 분석 8회 중 완료는 1회였다. 실패 7회 중 5회는 입력 추정 예산 초과,
+1회는 시간초과, 1회(9/23)는 발견 하나의 근거 ID가 허용 목록에 없어 170초 분석 전체가 버려진
+경우였다. 영수증을 보면 장애 분석도 소스 124~128개(약 1.8MB)와 릴리스 노트를 받았고, baseline이
+없으면 `fullReview`가 켜져 사건과 무관한 `hermes-operations.py`, 테스트, 문서를 읽었다. 9/19·9/22
+실패는 한 번의 병렬 읽기 묶음이 다음 요청을 호출당 60,000 한도 위로 밀어 올린 경우였고, 이때
+조기 최종 작성 전환은 발동하지 않았다(`finalization_dispatches=0`).
+소유자 요청으로 다음 세 가지를 바꿨다. 모델 호출은 추가하지 않았다.
+
+- **장애 분석 범위 한정.** `--mode incident`는 감시기 상태 파일
+  (`telegram-watchdog-status.json`)에서 사건 ID, 시작·회복 시각, 사건 이슈와 Hermes에 넘긴 이슈,
+  마지막 Gateway 실패 코드를 고정 코드로만 읽어 `evidence.incident`에 넣는다. 알림 문구, 검사 출력,
+  요약 본문은 읽지 않는다. 모델이 읽을 수 있는 소스는 해당 사건의 검사로 제한한다. 항상
+  `telegram-ops-status.py`와 `OPENCLAW_OPERATIONS_KO.md`를 넣고, Gateway 계열이면
+  `verify-telegram-gateway.py`·`telegram-watchdog.py`·`runtime-patch-specs.json`을,
+  `task-long-running`이면 `telegram-task-status.py`·`OPENCLAW_TASK_STATUS.md`를 더한다.
+  릴리스 노트는 수집하지 않고(`upstreamSkipped: incident-scope`, `upstreamComplete: null`),
+  검토 이력·적용 기록·패치 범위는 모델 입력에서 뺀다. baseline이 없어도 `fullReview`는 켜지지
+  않는다. 후보 검사용 snapshot과 디스크의 `evidence.json`은 전체를 유지한다. 명시적
+  `--full-review`는 이전의 넓은 동작을 그대로 쓴다. 사건 이슈 목록은 감시기의
+  `HERMES_INCIDENT_ISSUES`와 같아야 하며 테스트가 이를 확인한다.
+- **도구 한 묶음의 소스 상한.** worker는 매 요청을 예약한 뒤 다음 요청이 호출당 한도와 남은 누적
+  한도 안에 들도록, 이번 도구 묶음이 전달할 수 있는 소스 바이트를 계산한다(확장 계수 1.25,
+  예비 6,000). 한도를 넘는 페이지는 잘라서 `next_line`을 주고, 한 줄도 들어가지 않으면 복구 가능한
+  `SOURCE_ROUND_BUDGET_EXHAUSTED`를 돌려준다. 9/19 조건(직전 27,702, 누적 76,371)을 재현한
+  시험에서 다음 요청은 60,000 이하로 유지됐다. 이 상한은 주간·수동 검토에도 적용된다.
+- **근거 ID 오류 보존.** 발견의 근거 목록에 허용되지 않은 항목이 있으면 그 항목만 지우고,
+  발견에 `evidenceStatus: "insufficient"`와 `unverifiedCitationCount`를 붙인 뒤 나머지 분석과
+  발견을 유지한다. 목록 형식 오류, 13개 이상, 모델이 직접 붙인 `evidenceStatus`는 여전히 거부한다.
+  controller 영수증은 `insufficientEvidenceFindingIds`를, 보고서는 제목 뒤 `(근거 불충분)`을,
+  지식 원장은 `evidenceInsufficient`를 기록한다. 같은 발견이 이후 근거와 함께 다시 보이면
+  표시가 지워진다. `procedure_uses`의 근거 검사는 바꾸지 않았다.
+
+검증: worker 43개(설치된 Hermes 0.21.1 runtime), controller 58개, 지식 원장 31개, 변경분 6개,
+설치기 15개, 패치 18개(환경 opt-in 3개 건너뜀), 절차 파일럿 13개, 감시기 운영 시험이 통과했다.
+공식 설치기로 설치했고, 한정 지시문 조건을 고친 두 번째 설치의 백업은
+`operations-install-backups/20260927T093433Z-d75815d806`이다(첫 설치 `20260927T093219Z-6b6f9b21a9`). 설치본 해시가 저장소와 같고 두
+`telegram-ops-status.py` 설치본은 바뀌지 않았다. 모델 없이 실제 운영 상태와 9/27 사건
+`33cc4c082a72` 기록으로 장애 분석 요청을 만들어 보니, 소스는 5개 93,012 bytes, 첫 요청 추정은
+4,258로 9/27 실제 실행의 18,195보다 작았다. `record-applied`로 적용을 기록했다. Gateway 재시작,
+Telegram 전송, 모델 호출은 없었다. 새 장애 분석의 실제 모델 실행은 다음 자연 사건에서 처음
+관찰한다. 현재 운영이 정상이면 `--mode incident`는 모델 없이 `healthy-no-incident`로 끝난다.
+
+주간 점검 heartbeat `hermes-openclaw`는 2026-09-23 21:51:42 KST부터 `PAUSED`다. 같은
+21:51:41~43 KST 2초 사이에 Codex 자동화 6개(autobot 4개, `daily-bug-scan`, `hermes-openclaw`)가
+모두 멈췄다. 그 시각 Codex Desktop 창이 활성 상태였고 Desktop 로그에 에이전트의
+`automation_update` 호출은 없었다. 따라서 앱 화면에서 소유자가 직접 멈춘 것으로 보며, 장애나
+에이전트가 멈춘 것은 아니다. 그래서 9월 26일 주간 점검은 실행되지 않았다. 소유자 요청으로
+2026-09-27 22:11 KST에 ChatGPT(Codex) 앱의 예약 화면에서 `hermes-openclaw`만 재개했다. 앱에
+`활성`, 다음 실행 10월 3일 토요일 10:00이 표시됐고, 파일에도 `status = "ACTIVE"`가 기록됐다.
+자동화 상태는 앱의 SQLite `automations` 테이블이 관리하므로 `automation.toml`을 직접 고치지
+않았다. 나머지 5개는 `PAUSED`로 두었다. 재개 후 첫 자연 실행은 아직 일어나지 않았다.

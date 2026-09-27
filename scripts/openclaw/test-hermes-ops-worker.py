@@ -480,12 +480,14 @@ class OpsWorkerTest(unittest.TestCase):
 
     def test_output_requires_known_evidence_and_never_accepts_malformed_json(self):
         self.assertEqual(worker.validate_result(json.dumps(self.result), self.request), self.result)
-        for mutation in ("extra", "evidence", "duplicate", "snapshot", "nan"):
+        for mutation in ("extra", "evidence", "self-labelled", "duplicate", "snapshot", "nan"):
             result = copy.deepcopy(self.result)
             if mutation == "extra":
                 result["applied"] = True
             elif mutation == "evidence":
-                result["findings"][0]["evidence"] = ["invented evidence"]
+                result["findings"][0]["evidence"] = "status"
+            elif mutation == "self-labelled":
+                result["findings"][0]["evidenceStatus"] = "insufficient"
             elif mutation == "duplicate":
                 result["findings"].append(copy.deepcopy(result["findings"][0]))
             elif mutation == "snapshot":
@@ -496,6 +498,76 @@ class OpsWorkerTest(unittest.TestCase):
                 worker.validate_result(json.dumps(result), self.request)
         with self.assertRaisesRegex(worker.PolicyError, "RESULT_JSON_INVALID"):
             worker.validate_result("```json\n{}\n```", self.request)
+
+    def test_mis_cited_evidence_keeps_the_finding_but_marks_it_insufficient(self):
+        # 2026-09-23: a 170-second incident review was discarded because one finding cited a key
+        # that was not in the allowed list. The analysis and the other findings must survive.
+        self.result["findings"].append({"id": "finding-2", "kind": "issue", "severity": "medium",
+            "title": "감시기 실패", "evidence": ["status", "status.issues", 7, "invented evidence"],
+            "recommendation": "실패 단계를 확인하세요."})
+        parsed = worker.validate_result(json.dumps(self.result), self.request)
+        self.assertEqual(parsed["findings"][0], self.result["findings"][0])
+        kept = parsed["findings"][1]
+        self.assertEqual(kept["evidence"], ["status"])
+        self.assertEqual(kept["evidenceStatus"], "insufficient")
+        self.assertEqual(kept["unverifiedCitationCount"], 3)
+        self.assertEqual(kept["title"], "감시기 실패")
+        self.assertEqual(parsed["analysis"], self.result["analysis"])
+        self.assertNotIn("invented evidence", json.dumps(parsed))
+        self.result["findings"][1]["evidence"] = ["status"] * 13
+        with self.assertRaisesRegex(worker.PolicyError, "FINDING_EVIDENCE_INVALID"):
+            worker.validate_result(json.dumps(self.result), self.request)
+
+    def test_one_tool_round_cannot_push_the_next_dispatch_past_its_limit(self):
+        # 2026-09-19 incident: after a 27,702 dispatch (76,371 cumulative) one batch of parallel reads
+        # made the next request exceed 60,000 and the whole run was rejected.
+        content = ("y" * 999 + "\n") * 400
+        self.request["sources"][self.source] = {"sha256": hashlib.sha256(content.encode()).hexdigest(),
+                                                "content": content}
+        budget = worker.ModelInputBudget({})
+        budget.metrics["estimated_input_tokens"] = 76371 - 27702
+        budget.reserve({"input": "z" * (27702 * 4 - 16)})
+        allowance = budget.round_allowance_bytes()
+        tools = worker.BundleTools(self.request)
+        tools.start_round(allowance)
+        replies, start = [], 1
+        for _ in range(12):
+            reply = json.loads(tools.dispatch("ops_read_source", {"path": self.source, "start_line": start,
+                                                                   "line_count": 200}))
+            replies.append(reply)
+            if reply["success"]:
+                start = reply["next_line"]
+        delivered = tools.read_metrics["delivered_bytes"]
+        self.assertLessEqual(delivered, allowance)
+        next_dispatch = budget.last_estimate + delivered * worker.TOOL_RESULT_EXPANSION / 4
+        self.assertLessEqual(next_dispatch + worker.ROUND_RESERVE_ESTIMATE, worker.MAX_MODEL_INPUT_ESTIMATE)
+        rejected = replies[-1]
+        self.assertFalse(rejected["success"])
+        self.assertEqual(rejected["error_code"], "SOURCE_ROUND_BUDGET_EXHAUSTED")
+        self.assertTrue(rejected["recoverable"])
+        self.assertNotIn("yyyy", json.dumps(rejected))
+        # The next measured dispatch opens a new round.
+        tools.start_round(4000)
+        page = tools.read_source({"path": self.source, "start_line": start, "line_count": 200})
+        self.assertEqual(page["end_line"] - page["start_line"] + 1, 4)
+        self.assertEqual(page["next_line"], start + 4)
+        self.assertGreaterEqual(tools.read_metrics["round_limited_reads"], 1)
+
+    def test_round_allowance_also_respects_the_cumulative_limit(self):
+        budget = worker.ModelInputBudget({})
+        # 10,004 reserved leaves 9,992 cumulative, less than a repeat of this request.
+        budget.metrics["estimated_input_tokens"] = worker.MAX_CUMULATIVE_MODEL_INPUT_ESTIMATE - 20000
+        budget.reserve({"input": "z" * 40000})
+        self.assertEqual(budget.round_allowance_bytes(), 0)
+        self.assertEqual(worker.BundleTools(self.request).round_allowance, None)
+
+    def test_incident_prompt_is_scoped_only_when_the_bundle_was_narrowed(self):
+        # An incident run with an explicit --full-review carries no evidence.incident.
+        self.assertNotIn("incident-scoped review", worker.build_prompt(self.request))
+        self.request["evidence"]["incident"] = {"available": True, "reviewScope": {"issues": []}}
+        self.assertIn("incident-scoped review", worker.build_prompt(self.request))
+        self.request["mode"] = "manual"
+        self.assertNotIn("incident-scoped review", worker.build_prompt(self.request))
 
     def test_completion_requires_successful_native_skill_list_and_read(self):
         worker.assert_skill_reads([{"name": "skills_list", "succeeded": True}, {"name": "skill_view", "succeeded": True}])

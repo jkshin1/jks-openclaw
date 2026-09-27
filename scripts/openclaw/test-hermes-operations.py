@@ -427,10 +427,11 @@ class ReviewMemoryTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
 
     def test_tampered_baseline_forces_full_review_instead_of_hiding_unknown_changes(self):
-        first = self.review()
+        # Incident reviews are scoped and never widen; the broad-review rule is a manual/weekly one.
+        first = self.review(mode="manual")
         source = Path(first["receiptPath"]).parent / "snapshot/scripts/openclaw/telegram-ops-status.py"
         source.write_text("COUNT = 999\n")
-        second = self.review()
+        second = self.review(mode="manual")
         self.assertEqual(second["status"], "reviewed")
         self.assertEqual(self.calls[-1]["changeContext"]["baselineStatus"], "unavailable")
         self.assertTrue(self.calls[-1]["changeContext"]["fullReview"])
@@ -582,6 +583,171 @@ class ReviewMemoryTests(unittest.TestCase):
                                         collector=lambda _s: {"ok": True, "issues": []})
         self.assertFalse(evidence["failureDetailAvailable"])
         self.assertEqual(evidence["operations"], {"ok": True, "issues": []})
+
+
+class IncidentScopeTests(unittest.TestCase):
+    """An incident review sees its own checks, not the whole tree or release notes."""
+
+    FILES = ("scripts/openclaw/telegram-ops-status.py", "scripts/openclaw/verify-telegram-gateway.py",
+             "scripts/openclaw/telegram-watchdog.py", "scripts/openclaw/runtime-patch-specs.json",
+             "scripts/openclaw/telegram-task-status.py", "scripts/openclaw/hermes-operations.py",
+             "docs/OPENCLAW_OPERATIONS_KO.md", "docs/OPENCLAW_TASK_STATUS.md", "docs/OPENCLAW_TELEGRAM.md")
+    GATEWAY = ["scripts/openclaw/telegram-ops-status.py", "docs/OPENCLAW_OPERATIONS_KO.md",
+               "scripts/openclaw/verify-telegram-gateway.py", "scripts/openclaw/telegram-watchdog.py",
+               "scripts/openclaw/runtime-patch-specs.json"]
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name).resolve()
+        self.root, self.repo = self.home / "worker", self.home / "repo"
+        self.state, self.package = self.home / "state", self.home / "package"
+        for path in (self.root, self.repo / "scripts/openclaw", self.repo / "docs",
+                     self.state / "operations", self.package):
+            path.mkdir(parents=True)
+        for name in self.FILES:
+            (self.repo / name).write_text("{}\n" if name.endswith(".json") else "# " + name + "\n")
+        self.calls = []
+        self.findings = []
+        self.issues = ["observer-gateway-unhealthy"]
+        self.args = argparse.Namespace(root=self.root, repo=self.repo, state_dir=self.state,
+                                       package=self.package, mode="incident", force=False,
+                                       request="", collect_only=False, offline=False)
+
+    def observer(self, issues, dispatched=True, **extra):
+        status = {"observedAt": "2026-09-27T05:56:40+00:00", "consecutiveFailures": 3,
+                  "gateway": {"ok": False, "live": False, "reason": "gateway-policy-or-runtime-check-failed"},
+                  "incident": {"id": "33cc4c082a72", "active": True, "startedAt": "2026-09-27T05:51:19+00:00",
+                               "issues": issues, "alertedIssues": issues, "failureDelivered": True},
+                  "hermesDispatch": {"lastIncidentId": "33cc4c082a72" if dispatched else "other",
+                                     "issues": issues, "state": "dispatched"},
+                  **extra}
+        (self.state / "operations/telegram-watchdog-status.json").write_text(json.dumps(status))
+
+    def evidence(self, *_):
+        return {"operations": {"ok": False, "issues": list(self.issues), "warnings": []},
+                "reviewHistory": {"reviews": [{"runId": "old"}]}, "appliedChanges": {"count": 0}}
+
+    def worker(self, root, request, receipt, log):
+        payload = json.loads(request.read_text())
+        self.calls.append(payload)
+        return {"completed": True, "model": "gpt-5.6-sol", "usage": {"total_tokens": 1},
+                "tool_calls": [], "result": {"schemaVersion": 1, "analysis": "분석",
+                                             "findings": list(self.findings), "runbook_candidate": "",
+                                             "patches": {"schemaVersion": 1, "replacements": [],
+                                                         "snapshotSha256": payload["snapshotSha256"]}}}
+
+    def review(self, upstream=None, **overrides):
+        args = argparse.Namespace(**{**vars(self.args), **overrides})
+        upstream = upstream or (lambda: self.fail("an incident review fetched release notes"))
+        return ops.run_review(args, worker_runner=self.worker, evidence_collector=self.evidence,
+                              upstream_collector=upstream)
+
+    def test_gateway_incident_offers_only_its_checks_and_no_release_notes(self):
+        self.observer(["gateway-policy-or-runtime-check-failed"])
+        result = self.review()
+        self.assertEqual(result["status"], "reviewed")
+        request = self.calls[-1]
+        self.assertEqual(list(request["sources"]), self.GATEWAY)
+        self.assertEqual(request["upstream"], [])
+        self.assertFalse(request["changeContext"]["fullReview"])
+        self.assertEqual(request["changeContext"]["baselineStatus"], "none")
+        self.assertEqual(request["request"], ops.INCIDENT_REQUEST)
+        for key in ("reviewHistory", "appliedChanges", "runtimePatchCoverage"):
+            self.assertNotIn(key, request["evidence"])
+        incident = request["evidence"]["incident"]
+        self.assertEqual(incident["id"], "33cc4c082a72")
+        self.assertEqual(incident["reviewScope"]["issues"], ["gateway-policy-or-runtime-check-failed"])
+        self.assertEqual(incident["gatewayFailureAtLastCheck"], "gateway-policy-or-runtime-check-failed")
+        self.assertEqual(result["incidentScope"]["sourcePaths"], self.GATEWAY)
+        self.assertIsNone(result["upstreamComplete"])
+        self.assertEqual(result["upstreamSkipped"], "incident-scope")
+        # The immutable snapshot and on-disk evidence stay complete.
+        directory = Path(result["receiptPath"]).parent
+        self.assertTrue((directory / "snapshot/scripts/openclaw/hermes-operations.py").is_file())
+        self.assertIn("reviewHistory", json.loads((directory / "evidence.json").read_text()))
+
+    def test_task_incident_adds_task_sources_without_gateway_checks(self):
+        self.issues = ["task-long-running"]
+        self.observer(["task-long-running"])
+        self.review()
+        self.assertEqual(list(self.calls[-1]["sources"]),
+                         ["scripts/openclaw/telegram-ops-status.py", "docs/OPENCLAW_OPERATIONS_KO.md",
+                          "scripts/openclaw/telegram-task-status.py", "docs/OPENCLAW_TASK_STATUS.md"])
+
+    def test_without_an_observer_record_current_issues_choose_the_scope(self):
+        self.issues = ["task-long-running", "backup-stale"]
+        self.review()
+        incident = self.calls[-1]["evidence"]["incident"]
+        self.assertFalse(incident["available"])
+        self.assertEqual(incident["reviewScope"]["issues"], ["task-long-running"])
+        self.assertIn("scripts/openclaw/telegram-task-status.py", self.calls[-1]["sources"])
+
+    def test_a_later_incident_baseline_diffs_only_scoped_sources(self):
+        self.observer(["gateway-check-timeout"])
+        self.review()
+        (self.repo / "scripts/openclaw/hermes-operations.py").write_text("# unrelated change\n")
+        (self.repo / "scripts/openclaw/telegram-watchdog.py").write_text("# watchdog change\n")
+        self.issues = ["observer-gateway-unhealthy", "gateway-check-timeout"]
+        self.review()
+        delta = self.calls[-1]["changeContext"]
+        self.assertEqual(delta["baselineStatus"], "available")
+        self.assertEqual(delta["changedSourcePaths"], ["scripts/openclaw/telegram-watchdog.py"])
+        self.assertEqual(delta["removedSourcePaths"], [])
+
+    def test_observer_record_exports_fixed_codes_and_times_only(self):
+        self.observer(["gateway-check-timeout", "rm -rf /", 7], dispatched=False,
+                      lastNotification={"text": "PRIVATE_MESSAGE_TEXT"},
+                      summary={"detail": "PRIVATE_MESSAGE_TEXT"})
+        status = json.loads((self.state / "operations/telegram-watchdog-status.json").read_text())
+        status["gateway"]["reason"] = "stderr: PRIVATE_MESSAGE_TEXT"
+        status["incident"]["startedAt"] = "not a time"
+        (self.state / "operations/telegram-watchdog-status.json").write_text(json.dumps(status))
+        incident = ops.observer_incident(self.state)
+        self.assertNotIn("PRIVATE_MESSAGE_TEXT", json.dumps(incident))
+        self.assertEqual(incident["issues"], ["gateway-check-timeout"])
+        self.assertEqual(incident["dispatchedIssues"], [])
+        self.assertIsNone(incident["gatewayFailureAtLastCheck"])
+        self.assertIsNone(incident["startedAt"])
+
+    def test_explicit_full_review_keeps_the_broad_incident_behaviour(self):
+        self.observer(["gateway-check-timeout"])
+        self.review(full_review=True, upstream=lambda: [{"name": "openclaw", "ok": True, "tag": "v1", "body": "r"}])
+        request = self.calls[-1]
+        self.assertEqual(len(request["sources"]), len(self.FILES))
+        self.assertTrue(request["changeContext"]["fullReview"])
+        self.assertNotIn("incident", request["evidence"])
+
+    def test_insufficiently_cited_finding_is_kept_labelled_and_recorded(self):
+        self.observer(["gateway-check-timeout"])
+        self.findings = [{"id": "gateway-step-unknown", "kind": "issue", "severity": "medium",
+                          "title": "실패 단계 미확인", "evidence": ["operations"], "recommendation": "확인",
+                          "evidenceStatus": "insufficient", "unverifiedCitationCount": 1},
+                         {"id": "queue-healthy", "kind": "observation", "severity": "info",
+                          "title": "큐 정상", "evidence": ["operations"], "recommendation": "유지"}]
+        result = self.review()
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(result["insufficientEvidenceFindingIds"], ["gateway-step-unknown"])
+        report = Path(result["reportPath"]).read_text()
+        self.assertIn("실패 단계 미확인 (근거 불충분)", report)
+        self.assertNotIn("큐 정상 (근거 불충분)", report)
+        knowledge = ops.module("hermes-ops-knowledge")
+        rows = {row["id"]: row for row in knowledge.summary(self.root / "operations")["findingLifecycle"]}
+        self.assertTrue(rows["gateway-step-unknown"]["evidenceInsufficient"])
+        self.assertNotIn("evidenceInsufficient", rows["queue-healthy"])
+        # A later supported sighting of the same finding clears the label.
+        self.findings[0] = {key: value for key, value in self.findings[0].items()
+                            if key not in {"evidenceStatus", "unverifiedCitationCount"}}
+        self.issues = ["observer-gateway-unhealthy", "gateway-check-timeout"]
+        self.review(force=True)
+        rows = {row["id"]: row for row in knowledge.summary(self.root / "operations")["findingLifecycle"]}
+        self.assertNotIn("evidenceInsufficient", rows["gateway-step-unknown"])
+
+    def test_incident_issue_set_matches_the_observer(self):
+        spec = importlib.util.spec_from_file_location("watchdog", Path(__file__).with_name("telegram-watchdog.py"))
+        watchdog = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(watchdog)
+        self.assertEqual(ops.INCIDENT_ISSUES, watchdog.HERMES_INCIDENT_ISSUES)
 
 
 if __name__ == "__main__":

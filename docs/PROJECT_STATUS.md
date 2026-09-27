@@ -24,6 +24,26 @@ template/observer copy were updated together. One synthetic Opus agent edit pass
 structure check and a visual review of all four rendered pages. No Telegram attachment or real deck
 was tested; see [the productivity record](OPENCLAW_PRODUCTIVITY.md#powerpointpptx-addition-2026-09-27-kst).
 The observer's pre-existing `backup-stale` issue (220 consecutive runs at 03:35 UTC) was left as found.
+Later on 2026-09-27 KST, at the owner's request, Hermes incident reviews were narrowed. Only 1 of 8
+automatic incident reviews since 2026-09-11 had completed: five ran out of input estimate, one timed
+out, and one discarded a finished analysis over a single mis-cited evidence ID. `--mode incident` now
+reads the observer's incident record as fixed codes only, offers the model just that incident's
+checks (5 files, 93 KB, instead of about 128 files and 1.8 MB), and skips release notes and the full
+review. The worker caps each tool round so the next request stays under its per-dispatch estimate. A
+finding with an unverifiable citation is kept and labelled `evidenceStatus: insufficient` instead of
+failing the run. 184 offline tests ran without failure (three opt-in sandbox skips), and the installed
+copies match the repository. A no-model
+build of an incident request from live state estimated 4,258 input against 18,195 in the real 2026-09-27
+run. No model run, Gateway restart or Telegram send was made; the first real scoped incident review
+will be the next natural incident. The Hermes runtime stays at 0.21.1 by the owner's choice until a
+curated 0.22.0 release. The weekly `hermes-openclaw` Codex heartbeat, described below as ACTIVE, has
+been `PAUSED` since 2026-09-23 21:51 KST. All six Codex automations were paused within two seconds
+while the Codex Desktop window was focused, with no agent `automation_update` call, so this was a
+manual pause in the app and the 2026-09-26 weekly review did not run. At the owner's request only
+`hermes-openclaw` was resumed from the app's scheduled-task screen at 22:11 KST (ACTIVE, next run
+Saturday 2026-10-03 10:00 KST; the other five stay paused). Its first natural run after resuming has
+not happened yet. Record:
+[OPENCLAW_HERMES_OPERATIONS.md](OPENCLAW_HERMES_OPERATIONS.md#2026-09-27-장애-분석-범위-한정과-근거-불충분-보존).
 On 2026-09-26 KST, the main agent's chain became `anthropic/claude-opus-5-5` →
 `openai/gpt-6-sol` → OpenRouter GLM, and the global default became Opus → Sol. Opus runs through
 the `claude-cli` runtime on this Mac's own Claude Code login (Homebrew `claude-code@latest`

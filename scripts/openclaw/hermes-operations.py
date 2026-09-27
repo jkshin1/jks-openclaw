@@ -41,6 +41,24 @@ DOCUMENTS = (
     "OPENCLAW_HEARTBEAT_RECOVERY_20260910.md", "OPENCLAW_UPDATE_20260909.md",
     "OPENCLAW_HERMES_OPERATIONS.md", "OPENCLAW_BRIEFING.md", "OPENCLAW_WEEKLY_BRIEFING.md",
 )
+# An incident review reads the checks that raised the incident, not the whole tree. Offering every
+# source made incident runs spend their input budget on unrelated files (7 of 8 failed, 2026-09).
+# Keep this set equal to telegram-watchdog.HERMES_INCIDENT_ISSUES.
+INCIDENT_ISSUES = frozenset({
+    "gateway-policy-or-runtime-check-failed", "gateway-check-timeout", "gateway-check-unavailable",
+    "observer-gateway-unhealthy", "task-long-running", "dreaming-unhealthy",
+})
+INCIDENT_BASE_SOURCES = ("scripts/openclaw/telegram-ops-status.py", "docs/OPENCLAW_OPERATIONS_KO.md")
+INCIDENT_GATEWAY_SOURCES = ("scripts/openclaw/verify-telegram-gateway.py", "scripts/openclaw/telegram-watchdog.py",
+                            "scripts/openclaw/runtime-patch-specs.json")
+INCIDENT_TASK_SOURCES = ("scripts/openclaw/telegram-task-status.py", "docs/OPENCLAW_TASK_STATUS.md")
+# Update impact, release notes and review history belong to weekly and manual reviews.
+INCIDENT_EVIDENCE_KEYS = ("observedAt", "scope", "operations", "configuration", "openclaw", "hermes",
+                          "failureDetailAvailable", "historicalLogTailCounts", "findingLifecycle",
+                          "procedureKnowledge", "upstreamChecked", "incident")
+INCIDENT_REQUEST = ("감시기가 연 현재 사건의 원인을 진단하세요. 제공된 사건 관련 소스와 근거만 사용하고, "
+                    "업데이트 영향 검토와 전체 소스 감사는 이번 범위가 아닙니다.")
+OBSERVER_CODE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
 def module(name):
@@ -312,6 +330,64 @@ def collect_evidence(state, package, root, collector=None):
     return result
 
 
+def observer_timestamp(value):
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.isoformat() if parsed.tzinfo is not None else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def observer_codes(value):
+    return sorted({item for item in value if isinstance(item, str) and OBSERVER_CODE.fullmatch(item)}
+                  if isinstance(value, list) else [])
+
+
+def observer_incident(state):
+    """The observer's current incident as fixed codes and times; never check output or messages."""
+    try:
+        saved = read_json(safe(state / "operations/telegram-watchdog-status.json", True))
+        require(isinstance(saved, dict), "OBSERVER_STATUS_INVALID")
+    except (OSError, ValueError, TypeError):
+        return {"available": False, "scope": "observer-incident-fixed-codes-only"}
+    incident = saved.get("incident") if isinstance(saved.get("incident"), dict) else {}
+    dispatch = saved.get("hermesDispatch") if isinstance(saved.get("hermesDispatch"), dict) else {}
+    gateway = saved.get("gateway") if isinstance(saved.get("gateway"), dict) else {}
+    incident_id = incident.get("id")
+    incident_id = incident_id if isinstance(incident_id, str) and re.fullmatch(r"[a-f0-9]{6,32}", incident_id) else None
+    failures = saved.get("consecutiveFailures")
+    return {"available": True, "scope": "observer-incident-fixed-codes-only", "id": incident_id,
+            "active": incident.get("active") is True,
+            "startedAt": observer_timestamp(incident.get("startedAt")),
+            "recoveredAt": observer_timestamp(incident.get("recoveredAt")),
+            "issues": observer_codes(incident.get("issues")),
+            "dispatchedIssues": observer_codes(dispatch.get("issues"))
+            if incident_id and dispatch.get("lastIncidentId") == incident_id else [],
+            "lastCheckAt": observer_timestamp(saved.get("observedAt")),
+            "gatewayOkAtLastCheck": gateway.get("ok") if isinstance(gateway.get("ok"), bool) else None,
+            "gatewayFailureAtLastCheck": gateway.get("reason") if gateway.get("ok") is False
+            and isinstance(gateway.get("reason"), str) and OBSERVER_CODE.fullmatch(gateway["reason"]) else None,
+            "consecutiveFailures": failures if type(failures) is int and failures >= 0 else None}
+
+
+def incident_view(evidence, incident, available_paths):
+    """Model evidence and sources for one incident: the issues that raised it and their checks."""
+    issues = (incident.get("dispatchedIssues") or incident.get("issues")
+              or (evidence.get("operations") or {}).get("issues") or [])
+    qualified = sorted(INCIDENT_ISSUES.intersection(issues))
+    paths = list(INCIDENT_BASE_SOURCES)
+    if any(issue.startswith("gateway-") or issue == "observer-gateway-unhealthy" for issue in qualified):
+        paths += INCIDENT_GATEWAY_SOURCES
+    if "task-long-running" in qualified:
+        paths += INCIDENT_TASK_SOURCES
+    paths = [path for path in dict.fromkeys(paths) if path in available_paths]
+    view = {key: evidence[key] for key in INCIDENT_EVIDENCE_KEYS if key in evidence}
+    view["incident"] = dict(incident, reviewScope={
+        "issues": qualified, "sourcePaths": paths,
+        "notIncluded": ["full-source-audit", "update-impact", "release-notes", "review-history"]})
+    return view, paths
+
+
 def review_baseline(operations, previous):
     """Read a completed review only after checking its immutable snapshot hashes."""
     if not previous:
@@ -478,7 +554,8 @@ def report_text(receipt, result):
     lines = ["# Hermes OpenClaw 운영 검토", "", "실행: " + receipt["runId"],
              "시각: " + receipt["startedAt"], "", result.get("analysis", ""), ""]
     for finding in result.get("findings", []):
-        lines += ["- " + finding.get("severity", "info") + ": " + finding.get("title", finding.get("id", "finding")),
+        label = " (근거 불충분)" if finding.get("evidenceStatus") == "insufficient" else ""
+        lines += ["- " + finding.get("severity", "info") + ": " + finding.get("title", finding.get("id", "finding")) + label,
                   "  " + finding.get("recommendation", "")]
     lines += ["", "코드 후보 검증: " + str(receipt.get("candidateVerification", {}).get("status", "none")),
               "운영 반영: 별도 배포 기록 필요", "Telegram 전송: 수행하지 않음", ""]
@@ -531,14 +608,20 @@ def run_locked(args, root, repo, state, operations, worker_runner, upstream_coll
                "startedAt": now_iso(), "applied": False, "telegramDelivered": False,
                "receiptPath": str(receipt_path), "modelInferenceRequests": 0, "modelResponses": 0, "workerInvocations": 0}
     write_json(receipt_path, receipt)
+    # An explicit --full-review keeps the broad behaviour even for an incident.
+    scoped = args.mode == "incident" and not getattr(args, "full_review", False)
     try:
         patcher = module("hermes-ops-patches")
         snapshot = directory / "snapshot"
         manifest = patcher.create_snapshot(repo, snapshot, source_paths(repo))
         evidence = evidence_collector(state, args.package, root)
         learning = knowledge_context(operations, evidence)
-        upstream = upstream_collector() if not args.offline else []
-        evidence["upstreamChecked"] = not args.offline
+        # Release notes cannot explain an open incident; a scoped review does not fetch them.
+        upstream = upstream_collector() if not args.offline and not scoped else []
+        evidence["upstreamChecked"] = not args.offline and not scoped
+        if scoped:
+            evidence["incident"] = observer_incident(state)
+            receipt["upstreamSkipped"] = "incident-scope"
         write_json(directory / "upstream.json", upstream)
         receipt["upstreamSha256"] = hashlib.sha256((directory / "upstream.json").read_bytes()).hexdigest()
         receipt["evidencePath"] = str(directory / "evidence.json")
@@ -547,15 +630,27 @@ def run_locked(args, root, repo, state, operations, worker_runner, upstream_coll
         write_json(directory / "evidence.json", evidence)
         receipt["evidenceSha256"] = hashlib.sha256((directory / "evidence.json").read_bytes()).hexdigest()
         receipt["fingerprint"] = stable_fingerprint(evidence, upstream, manifest["snapshotSha256"])
-        receipt["upstreamComplete"] = not args.offline and all(r["ok"] for r in upstream)
+        # None means not attempted by design, which is neither complete nor a failure.
+        receipt["upstreamComplete"] = None if scoped else not args.offline and all(r["ok"] for r in upstream)
         previous = read_json(operations / "last-review.json", {})
         baseline, baseline_status = review_baseline(operations, previous)
         sources = {entry["path"]: {"sha256": entry["sha256"],
                                    "content": (snapshot / entry["path"]).read_text()}
                    for entry in manifest["files"]}
+        model_evidence = evidence
+        if scoped:
+            # The snapshot stays complete so a candidate is still tested against the whole tree;
+            # only what the model is offered to read and cite narrows.
+            model_evidence, paths = incident_view(evidence, evidence["incident"], sources)
+            sources = {path: sources[path] for path in paths}
+            if baseline:
+                baseline = dict(baseline, sources={path: entry for path, entry in baseline["sources"].items()
+                                                   if path in sources})
+            receipt["incidentScope"] = model_evidence["incident"]["reviewScope"]
         changes = module("hermes-ops-changes")
-        delta = changes.context(evidence, upstream, sources, previous=baseline, baseline_status=baseline_status,
-                                full_review=args.mode == "weekly" or getattr(args, "full_review", False))
+        delta = changes.context(model_evidence, upstream, sources, previous=baseline, baseline_status=baseline_status,
+                                full_review=args.mode == "weekly" or getattr(args, "full_review", False),
+                                scoped=scoped)
         write_json(directory / "changes.json", delta)
         receipt["changesPath"] = str(directory / "changes.json")
         receipt["changeSummary"] = {"baselineStatus": baseline_status, "fullReview": delta["fullReview"],
@@ -574,13 +669,15 @@ def run_locked(args, root, repo, state, operations, worker_runner, upstream_coll
             receipt.update(ok=True, status="unchanged", attentionRequired=False,
                            previousRunId=previous.get("runId"), modelInferenceRequests=0)
         else:
+            default_request = (INCIDENT_REQUEST if scoped else
+                               "현재 OpenClaw의 운영 상태와 업데이트 영향을 검토하고, 재현 가능한 개선이 있으면 검증할 코드 후보를 작성하세요.")
             request = {"schemaVersion": 1, "request_id": run_id, "mode": args.mode,
-                       "request": args.request or "현재 OpenClaw의 운영 상태와 업데이트 영향을 검토하고, 재현 가능한 개선이 있으면 검증할 코드 후보를 작성하세요.",
+                       "request": args.request or default_request,
                        "snapshotSha256": manifest["snapshotSha256"], "sources": sources,
-                       "evidence": evidence,
+                       "evidence": model_evidence,
                        "upstream": changes.compact_upstream(upstream, baseline, delta["fullReview"]),
                        "changeContext": delta, "learningContext": learning}
-            request["evidence"] = bounded_model_evidence(evidence, request["upstream"])
+            request["evidence"] = bounded_model_evidence(model_evidence, request["upstream"])
             module("hermes-ops-worker").validate_request(request)
             write_json(directory / "request.json", request)
             receipt.update(status="running", modelInferenceRequests=None, modelResponses=None, workerInvocations=1)
@@ -622,12 +719,15 @@ def run_locked(args, root, repo, state, operations, worker_runner, upstream_coll
                                 or bool(evidence.get("operations", {}).get("warnings"))
                                 or any(evidence.get(key, {}).get("available") is False
                                        for key in ("configuration", "openclaw", "hermes")))
-            receipt["attentionRequired"] = (observed_problem or not receipt["upstreamComplete"]
+            receipt["attentionRequired"] = (observed_problem or receipt["upstreamComplete"] is False
                                             or bool(candidate.get("replacements"))
                                             or any(f.get("severity") in {"warning", "critical", "high", "medium", "error"}
                                                    for f in result.get("findings", [])))
             receipt["findingIds"] = finding_ids(result.get("findings"))
             receipt["severityCounts"] = severity_counts(result.get("findings"))
+            receipt["insufficientEvidenceFindingIds"] = finding_ids(
+                [f for f in result.get("findings", []) if isinstance(f, dict)
+                 and f.get("evidenceStatus") == "insufficient"])
             receipt["knowledgeObservation"] = module("hermes-ops-knowledge").observe_review(
                 operations, run_id, result, receipt)
             report = directory / "report.md"

@@ -354,6 +354,9 @@ def observe_review(operations, run_id, result, receipt):
             seen.add(finding_id)
             classification = item.get("kind", "legacy-unclassified")
             require(classification in CLASSIFICATIONS, "FINDING_CLASSIFICATION_INVALID")
+            # The worker drops citations it cannot verify and labels the finding. The label follows
+            # the latest observation, so a later supported sighting clears it.
+            insufficient = item.get("evidenceStatus") == "insufficient"
             existing = state["findings"].get(finding_id)
             if existing:
                 existing["seenCount"] += 1
@@ -361,6 +364,10 @@ def observe_review(operations, run_id, result, receipt):
                 # A repeated ID is an observation, not automatic reopening or classification.
                 if existing["state"] == "resolved":
                     existing["seenAfterResolution"] = True
+                if insufficient:
+                    existing["evidenceInsufficient"] = True
+                else:
+                    existing.pop("evidenceInsufficient", None)
             else:
                 state["findings"][finding_id] = {
                     "id": finding_id, "classification": classification,
@@ -369,6 +376,8 @@ def observe_review(operations, run_id, result, receipt):
                     "origin": {"kind": "hermes-review", "runId": run_id},
                     "history": [{"at": now(), "action": "observed", "runId": run_id}],
                 }
+                if insufficient:
+                    state["findings"][finding_id]["evidenceInsufficient"] = True
         # Reference claims are kept as identifiers only, without promoting or marking reuse.
         claims = result.get("procedure_uses", [])
         require(isinstance(claims, list) and len(claims) <= 16, "PROCEDURE_CLAIMS_INVALID")
@@ -578,6 +587,8 @@ def summary(operations, current_versions=None):
             row["deferReason"] = finding["deferReason"]
         if finding.get("seenAfterResolution"):
             row["seenAfterResolution"] = True
+        if finding.get("evidenceInsufficient"):
+            row["evidenceInsufficient"] = True
         if finding["state"] == "resolved":
             try:
                 verification(operations, finding.get("closureRef"), finding_id=finding["id"])

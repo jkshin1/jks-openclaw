@@ -46,8 +46,13 @@ def diff(before, after, label, budget):
     return "".join(pieces), truncated
 
 
-def context(evidence, upstream, sources, *, previous=None, baseline_status="none", full_review=False):
-    """Compare only a verified previous snapshot supplied by the controller."""
+def context(evidence, upstream, sources, *, previous=None, baseline_status="none", full_review=False,
+            scoped=False):
+    """Compare only a verified previous snapshot supplied by the controller.
+
+    A scoped (incident) review is narrow by design, so a missing baseline does not widen it into a
+    full review; the gap is still visible through baselineStatus.
+    """
     old = previous or {}
     old_sources = old.get("sources", {})
     before_evidence = old.get("evidence", {})
@@ -60,7 +65,7 @@ def context(evidence, upstream, sources, *, previous=None, baseline_status="none
               "baselineSnapshotSha256": old.get("snapshotSha256"), "baselineStatus": baseline_status,
               "changedEvidenceIds": changed_ids[:MAX_CHANGES], "changedSourcePaths": changed[:MAX_CHANGES],
               "removedSourcePaths": removed[:MAX_CHANGES], "sourceDiffs": [], "upstreamChanges": [],
-              "fullReview": bool(full_review or baseline_status != "available"),
+              "fullReview": bool(full_review or (baseline_status != "available" and not scoped)),
               "truncated": any(len(items) > MAX_CHANGES for items in (changed_ids, changed, removed))}
     remaining = MAX_DIFF_BYTES
     if old:
