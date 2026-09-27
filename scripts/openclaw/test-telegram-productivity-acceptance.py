@@ -24,9 +24,13 @@ def owner_config():
         "enabled": True, "dmPolicy": "allowlist", "allowFrom": ["12345"]}}}
 
 
-def success():
+def success(message_id="901"):
     return {"action": "send", "channel": "telegram", "dryRun": False,
-            "payload": {"ok": True, "messageId": "901", "chatId": "12345"}}
+            "payload": {"ok": True, "messageId": message_id, "chatId": "12345"}}
+
+
+def distinct_successes():
+    return [json.dumps(success(str(901 + index))) for index in range(len(acceptance.ARTIFACTS))]
 
 
 class ReceiptTests(unittest.TestCase):
@@ -181,7 +185,7 @@ class DeliveryTests(FixtureEnvironment, unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def test_duplicate_send_skipped_after_confirmed_receipt(self):
-        with patch.object(acceptance, "bounded", return_value=json.dumps(success())) as command:
+        with patch.object(acceptance, "bounded", side_effect=distinct_successes()) as command:
             result = acceptance.send(self.args)
             self.assertEqual(command.call_count, len(acceptance.ARTIFACTS))
             first = copy.deepcopy(result)
@@ -194,6 +198,14 @@ class DeliveryTests(FixtureEnvironment, unittest.TestCase):
         self.assertFalse(result["ownerUploadVerified"])
         self.assertFalse(result["phoneOpenVerified"])
         self.assertNotIn("12345", json.dumps(ledger))
+
+    def test_one_message_id_cannot_prove_two_attachment_sends(self):
+        with patch.object(acceptance, "bounded", return_value=json.dumps(success())) as command:
+            with self.assertRaisesRegex(ValueError, "messageId reused"):
+                acceptance.send(self.args)
+            self.assertEqual(command.call_count, 2)
+        ledger = acceptance.read_receipt(self.root, "delivery.json")
+        self.assertEqual([entry["status"] for entry in ledger["deliveries"].values()], ["delivered", "uncertain"])
 
     def test_uncertain_send_never_automatically_retried(self):
         with patch.object(acceptance, "bounded", side_effect=ValueError("timed out")) as command:
@@ -236,7 +248,7 @@ class DeliveryTests(FixtureEnvironment, unittest.TestCase):
         for kind, name in acceptance.ARTIFACTS[:-1]:
             ledger["deliveries"][name] = {
                 "status": "delivered", "sha256": self.manifest["artifacts"][name],
-                "transport": acceptance.transport_receipt(success(), "12345")}
+                "transport": acceptance.transport_receipt(success(str(800 + len(ledger["deliveries"]))), "12345")}
         original_receipts = copy.deepcopy(ledger["deliveries"])
         acceptance.save(self.root / "delivery.json", ledger)
         with patch.object(acceptance, "bounded", return_value=json.dumps(success())) as command:

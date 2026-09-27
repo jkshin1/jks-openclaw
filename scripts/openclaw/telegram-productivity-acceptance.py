@@ -421,7 +421,12 @@ def send(args):
                                   ("SRT 자막 ZIP (원본 speech-input.srt 포함)" if kind == "subtitles" else kind),
                                   "--media", media_path, "--force-document", "--silent", "--json"],
                                  timeout=120, env=env, diagnostic_path=root / diagnostic_name)
-                entry["transport"] = transport_receipt(json.loads(output), owner)
+                receipt = transport_receipt(json.loads(output), owner)
+                # One Telegram message cannot prove two different attachment sends.
+                used = {other["transport"]["payload"]["messageId"] for key, other in ledger["deliveries"].items()
+                        if key != name and isinstance(other.get("transport"), dict)}
+                require(receipt["payload"]["messageId"] not in used, "Telegram messageId reused for another artifact")
+                entry["transport"] = receipt
                 entry["status"] = "delivered"
                 entry["deliveredAt"] = now()
             except (ValueError, OSError):
