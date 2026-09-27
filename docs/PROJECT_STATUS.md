@@ -1,6 +1,12 @@
 # Project status
 
 **Current Mac/Telegram operations and evidence:** [OPENCLAW_TELEGRAM.md](OPENCLAW_TELEGRAM.md).
+On 2026-09-27 KST, the PowerPoint/PPTX skill 1.0.1 and python-pptx 1.0.2 were installed after a
+fresh `pass/clean` registry check. The workspace instructions and their byte-identical repository
+template/observer copy were updated together. One synthetic Opus agent edit passed an independent
+structure check and a visual review of all four rendered pages. No Telegram attachment or real deck
+was tested; see [the productivity record](OPENCLAW_PRODUCTIVITY.md#powerpointpptx-addition-2026-09-27-kst).
+The observer's pre-existing `backup-stale` issue (220 consecutive runs at 03:35 UTC) was left as found.
 On 2026-09-26 KST, the main agent's chain became `anthropic/claude-opus-5-5` →
 `openai/gpt-6-sol` → OpenRouter GLM, and the global default became Opus → Sol. Opus runs through
 the `claude-cli` runtime on this Mac's own Claude Code login (Homebrew `claude-code@latest`

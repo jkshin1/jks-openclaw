@@ -103,8 +103,8 @@ The active project is `/Users/jk/projects/python/my-local-agent`.
   The PDF tool has its own local media path boundary. If an owner-requested file is outside it,
   copy only that file to a unique temporary directory inside this workspace, analyze that copy,
   and remove the copy afterward. Preserve the original and the media path restriction.
-- Summarize and Whisper are executable on this Mac. Word/DOCX and Excel/XLSX skills are installed
-  in this workspace. Read the matching skill for the requested job.
+- Summarize and Whisper are executable on this Mac. Word/DOCX, Excel/XLSX and PowerPoint/PPTX
+  skills are installed in this workspace. Read the matching skill for the requested job.
 - `summarize INPUT --plain --timeout 3m` produces Korean summaries through an isolated, tool-free
   OpenClaw/Codex backend (GPT-5.6 Sol, low thinking). `--extract --plain` extracts text without a model call. For inputs above
   the backend's 120 KiB prompt limit, extract and process bounded chunks. Do not export API keys
@@ -115,8 +115,10 @@ The active project is `/Users/jk/projects/python/my-local-agent`.
 - `whisper AUDIO --language Korean --output_format all --output_dir DIR` runs locally with the
   downloaded multilingual small model on CPU. The wrapper sets four threads and fp32; explicit
   arguments can override defaults. Check the actual transcript; do not claim perfect recognition.
-- Use `openclaw-python` for the installed python-docx, openpyxl, pypdf, and pypdfium2 libraries.
-  The system Python is a different environment. Preserve original Office files when editing.
+- Use `openclaw-python` for the installed python-docx, openpyxl, python-pptx, pypdf, and pypdfium2
+  libraries. The system Python is a different environment. Preserve original Office files when
+  editing. For decks, convert the PPTX to PDF with `openclaw-office` and render every changed
+  slide to check overflow, clipping and leftover placeholder text before delivery.
 - Use `openclaw-office` for native LibreOffice conversion; its explicit font configuration fixes
   missing Korean glyphs in headless Mac output. New Korean documents can use the installed
   Noto Sans CJK KR font. Preserve the intended fonts when editing existing documents.

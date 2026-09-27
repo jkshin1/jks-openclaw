@@ -13,6 +13,7 @@ installation request. That acceptance used OpenClaw 2026.9.2. The Gateway was up
 | Whisper | Existing bundled skill; `openai-whisper` 20250625; multilingual `small` model | `whisper` |
 | Word/DOCX | `@ivangdavila/word-docx` 1.0.2; python-docx 1.2.0 | `openclaw-python` |
 | Excel/XLSX | `@ivangdavila/excel-xlsx` 1.0.2; openpyxl 3.1.5 | `openclaw-python` |
+| PowerPoint/PPTX | `@ivangdavila/powerpoint-pptx` 1.0.1; python-pptx 1.0.2 (added 2026-09-27) | `openclaw-python` |
 | Office rendering and recalculation | Native LibreOffice 26.8.0.3; PDFium renderer | `openclaw-office`, `openclaw-python` |
 | Local document extraction | MarkItDown 0.1.7 with PDF/DOCX/XLSX extras; plugins disabled | `openclaw-extract` |
 
@@ -144,6 +145,37 @@ recipient mismatch, dry runs and automatic retry of uncertain outcomes. Seventee
 cover these boundaries. Actual owner upload and phone download/opening remain outside this receipt;
 no parallel `getUpdates` consumer or fabricated user update was used. See
 [the operating guide](OPENCLAW_OPERATIONS_KO.md) for repeatable commands.
+
+## PowerPoint/PPTX addition, 2026-09-27 KST
+
+At the owner's request, `@ivangdavila/powerpoint-pptx` 1.0.1 was reverified as `pass/clean`
+immediately before installation. It is one `SKILL.md` of workflow instructions; the installed file
+and the workspace lock both match the registry SHA-256
+`d286c8cd144b9957d9d27046e75797d9dfd577e5c1d01ffda6373573d5a5a956`. python-pptx 1.0.2 was
+installed into the existing skill runtime; the freeze diff adds only python-pptx and XlsxWriter
+3.2.9, with no existing package changed. The skill reports `eligible`, `modelVisible` and
+`commandVisible`.
+
+The workspace instructions now name the PowerPoint skill and python-pptx, and require rendering
+changed slides through `openclaw-office` before delivery. `verify-telegram-gateway.py` requires the
+live `AGENTS.md` to be byte-identical to `templates/TELEGRAM_AGENTS.md`, so the repository template
+was updated identically and the observer was reinstalled with `install-telegram-watchdog.py
+--apply`, whose strict live check passed. The OpenClaw configuration hash was unchanged.
+
+One ordinary main-agent turn with no model override ran on `claude-cli`/`claude-opus-5-5`, loaded
+the PowerPoint skill, and completed in about 50 seconds with `deliver=false` in a deleted incognito
+session. An independent python-pptx/pypdf check then confirmed the synthetic input hash was
+unchanged; slide 2 changed only the requested status line and kept its speaker notes; slide 3's
+table and footnote were preserved; the new fourth slide had the requested title and three bullets
+with no empty placeholders; and the 16:9 size was kept. The four-page PDF contained the Korean text,
+and all four rendered pages were visually inspected with no clipping or missing glyphs. The
+16-case policy suite and `verify-gateway.sh --telegram` passed afterward.
+
+This covers one synthetic deck. Complex templates, charts, masters, media and the owner's real
+decks were not tested, and no Telegram attachment was sent. The agent's visible reply began with
+two English progress sentences before its Korean report; that route behavior was observed only
+here and not investigated. Private receipts are under
+`~/.openclaw-personaledge/operations/pptx-install-20260927T033256Z/`.
 
 ## Maintenance
 
