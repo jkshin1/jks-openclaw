@@ -804,3 +804,27 @@ controller에 영역별 검토를 추가했다. `run --mode manual --area <영�
 `per_dispatch_headroom` 조기 최종 작성으로 끝났다. 발견사항은 65개(high 3, medium 20 등)이며
 모델 진단으로서 독립 재현 전이다. telegram 3개 영역의 코드 후보 3건은 스냅샷 검사를 통과했지만
 설치하지 않았다. 요약은 `operations/latest-area-audit.json`에 있다. Telegram 전송은 없었다.
+
+### 2026-09-27 영역별 검토 발견사항 수정 (높음 3건·후보 3건)
+
+소유자 요청으로 첫 영역별 검토의 high 3건과 검사를 통과한 코드 후보 3건을 처리했다. 각 항목은
+코드로 재현하고, 수정 전 코드에서 실패하는 시험을 먼저 확인한 뒤 고쳤다.
+
+| 발견 | 재현 | 수정 |
+| --- | --- | --- |
+| `rollback-restart-verifier-contract-mismatch` | `rollback-gateway.sh --apply --restart`가 동의 옵션 없이 `verify-gateway.sh`를 불러 항상 실패 | 새 설치와 같이 `--acknowledge-transient-session-write` 전달. 모든 비시험 호출자가 동의·관찰 전용·live 생략 중 하나를 넘기는지 `test-deployment-assets.sh`가 검사 |
+| `incident-recurrence-dedup-identity-gap` | 같은 문제 유형의 새 사건이 fingerprint가 같아 `unchanged`로 모델 없이 끝남 | 사건 범위 검토의 fingerprint에 사건 ID·시작 시각 포함. 같은 사건의 반복만 억제 |
+| `full-review-source-coverage-not-enforced` | 전체 검토가 일부만 읽어도 완료로 기록 | 제공한 소스별 읽은 줄 수로 `sourceCoverage`·`sourceReviewComplete` 기록. 전체 검토가 덜 읽으면 `attentionRequired`, 보고서에 읽기 상태 표기, 영역 요약에 `incompleteAreas` |
+| 후보 `telegram-task-status.py` | 네이티브 `lost` 작업이 `unknown`으로 표시 | `lost` → `failed` (운영 상태 집계와 일치) |
+| 후보 `telegram-ops-status.py` | `dead_letter` 전송이 실패 수·`delivery-failed`에 빠짐 | 실패 집계에 `dead_letter` 포함 |
+| 후보 `OPENCLAW_WEEKLY_BRIEFING.md` | 문서는 최대 5개, 구현은 10개 | 문서를 10개·커뮤니티 6개 이상으로 정정 |
+
+후보 3건은 원본 해시가 현재 저장소와 같음을 확인하고 적용했다. 검증: 배포 자산 시험 전체,
+controller 67개, worker 43개, 지식 31개, 변경분 6개, 패치 18개(3개 건너뜀), 설치기 15개, 보고
+worker 24개, 보고서 16개, 절차 파일럿 13개, 작업 상태 22개, 운영 47개, 워크플로 설치 12개,
+브리핑 24개, 주간 브리핑 30개, Gateway 17개가 통과했다. 공식 설치기 3개(Hermes 운영,
+Telegram 워크플로, Telegram 감시기)로 설치했고 5개 설치본이 저장소와 같다. 설치 후 운영 상태
+`ok`, 작업 상태 조회 정상, 감시기 LaunchAgent 실행 중, `--mode incident`는 모델 없이
+`healthy-no-incident`였다. 과거 실제 영수증에 새 읽기 판정을 적용하면 gateway-install 영역은
+24/24 완료, 22:34 전체 검토는 8/127로 미완료로 판정된다. `rollback-gateway.sh`는 설치본 없이
+저장소에서 실행한다. Gateway 재시작·모델 호출·Telegram 전송은 없었다. 사용자 커밋 `eac3a49`.
