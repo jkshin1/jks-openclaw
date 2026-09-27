@@ -55,6 +55,28 @@ soak_sha256() {
     shasum -a 256 "$1" 9>&- | awk '{ print $1 }' 9>&-
 }
 
+SOAK_COLLECTOR_TIMEOUT_SECONDS=30
+SOAK_VERIFY_TIMEOUT_SECONDS=180
+
+# Run one external collector in its own process group with a hard time limit. A hung lsof,
+# launchctl, Tailscale, pmset or fdesetup call becomes exit 124 (a failed sample) instead of
+# stalling the runner; the whole group is terminated, then killed.
+soak_bounded() {
+    local seconds="$1"
+    shift
+    /usr/bin/perl -e '
+        my $limit = shift @ARGV;
+        my $pid = fork();
+        exit 125 unless defined $pid;
+        if ($pid == 0) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV; exit 127; }
+        local $SIG{ALRM} = sub { kill "TERM", -$pid; sleep 2; kill "KILL", -$pid; waitpid($pid, 0); exit 124; };
+        alarm $limit;
+        waitpid($pid, 0);
+        alarm 0;
+        exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+    ' "$seconds" "$@"
+}
+
 # Use only inside command substitution. The substitution shell permanently closes the receipt lock
 # before it enters a collector, so a hung descendant cannot retain flock after the runner dies.
 soak_capture_without_lock() {
@@ -780,7 +802,7 @@ soak_collect_service() {
 
     loaded=false
     state="missing"
-    if launchctl print "$target" 9>&- > "$raw_path" 2> "$raw_path.err"; then
+    if soak_bounded "$SOAK_COLLECTOR_TIMEOUT_SECONDS" launchctl print "$target" 9>&- > "$raw_path" 2> "$raw_path.err"; then
         loaded=true
         raw_state="$(soak_launchd_field "$raw_path" state)"
         case "$raw_state" in
@@ -853,7 +875,7 @@ soak_collect_listener() {
 
     listener_count=0
     loopback_only=true
-    lsof -nP -iTCP:"$PERSONAL_EDGE_OPENCLAW_PORT" -sTCP:LISTEN -F n 9>&- \
+    soak_bounded "$SOAK_COLLECTOR_TIMEOUT_SECONDS" lsof -nP -iTCP:"$PERSONAL_EDGE_OPENCLAW_PORT" -sTCP:LISTEN -F n 9>&- \
         > "$raw_path" 2> "$raw_path.err" || true
     while IFS= read -r listener_name; do
         [[ -n "$listener_name" ]] || continue
@@ -905,7 +927,7 @@ soak_collect_tailscale() {
     availability="installed"
     backend_running=false
     self_online=false
-    if env TAILSCALE_BE_CLI=1 "$tailscale_path" status --json 9>&- \
+    if soak_bounded "$SOAK_COLLECTOR_TIMEOUT_SECONDS" env TAILSCALE_BE_CLI=1 "$tailscale_path" status --json 9>&- \
         > "$sample_temp/tailscale-status.json" 2> "$sample_temp/tailscale-status.err"; then
         if jq -e '.BackendState == "Running"' "$sample_temp/tailscale-status.json" >/dev/null; then
             backend_running=true
@@ -918,7 +940,7 @@ soak_collect_tailscale() {
     acceptance="pending"
     if [[ "$mode" == "serve" ]]; then
         serve_valid=false
-        if env TAILSCALE_BE_CLI=1 "$tailscale_path" serve status --json 9>&- \
+        if soak_bounded "$SOAK_COLLECTOR_TIMEOUT_SECONDS" env TAILSCALE_BE_CLI=1 "$tailscale_path" serve status --json 9>&- \
             > "$sample_temp/tailscale-serve.json" 2> "$sample_temp/tailscale-serve.err" &&
            (openclaw_assert_managed_tailscale_serve_receipt "$sample_temp/tailscale-serve.json") 9>&- >/dev/null 2>&1; then
             serve_valid=true
@@ -954,7 +976,7 @@ soak_collect_power() {
     local autorestart_at_connect_value ups_present ac_ready
 
     raw_path="$sample_temp/pmset-custom.txt"
-    if ! pmset -g custom 9>&- > "$raw_path" 2> "$sample_temp/pmset-custom.err"; then
+    if ! soak_bounded "$SOAK_COLLECTOR_TIMEOUT_SECONDS" pmset -g custom 9>&- > "$raw_path" 2> "$sample_temp/pmset-custom.err"; then
         jq -cn '
             {available:false,customSha256:null,upsProfilePresent:false,
              acReady:null,ac:{sleep:null,standby:null,autorestart:null,
@@ -1009,7 +1031,7 @@ soak_collect_gates() {
     verify_ok=false
     status_ok=false
     readiness_ok=false
-    if env TMPDIR="$gate_tmp" "$script_dir/verify-gateway.sh" --observe-only 9>&- \
+    if soak_bounded "$SOAK_VERIFY_TIMEOUT_SECONDS" env TMPDIR="$gate_tmp" "$script_dir/verify-gateway.sh" --observe-only 9>&- \
         >/dev/null 2>&1; then
         verify_ok=true
     fi
@@ -1030,7 +1052,7 @@ soak_collect_gates() {
 soak_filevault_status() {
     local value
 
-    value="$(fdesetup status 9>&- 2>/dev/null || true)"
+    value="$(soak_bounded "$SOAK_COLLECTOR_TIMEOUT_SECONDS" fdesetup status 9>&- 2>/dev/null || true)"
     if [[ "$value" == *"On."* ]]; then
         printf '%s\n' on
     elif [[ "$value" == *"Off."* ]]; then

@@ -600,27 +600,8 @@ def summary(operations, current_versions=None):
     total_procedure_bytes = 0
     for procedure in sorted(state["procedures"].values(), key=lambda row: row["id"]):
         experience = state["experiences"][procedure["experienceId"]]
-        reason = None
-        try:
-            verification(operations, procedure["verificationRef"], finding_id=experience["findingId"],
-                         run_id=experience["runId"], expected_versions=procedure["versions"],
-                         change_id=experience["changeId"])
-        except (ValueError, OSError):
-            reason = "evidence-invalid"
-        if not reason and (current_versions is None or any(current_versions.get(key) != value
-                                                          for key, value in procedure["versions"].items())):
-            reason = "version-mismatch"
-        if reason:
-            if len(unavailable) < 32:
-                unavailable.append({"id": procedure["id"], "version": procedure["version"], "reason": reason})
-            continue
-        entry = {key: procedure[key] for key in ("id", "version", "sha256", "title", "procedure")}
-        entry["evidenceIds"] = ["procedureKnowledge"]
-        entry_bytes = len(encode(entry))
-        if len(available) >= 8 or total_procedure_bytes + entry_bytes > 48000:
-            continue
-        available.append(entry)
-        total_procedure_bytes += entry_bytes
+        # Reuse integrity is counted for every stored procedure, including ones not offered to the
+        # model, so a corrupted receipt cannot hide behind a version mismatch or the size cap.
         successful, failed, invalid = 0, 0, 0
         for reuse in state["reuses"].values():
             if reuse["procedureId"] != procedure["id"] or reuse["procedureVersion"] != procedure["version"]:
@@ -639,6 +620,30 @@ def summary(operations, current_versions=None):
         stats.append({"id": procedure["id"], "version": procedure["version"], "successfulReuses": successful,
                       "failedReuses": failed, "invalidReuseEvidence": invalid,
                       "referenceCount": procedure.get("referenceCount", 0)})
+        reason = None
+        try:
+            verification(operations, procedure["verificationRef"], finding_id=experience["findingId"],
+                         run_id=experience["runId"], expected_versions=procedure["versions"],
+                         change_id=experience["changeId"])
+        except (ValueError, OSError):
+            reason = "evidence-invalid"
+        if not reason and (current_versions is None or any(current_versions.get(key) != value
+                                                          for key, value in procedure["versions"].items())):
+            reason = "version-mismatch"
+        if reason:
+            stats[-1]["offered"] = False
+            if len(unavailable) < 32:
+                unavailable.append({"id": procedure["id"], "version": procedure["version"], "reason": reason})
+            continue
+        entry = {key: procedure[key] for key in ("id", "version", "sha256", "title", "procedure")}
+        entry["evidenceIds"] = ["procedureKnowledge"]
+        entry_bytes = len(encode(entry))
+        if len(available) >= 8 or total_procedure_bytes + entry_bytes > 48000:
+            stats[-1]["offered"] = False
+            continue
+        stats[-1]["offered"] = True
+        available.append(entry)
+        total_procedure_bytes += entry_bytes
     return {"schemaVersion": 1, "scope": "operator-verified-operations-knowledge", "revision": state["revision"],
             "operatorRevision": state["operatorRevision"], "procedures": available, "findingLifecycle": findings, "unavailableProcedures": unavailable,
             "procedureStats": stats,

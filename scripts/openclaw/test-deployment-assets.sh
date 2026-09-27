@@ -158,6 +158,19 @@ for closed_lock_probe in \
     grep -Fq "$closed_lock_probe" "$script_dir/soak-acceptance.sh" ||
         fail "soak child can inherit the receipt lock: $closed_lock_probe"
 done
+for bounded_collector in 'launchctl print "$target"' 'lsof -nP -iTCP' '"$tailscale_path" status --json' \
+    '"$tailscale_path" serve status --json' 'pmset -g custom' 'verify-gateway.sh" --observe-only' 'fdesetup status'; do
+    grep -F -- "$bounded_collector" "$script_dir/soak-acceptance.sh" | grep -Fq 'soak_bounded "$SOAK_' ||
+        fail "soak collector can hang without a time limit: $bounded_collector"
+done
+bounded_helper="$(mktemp "${TMPDIR:-/tmp}/soak-bounded.XXXXXX")"
+sed -n '/^soak_bounded() {$/,/^}$/p' "$script_dir/soak-acceptance.sh" > "$bounded_helper"
+bounded_started=$SECONDS
+bounded_status=0
+(source "$bounded_helper"; soak_bounded 1 /bin/sh -c 'sleep 30 & sleep 30') || bounded_status=$?
+rm -f -- "$bounded_helper"
+[[ "$bounded_status" == 124 && $((SECONDS - bounded_started)) -lt 10 ]] ||
+    fail "soak_bounded did not stop a hung collector group (status=$bounded_status)"
 sample_fsync_line="$(grep -n 'soak_fsync_path "$sample_temp_file"' \
     "$script_dir/soak-acceptance.sh" | head -1 | cut -d: -f1)"
 sample_publish_line="$(grep -n 'mv "$sample_temp_file" "$sample_target"' \
@@ -332,6 +345,17 @@ mkdir -p "$fixture_workspace" "$fixture_state/state" "$fixture_state/agents/main
     "$fixture_launch_agents" "$fixture_node_dir"
 find "$fixture_root" -type d -exec chmod 700 {} +
 source "$script_dir/_runtime-test-fixture.sh"
+fixture_fake_home="$fixture_root/fake-home"
+mkdir -p "$fixture_fake_home/personal-edge-openclaw-backref"
+for fixture_bypass in "$fixture_fake_home/personal-edge-openclaw-backref/.." "$fixture_fake_home"; do
+    if (HOME="$fixture_fake_home" openclaw_runtime_test_fixture "$fixture_bypass" "$fixture_state" \
+            "$fixture_launch_agents" "$script_dir"); then
+        fail "runtime fixture accepted a root that resolves to HOME: $fixture_bypass"
+    fi
+done
+[[ ! -e "$fixture_fake_home/runtime-stubs" && ! -e "$fixture_fake_home/.colima" ]] ||
+    fail "rejected runtime fixture root still wrote into HOME"
+rm -rf -- "$fixture_fake_home"
 openclaw_runtime_test_fixture "$fixture_root" "$fixture_state" "$fixture_launch_agents" "$script_dir"
 
 fixture_config="$fixture_state/openclaw.json"

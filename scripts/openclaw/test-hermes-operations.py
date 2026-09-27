@@ -868,6 +868,14 @@ class AreaAuditTests(unittest.TestCase):
         self.assertTrue(result["attentionRequired"])
         self.assertIn("일부만 읽음 (1/2", Path(result["reportPath"]).read_text())
 
+    def test_a_deleted_area_file_is_reported_as_removed(self):
+        self.review(area="hermes-worker")
+        (self.repo / "scripts/openclaw/test-hermes-ops-worker.py").unlink()
+        self.review(area="hermes-worker")
+        delta = self.calls[-1]["changeContext"]
+        self.assertEqual(delta["baselineStatus"], "available")
+        self.assertEqual(delta["removedSourcePaths"], ["scripts/openclaw/test-hermes-ops-worker.py"])
+
     def test_unmatched_new_file_is_reviewed_in_the_unassigned_area(self):
         self.review(area=ops.UNASSIGNED_AREA)
         self.assertEqual(list(self.calls[-1]["sources"]), ["scripts/openclaw/brand-new-tool.py"])

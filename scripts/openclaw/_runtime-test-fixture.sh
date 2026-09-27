@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Source-only fixture setup. Never accepts the actual owner root.
 openclaw_runtime_test_fixture() {
-    local root="$1" state="$2" agents="$3" assets="$4"
-    [[ "$root" != "$HOME" && "$root" == *personal-edge-openclaw-* ]] || return 1
+    local root="$1" state="$2" agents="$3" assets="$4" canonical home
+    # Compare resolved paths: "$HOME/personal-edge-openclaw-x/.." matches a text pattern but is HOME.
+    [[ -d "$root" && ! -L "$root" ]] || return 1
+    canonical="$(cd "$root" && pwd -P)" || return 1
+    home="$(cd "$HOME" && pwd -P)" || return 1
+    [[ "$canonical" != "$home" && "$home" != "$canonical"/* && "${canonical##*/}" == personal-edge-openclaw-* ]] ||
+        return 1
+    root="$canonical"
     mkdir -p "$root/runtime-stubs" "$root/.colima/personaledge" "$root/.docker" "$agents"
     jq -n --arg mount "$state/sandboxes" '{cpu:2,memory:2,disk:10,rootDisk:10,runtime:"docker",
         vmType:"vz",mountType:"virtiofs",sshConfig:false,mounts:[{location:$mount,writable:true}]}' \

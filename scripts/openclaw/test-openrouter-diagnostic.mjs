@@ -3,6 +3,34 @@ import test from 'node:test';
 import { marker, runCanonicalSmoke } from './smoke-openrouter-canonical.mjs';
 import { constants, createDecipheriv, generateKeyPairSync, privateDecrypt, randomBytes } from 'node:crypto';
 import { encryptBootstrap } from './bootstrap-fold8-openclaw.mjs';
+import { pinnedResolverPath } from './openrouter-credential.mjs';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+async function fakePackage(version, resolvers) {
+    const root = await mkdtemp(path.join(tmpdir(), 'resolver-fixture-'));
+    await mkdir(path.join(root, 'dist'));
+    await writeFile(path.join(root, 'package.json'), JSON.stringify({ version }));
+    for (const [name, source] of Object.entries(resolvers)) await writeFile(path.join(root, 'dist', name), source);
+    return root;
+}
+const resolverSource = 'function resolveSecretRefString() {}\nexport { isMissingSecretRefResolutionError, resolveSecretRefString }';
+
+test('finds the single qualified .mjs resolver of the current runtime', async () => {
+    const root = await fakePackage('2026.9.6', { 'resolve-D5yi_WnR.mjs': resolverSource, 'resolve-other.mjs': 'export {}' });
+    try {
+        assert.equal(await pinnedResolverPath(root, new Set(['2026.9.6'])), path.join(root, 'dist', 'resolve-D5yi_WnR.mjs'));
+    } finally { await rm(root, { recursive: true }); }
+});
+test('unsupported runtime or duplicate resolvers fail closed', async () => {
+    const old = await fakePackage('2026.7.0', { 'resolve-a.js': resolverSource });
+    const dup = await fakePackage('2026.9.6', { 'resolve-a.js': resolverSource, 'resolve-b.mjs': resolverSource });
+    try {
+        await assert.rejects(pinnedResolverPath(old, new Set(['2026.9.6'])), /unsupported OpenClaw runtime/);
+        await assert.rejects(pinnedResolverPath(dup, new Set(['2026.9.6'])), /exactly one/);
+    } finally { await rm(old, { recursive: true }); await rm(dup, { recursive: true }); }
+});
 
 test('default dry run never resolves a key or sends a request', async () => {
     const forbidden = () => assert.fail('Side effect before explicit acknowledgement');

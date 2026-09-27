@@ -208,6 +208,17 @@ class KnowledgeTest(unittest.TestCase):
         stats = knowledge.summary(self.operations, VERSIONS)["procedureStats"][0]
         self.assertEqual((stats["successfulReuses"], stats["invalidReuseEvidence"]), (0, 1))
 
+    def test_corrupt_reuse_of_an_unavailable_procedure_is_still_counted(self):
+        procedure = self.promote()
+        self.reuse(procedure)
+        (self.operations / "runs/validation-2/runtime.txt").write_text("changed")
+        summary = knowledge.summary(self.operations, {"openclaw": "2026.9.9", "hermes": "0.21.1"})
+        self.assertEqual(summary["procedures"], [])
+        self.assertEqual(summary["unavailableProcedures"][0]["reason"], "version-mismatch")
+        stats = summary["procedureStats"][0]
+        self.assertEqual(stats["invalidReuseEvidence"], 1)
+        self.assertFalse(stats["offered"])
+
     def test_new_procedure_version_retains_prior_evidence(self):
         self.promote()
         self.experience(run_id="validation-2", experience_id="routing-fix-2")

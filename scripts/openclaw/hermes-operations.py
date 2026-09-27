@@ -85,6 +85,7 @@ REVIEW_AREAS = (
     ("telegram-gateway-delivery", (_S + "verify-telegram-gateway.py", _S + "test-telegram-gateway.py",
                                    _S + "telegram-delivery-retry.mjs", _S + "test-telegram-delivery-retry.mjs",
                                    _S + "patch-telegram-delivery.py", _S + "smoke-response-contract.py",
+                                   _S + "test-smoke-response-contract.py",
                                    _S + "test-codex-response-context.mjs", _S + "templates/*", "docs/OPENCLAW_TELEGRAM.md")),
     ("gateway-install", (_S + "_common.sh", _S + "adopt-existing.sh", _S + "install-gateway.sh", _S + "harden-existing.sh",
                          _S + "enable-tailscale-serve.sh", _S + "verify-gateway.sh", _S + "rollback-gateway.sh",
@@ -798,8 +799,10 @@ def run_locked(args, root, repo, state, operations, worker_runner, upstream_coll
             model_evidence, paths = area_view(evidence, area, sources)
             sources = {path: sources[path] for path in paths}
             if baseline:
+                # Keep the area's previous paths, not just today's, so a deleted file is reported as removed.
+                previous_paths = set(area_assignment(sorted(baseline["sources"]))[area])
                 baseline = dict(baseline, sources={path: entry for path, entry in baseline["sources"].items()
-                                                   if path in sources})
+                                                   if path in previous_paths})
             receipt["areaScope"] = model_evidence["areaScope"]
         changes = module("hermes-ops-changes")
         delta = changes.context(model_evidence, upstream, sources, previous=baseline, baseline_status=baseline_status,
