@@ -392,6 +392,36 @@ class WeeklyBriefingTest(unittest.TestCase):
         self.assertIn('agent', arguments[0]); self.assertIn('--json', arguments[0])
         self.assertNotIn('OPENAI_API_KEY', str(arguments))
 
+    def test_recorded_route_is_the_one_the_adapter_reports(self):
+        directory = self.root / 'route'; directory.mkdir(mode=0o700)
+        for route, expected in (
+                ({'provider': 'claude-cli', 'model': 'claude-opus-5-5', 'fallback': True, 'reason': 'usage-limit'},
+                 {'provider': 'claude-cli', 'model': 'claude-opus-5-5', 'fallback': True,
+                  'scope': 'existing-isolated-summary-adapter'}),
+                (None, {'scope': 'unrecorded'})):
+            with self.subTest(route=route):
+                envelope = {'status': 'ok', 'result': {'payloads': [{'text': '{}'}]}}
+                if route:
+                    envelope['route'] = route
+                (directory / 'model-stdout.json').write_text(json.dumps(envelope))
+                self.assertEqual(weekly.adapter_route(directory), expected)
+
+    def test_same_listing_citation_is_printed_once(self):
+        candidates = [{'id': 'S1', 'url': 'https://example.com/news', 'citationScope': 'listing'},
+                      {'id': 'S2', 'url': 'https://example.com/news', 'citationScope': 'listing'}]
+        summary = copy.deepcopy(self.summary_result)
+        summary['items'] = summary['items'][:1]
+        summary['items'][0]['sourceIds'] = ['S1', 'S2']
+        parsed = weekly.validate_summary(json.dumps(summary), candidates)
+        text = weekly.render_message(parsed, candidates, {'finishedAt': '2026-09-12T00:00:00Z', 'sources': []})
+        self.assertEqual(text.count('https://example.com/news'), 1)
+
+    def test_no_candidate_run_does_not_claim_a_model_route(self):
+        self.baseline(); self.changed(); self.summary_result = {'items': []}
+        with patch.object(weekly, 'public_candidates', return_value=([], {'candidateCount': 0})):
+            self.perform(send=True)
+        self.assertEqual(self.active()['summaryRoute'], {'scope': 'no-model-call'})
+
     def test_existing_path_outside_weekly_run_root_is_rejected(self):
         self.baseline()
         with self.assertRaisesRegex(ValueError, 'UNSAFE_EXISTING_RUN'):

@@ -219,9 +219,10 @@ def render_message(summary, candidates, observed, coverage=None):
     for index, item in enumerate(summary['items'], 1):
         lines.extend(['', '{}. {}'.format(index, item['title']), item['summary'],
                       '왜 중요한가: ' + item['whyImportant'], '불확실성: ' + item['uncertainty'],
-                      '출처: ' + ' · '.join(source_map[key]['url'] +
+                      # Two candidates from one listing page would otherwise print the same citation twice.
+                      '출처: ' + ' · '.join(dict.fromkeys(source_map[key]['url'] +
                         (' (목록 페이지)' if source_map[key].get('citationScope') == 'listing' else '')
-                        for key in item['sourceIds'])])
+                        for key in item['sourceIds']))])
     if failures:
         if not summary['items']:
             lines.extend(['', '이번 확인에서 전달할 중요 변경분을 확보하지 못했습니다. 실패한 출처를 변경 없음으로 판단하지 않았습니다.'])
@@ -248,6 +249,18 @@ def default_summary(prompt, directory, adapter, engine, runner=subprocess.run):
     except subprocess.TimeoutExpired as error:
         engine.atomic_bytes(directory / 'model-stderr.log', b'SUMMARY_SUBPROCESS_TIMEOUT\n')
         raise ValueError('ISOLATED_SUMMARY_TIMEOUT') from None
+
+
+def adapter_route(directory):
+    """The route the summary adapter reports it actually used; never assume the primary route."""
+    try:
+        route = json.loads((directory / 'model-stdout.json').read_text()).get('route')
+    except (OSError, ValueError, AttributeError):
+        return {'scope': 'unrecorded'}
+    if not (isinstance(route, dict) and isinstance(route.get('provider'), str) and isinstance(route.get('model'), str)):
+        return {'scope': 'unrecorded'}
+    return {'provider': route['provider'], 'model': route['model'], 'fallback': route.get('fallback') is True,
+            'scope': 'existing-isolated-summary-adapter'}
 
 
 def save_run(engine, path, run, state, publish=True):
@@ -446,6 +459,7 @@ def perform(state=DEFAULT_STATE, topic_id='ai-llm', send=False, existing=None, a
                 save_run(engine, path, run, state, publish)
                 try:
                     raw = summarizer(prompt) if summarizer else default_summary(prompt, directory, adapter, engine, runner)
+                    route = {'scope': 'injected-summarizer'} if summarizer else adapter_route(directory)
                     summary = validate_summary(raw, candidates)
                 except (OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
                     run['status'] = 'summary-pending'
@@ -454,10 +468,10 @@ def perform(state=DEFAULT_STATE, topic_id='ai-llm', send=False, existing=None, a
                     raise ValueError('SUMMARY_NOT_VERIFIED_PENDING_CHANGES_PRESERVED') from None
             else:
                 summary = {'items': []}
+                route = {'scope': 'no-model-call'}
             engine.atomic_json(summary_path, summary)
             run.update(summarySha256=digest_bytes(summary_path.read_bytes()), summaryVerified=True,
-                       summaryRoute={'provider': 'openai', 'model': 'gpt-5.6-sol', 'thinking': 'low',
-                                     'scope': 'existing-isolated-summary-adapter'}, status='prepared')
+                       summaryRoute=route, status='prepared')
             run.pop('errorCode', None)
             save_run(engine, path, run, state, publish)
         if not summary['items'] and not observed['failedSources']:
