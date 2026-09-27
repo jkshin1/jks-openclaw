@@ -109,6 +109,29 @@ class OpsWorkerTest(unittest.TestCase):
             with self.assertRaisesRegex(worker.PolicyError, "FINDING_ID_INVALID"):
                 worker.validate_result(json.dumps(self.result), self.request)
 
+    def test_escape_heavy_full_page_fits_the_registered_result_limit(self):
+        content = ('\\"\x01' * 60 + "\n") * 400
+        self.request["sources"][self.source] = {"sha256": hashlib.sha256(content.encode()).hexdigest(),
+                                                "content": content}
+        tools = worker.BundleTools(self.request)
+        reply = tools.dispatch("ops_read_source", {"path": self.source, "line_count": 200})
+        parsed = json.loads(reply)
+        self.assertTrue(parsed["success"])
+        self.assertGreater(len(reply), 20000)
+        self.assertLessEqual(len(reply), worker.MAX_TOOL_RESULT_CHARS)
+        self.assertEqual(parsed["next_line"], parsed["end_line"] + 1)
+
+    def test_duplicate_keys_and_non_finite_numbers_are_rejected_at_every_level(self):
+        text = json.dumps(self.result)
+        variants = [text.replace('"analysis":', '"analysis": "hidden", "analysis":', 1),
+                    text.replace('"title":', '"title": "hidden", "title":', 1),
+                    text.replace('"replacements":', '"replacements": [], "replacements":', 1),
+                    text.replace('"schemaVersion": 1', '"schemaVersion": NaN', 1)]
+        for variant in variants:
+            self.assertNotEqual(variant, text)
+            with self.subTest(variant=variant[:60]), self.assertRaisesRegex(worker.PolicyError, "RESULT_JSON_INVALID"):
+                worker.validate_result(variant, self.request)
+
     def test_nested_profile_borrows_auth_without_copying_parent_state(self):
         before = (self.profile / "auth.json").read_bytes()
         self.assertEqual(worker.validate_profile(self.profile, self.env), self.home)

@@ -208,7 +208,8 @@ def area_view(evidence, area, sources):
 def area_request(scope, extra=""):
     text = ("소스 영역 '{area}' 검토: 제공된 소스 {count}개({size} bytes)를 모두 읽고 결함, 운영 위험, "
             "테스트 공백을 찾으세요. 현재 운영 근거와 대조하되 다른 영역과 업데이트 영향 검토는 이번 범위가 "
-            "아닙니다. 재현 가능한 개선이 있으면 검증할 코드 후보를 작성하세요.").format(
+            "아닙니다. 코드 후보는 후보 정책이 수정을 허용하는 파일에만 작성하고, 그 밖의 결함은 재현 근거와 "
+            "함께 발견사항으로만 보고하세요.").format(
         area=scope["area"], count=len(scope["sourcePaths"]), size=scope["sourceBytes"])
     return text + ("\n\n" + extra if extra else "")
 

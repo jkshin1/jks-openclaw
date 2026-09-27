@@ -271,7 +271,9 @@ def validate_tool_calls(assistant_message, phase: str = "train") -> None:
             if name == "skills_list":
                 continue
             if name == "skill_view":
-                require(args.get("name") == SKILL_NAME, "SKILL_SCOPE_VIOLATION")
+                # Only the skill's own SKILL.md: no file_path/path to a supporting file or unknown fields.
+                require(set(args) <= {"name", "path"} and args.get("name") == SKILL_NAME
+                        and args.get("path") in {None, "", "SKILL.md"}, "SKILL_SCOPE_VIOLATION")
                 continue
             require(phase == "train", "REPEAT_SKILL_MUTATION_REFUSED")
             # Pinned 0.21.1 advertises a required operations array; the flat
@@ -361,11 +363,15 @@ def skill_snapshot(profile: Path) -> dict:
     root = profile / "skills"
     result = {}
     if root.exists():
-        for path in sorted(root.rglob("SKILL.md")):
+        # Every visible file counts: a supporting file beside SKILL.md could carry instructions that the
+        # SKILL.md hash would never show. Hidden files are Hermes's own ledger metadata.
+        for path in sorted(root.rglob("*")):
             no_symlink_path(path)
-            require(path.relative_to(root).as_posix() == f"{SKILL_NAME}/SKILL.md", "SKILL_SCOPE_VIOLATION")
-            require(path.stat().st_size <= MAX_RESPONSE_BYTES, "SKILL_TOO_LARGE")
-            result[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
+            relative = path.relative_to(root)
+            if path.is_file() and (not any(part.startswith(".") for part in relative.parts) or path.name == "SKILL.md"):
+                require(relative.as_posix() == f"{SKILL_NAME}/SKILL.md", "SKILL_SCOPE_VIOLATION")
+                require(path.stat().st_size <= MAX_RESPONSE_BYTES, "SKILL_TOO_LARGE")
+                result[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     return result
 
 

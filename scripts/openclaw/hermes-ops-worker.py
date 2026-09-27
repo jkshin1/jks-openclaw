@@ -39,6 +39,9 @@ MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_RESPONSE_BYTES = 256 * 1024
 MAX_SOURCE_BYTES = 512 * 1024
 MAX_PAGE_BYTES = 16 * 1024
+# JSON escaping can grow a page up to 6x (control characters become \u00XX). The registry truncates
+# larger results, which would hand the model invalid JSON and a wrong next_line.
+MAX_TOOL_RESULT_CHARS = 6 * MAX_PAGE_BYTES + 4096
 MAX_READ_BYTES = 384 * 1024
 MAX_REREAD_BYTES = 64 * 1024
 # Codex OAuth serves gpt-5.6-sol with a 272K window. 180K leaves room for reasoning, output and
@@ -534,7 +537,7 @@ def register_bundle_tools(bundle):
         schema["name"] = name
         registry.register(name=name, toolset="ops_bundle", schema=schema,
                           handler=lambda args, _name=name, **_kwargs: bundle.dispatch(_name, args),
-                          check_fn=lambda: True, max_result_size_chars=20000)
+                          check_fn=lambda: True, max_result_size_chars=MAX_TOOL_RESULT_CHARS)
 
 
 def build_prompt(request):
@@ -579,7 +582,7 @@ def build_prompt(request):
             "Each findings[].evidence item MUST exactly match one allowed_evidence_ids entry. "
             "Do not append line numbers, invent dotted subkeys, or cite the request text as an evidence ID. "
             "Claims supplied only in the request remain reported observations; use an empty evidence array if no supplied evidence verifies them. "
-            "Do not claim tests passed: ops_check_candidate checks syntax and hashes only. Empty replacements are valid. "
+            "Do not claim tests passed: ops_check_candidate checks syntax and hashes only. An empty replacements list is valid; a replacement's content must not be empty. "
             "Optional procedure_uses entries must be exactly {procedure_id,version,sha256,conclusion,evidence}; "
             "copy id, positive integer version and sha256 from a supplied learningContext procedure. "
             "conclusion is referenced, applicable, not_applicable or reuse_claimed; evidence contains only allowed_evidence_ids. "
@@ -590,10 +593,22 @@ def build_prompt(request):
             + json.dumps(data, ensure_ascii=False, sort_keys=True))
 
 
+def unique_object(pairs):
+    keys = [key for key, _value in pairs]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate key")
+    return dict(pairs)
+
+
+def reject_constant(_value):
+    raise ValueError("non-finite number")
+
+
 def validate_result(reply, request):
     text_field(reply, MAX_RESPONSE_BYTES, "RESULT_TOO_LARGE", empty=False)
     try:
-        result = json.loads(reply)
+        # A duplicated key would let the model hide one value behind another that later code reads.
+        result = json.loads(reply, object_pairs_hook=unique_object, parse_constant=reject_constant)
     except (ValueError, RecursionError):
         raise PolicyError("RESULT_JSON_INVALID") from None
     required = {"schemaVersion", "analysis", "findings", "patches", "runbook_candidate"}
