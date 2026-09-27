@@ -27,6 +27,12 @@ separate snapshot. A tested candidate is not an installed fix.
    python3 /Users/jk/.local/share/openclaw-hermes-worker/bin/hermes-operations.py run --mode manual --request <owner-request-as-one-argument> --json
    ```
 
+   For an explicit request to review the whole source tree without gaps, add
+   `--area all`: the controller runs one worker per source area in sequence
+   (about 30 minutes) and returns an `area-audit` summary with each area's
+   `runId`, `status`, `reportPath` and `failedAreas`. A single area uses
+   `--area <name>`. Run it detached and wait for its summary, not a second run.
+
    Shell substitution inside user text must remain literal. Prefer an argument
    array where supported; otherwise use correct shell quoting. Do not build a
    command by concatenating unescaped request text.

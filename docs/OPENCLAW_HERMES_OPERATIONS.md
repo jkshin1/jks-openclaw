@@ -755,3 +755,43 @@ round 한도와 예산 거절 규칙은 그대로다. 사용량은 기존 Hermes
 `per_dispatch_headroom`(추정 90,000 이상)으로 조기 최종 작성에 들어갔다. 전체 소스 묶음은
 127개 1,896,001 bytes(추정 약 474,000)로 모델 창 272K보다 크다. 따라서 한 번의 실행으로 전체
 소스를 감사하는 것은 한도 상향만으로는 불가능하며, 영역별로 나눈 검토가 필요하다.
+
+### 2026-09-27 영역별 소스 검토 (`--area`)
+
+한도 상향 뒤에도 전체 소스 묶음(127개, 약 1.9MB)은 모델 창보다 크므로, 소유자 요청으로
+controller에 영역별 검토를 추가했다. `run --mode manual --area <영역>`은 한 영역의 소스만 모델에
+제공하고, `--area all`은 비어 있지 않은 영역마다 worker를 하나씩 순서대로 실행한 뒤
+`area-audit` 요약(영역별 runId·상태·보고서·조기 종료 이유, `failedAreas`)을 반환하고
+`operations/latest-area-audit.json`에 남긴다. 한 영역이 실패해도 나머지 영역은 계속 실행한다.
+
+| 영역 | 소스 수 | 크기(bytes) |
+| --- | --- | --- |
+| telegram-workflows | 8 | 181,299 |
+| telegram-tasks-productivity | 13 | 127,489 |
+| telegram-operations | 10 | 156,357 |
+| telegram-gateway-delivery | 17 | 186,798 |
+| gateway-install | 24 | 208,811 |
+| gateway-acceptance | 4 | 204,494 |
+| runtime-patches-models | 24 | 179,654 |
+| hermes-controller | 7 | 174,721 |
+| hermes-worker | 6 | 174,102 |
+| hermes-knowledge-install | 6 | 131,234 |
+| learning-pilots | 8 | 183,811 |
+
+코드는 테스트와 같은 영역에 두고, 각 영역이 조기 최종 작성 전에 모두 읽힐 수 있도록 약 200KB로
+맞췄다. 경로는 선언 순서상 처음 맞는 영역에 속하며, 어느 영역에도 맞지 않는 새 파일은
+`unassigned` 영역으로 검토되어 빠지지 않는다. 시험은 실제 저장소의 모든 소스가 정확히 한 영역에
+속하고, `unassigned`가 비어 있으며, 각 영역이 240KiB 이하인지 확인한다.
+
+영역 검토는 수동 모드에서만 허용한다(주간·사건 모드와 결합하면 `AREA_REQUIRES_MANUAL_MODE`로
+모델 호출 없이 거절). 업데이트 영향과 릴리스 노트는 받지 않으며(`upstreamSkipped: area-scope`),
+스냅샷은 전체를 유지해 코드 후보는 전체 트리에서 검사한다. 영역 기준선은
+`operations/area-reviews.json`에 따로 두므로 주간 검토의 중복 억제 기준(`last-review.json`)을
+바꾸지 않는다. 운영 스킬 템플릿에 전체 검토 요청 시 `--area all` 사용법을 추가했다.
+
+검증: controller 65개(신규 영역 검토 7개 포함), worker 43개, 지식 원장 31개, 변경분 6개, 패치
+18개(3개 건너뜀), 설치기 15개, 보고 worker 24개, 보고서 16개, 절차 파일럿 13개, 텔레그램 운영
+시험이 통과했다. 첫 설치 후 설치본 CLI로 `--area all --mode weekly` 거절을 확인하다가 이 조합이
+예외로 끝나는 결함을 발견했다(모델 호출·주간 기록 변경 없음). 거절 처리와 시험을 추가해 다시
+설치했고(백업 `operations-install-backups/20260927T134401Z-9468efe141`), 설치본이 저장소와 같고
+같은 명령이 모델 호출 없이 `AREA_REQUIRES_MANUAL_MODE`를 반환하는 것을 확인했다.

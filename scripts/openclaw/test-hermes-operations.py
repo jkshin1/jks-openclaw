@@ -750,5 +750,120 @@ class IncidentScopeTests(unittest.TestCase):
         self.assertEqual(ops.INCIDENT_ISSUES, watchdog.HERMES_INCIDENT_ISSUES)
 
 
+class AreaAuditTests(unittest.TestCase):
+    """A split source audit offers one area per worker and never becomes the weekly baseline."""
+
+    FILES = ("scripts/openclaw/telegram-meeting.py", "scripts/openclaw/test-telegram-meeting.py",
+             "scripts/openclaw/hermes-ops-worker.py", "scripts/openclaw/test-hermes-ops-worker.py",
+             "scripts/openclaw/brand-new-tool.py", "docs/OPENCLAW_BRIEFING.md")
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name).resolve()
+        self.root, self.repo = self.home / "worker", self.home / "repo"
+        self.state, self.package = self.home / "state", self.home / "package"
+        for path in (self.root, self.repo / "scripts/openclaw", self.repo / "docs",
+                     self.state / "operations", self.package):
+            path.mkdir(parents=True)
+        for name in self.FILES:
+            (self.repo / name).write_text("# " + name + "\n")
+        self.calls = []
+        self.args = argparse.Namespace(root=self.root, repo=self.repo, state_dir=self.state,
+                                       package=self.package, mode="manual", force=False, area=None,
+                                       request="", collect_only=False, offline=False)
+
+    def evidence(self, *_):
+        return {"operations": {"ok": True, "issues": [], "warnings": []}}
+
+    def worker(self, root, request, receipt, log):
+        payload = json.loads(request.read_text())
+        self.calls.append(payload)
+        return {"completed": True, "model": "gpt-5.6-sol", "usage": {"total_tokens": 1}, "tool_calls": [],
+                "model_input_metrics": {"dispatch_attempts": 2, "finalization_reason": None},
+                "result": {"schemaVersion": 1, "analysis": "분석", "findings": [], "runbook_candidate": "",
+                           "patches": {"schemaVersion": 1, "replacements": [],
+                                       "snapshotSha256": payload["snapshotSha256"]}}}
+
+    def review(self, **overrides):
+        args = argparse.Namespace(**{**vars(self.args), **overrides})
+        return ops.run_review(args, worker_runner=self.worker, evidence_collector=self.evidence,
+                              upstream_collector=lambda: self.fail("an area audit fetched release notes"))
+
+    def test_every_real_source_belongs_to_exactly_one_named_area_small_enough_to_read(self):
+        repo = Path(__file__).resolve().parents[2]
+        paths = ops.source_paths(repo)
+        areas = ops.area_assignment(paths)
+        self.assertEqual(sorted(p for group in areas.values() for p in group), sorted(paths))
+        self.assertEqual(areas[ops.UNASSIGNED_AREA], [])
+        for area, group in areas.items():
+            # Keep each area readable in full before the worker's early finalization (about 90K estimate).
+            self.assertLessEqual(sum((repo / p).stat().st_size for p in group), 240 * 1024, area)
+
+    def test_one_area_offers_only_its_sources_without_release_notes(self):
+        result = self.review(area="telegram-workflows")
+        self.assertEqual(result["status"], "reviewed")
+        request = self.calls[-1]
+        self.assertEqual(sorted(request["sources"]), ["docs/OPENCLAW_BRIEFING.md", "scripts/openclaw/telegram-meeting.py",
+                                                      "scripts/openclaw/test-telegram-meeting.py"])
+        self.assertEqual(request["upstream"], [])
+        self.assertTrue(request["changeContext"]["fullReview"])
+        self.assertIn("telegram-workflows", request["request"])
+        self.assertEqual(request["evidence"]["areaScope"]["area"], "telegram-workflows")
+        self.assertEqual(result["areaScope"]["sourcePaths"], sorted(request["sources"]))
+        self.assertEqual(result["upstreamSkipped"], "area-scope")
+        self.assertIsNone(result["upstreamComplete"])
+        # The snapshot stays complete so a candidate is tested against the whole tree.
+        directory = Path(result["receiptPath"]).parent
+        self.assertTrue((directory / "snapshot/scripts/openclaw/hermes-ops-worker.py").is_file())
+
+    def test_area_audit_never_replaces_the_weekly_deduplication_baseline(self):
+        self.review(area="hermes-worker")
+        operations = self.root / "operations"
+        self.assertFalse((operations / "last-review.json").exists())
+        self.assertIn("hermes-worker", json.loads((operations / "area-reviews.json").read_text()))
+        (self.repo / "scripts/openclaw/hermes-ops-worker.py").write_text("# changed\n")
+        self.review(area="hermes-worker")
+        delta = self.calls[-1]["changeContext"]
+        self.assertEqual(delta["baselineStatus"], "available")
+        self.assertEqual(delta["changedSourcePaths"], ["scripts/openclaw/hermes-ops-worker.py"])
+
+    def test_unmatched_new_file_is_reviewed_in_the_unassigned_area(self):
+        self.review(area=ops.UNASSIGNED_AREA)
+        self.assertEqual(list(self.calls[-1]["sources"]), ["scripts/openclaw/brand-new-tool.py"])
+
+    def test_all_areas_run_one_worker_each_and_skip_empty_areas(self):
+        result = self.review(area="all")
+        self.assertEqual(result["status"], "area-audit")
+        self.assertTrue(result["ok"])
+        self.assertEqual([run["area"] for run in result["areas"]],
+                         ["telegram-workflows", "hermes-worker", ops.UNASSIGNED_AREA])
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(result["modelInferenceRequests"], 6)
+        self.assertFalse(result["telegramDelivered"])
+        self.assertTrue((self.root / "operations/latest-area-audit.json").is_file())
+
+    def test_a_failed_area_does_not_stop_the_remaining_areas(self):
+        def flaky(root, request, receipt, log):
+            payload = json.loads(request.read_text())
+            if "scripts/openclaw/hermes-ops-worker.py" in payload["sources"]:
+                raise ValueError("HERMES_WORKER_FAILED:WORKER_TIMEOUT")
+            return self.worker(root, request, receipt, log)
+        args = argparse.Namespace(**{**vars(self.args), "area": "all"})
+        result = ops.run_review(args, worker_runner=flaky, evidence_collector=self.evidence,
+                                upstream_collector=lambda: [])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failedAreas"], ["hermes-worker"])
+        self.assertEqual(len(result["areas"]), 3)
+
+    def test_area_is_refused_outside_manual_mode(self):
+        for area in ("hermes-worker", "all"):
+            result = self.review(area=area, mode="weekly")
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["errorCode"], "AREA_REQUIRES_MANUAL_MODE")
+        self.assertEqual(self.calls, [])
+        self.assertFalse((self.root / "operations/weekly-attempts.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
