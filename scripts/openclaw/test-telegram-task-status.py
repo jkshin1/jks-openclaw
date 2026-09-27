@@ -98,6 +98,14 @@ class TaskStatusTest(unittest.TestCase):
         self.assertEqual(hidden['tasks'], [])
         self.assertEqual(module.query_status(self.state, task_id='other-owner-task', include_internal=True)['tasks'], [])
 
+    def test_lost_native_task_is_reported_as_failed(self):
+        # The native executor treats lost as terminal; the ops status already counts it as a failure.
+        self.connection.execute("UPDATE task_runs SET status='lost',ended_at=NULL WHERE task_id='owner-native-task'")
+        self.connection.commit()
+        task = module.query_status(self.state)['tasks'][0]
+        self.assertEqual(task['execution']['status'], 'failed')
+        self.assertNotEqual(task['overall'], 'complete')
+
     def test_native_success_without_terminal_timestamp_is_unknown(self):
         self.connection.execute("UPDATE task_runs SET ended_at=NULL WHERE task_id='owner-native-task'")
         self.connection.commit()

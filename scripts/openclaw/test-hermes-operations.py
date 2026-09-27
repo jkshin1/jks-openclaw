@@ -40,7 +40,10 @@ class OperationsTests(unittest.TestCase):
 
     def worker(self, root, request, receipt, log):
         request = json.loads(request.read_text())
+        # A clean review reads every offered source to the end.
+        read = {path: {"unique_lines": len(entry["content"].splitlines())} for path, entry in request["sources"].items()}
         return {"completed": True, "model": "gpt-5.6-sol", "usage": {"total_tokens": 1},
+                "read_metrics": {"sources": read},
                 "tool_calls": [{"name": "skill_view", "succeeded": True}],
                 "result": {"schemaVersion": 1, "analysis": "이상 없음", "findings": [],
                            "patches": {"schemaVersion": 1, "snapshotSha256": request["snapshotSha256"],
@@ -695,6 +698,18 @@ class IncidentScopeTests(unittest.TestCase):
         self.assertEqual(delta["changedSourcePaths"], ["scripts/openclaw/telegram-watchdog.py"])
         self.assertEqual(delta["removedSourcePaths"], [])
 
+    def test_a_new_incident_with_the_same_fault_shape_is_not_deduplicated(self):
+        self.observer(["gateway-check-timeout"])
+        self.assertEqual(self.review()["status"], "reviewed")
+        self.assertEqual(self.review()["status"], "unchanged")
+        status = json.loads((self.state / "operations/telegram-watchdog-status.json").read_text())
+        status["incident"].update(id="44dd5d193b83", startedAt="2026-09-28T01:00:00+00:00")
+        status["hermesDispatch"]["lastIncidentId"] = "44dd5d193b83"
+        (self.state / "operations/telegram-watchdog-status.json").write_text(json.dumps(status))
+        self.assertEqual(self.review()["status"], "reviewed")
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[-1]["evidence"]["incident"]["id"], "44dd5d193b83")
+
     def test_observer_record_exports_fixed_codes_and_times_only(self):
         self.observer(["gateway-check-timeout", "rm -rf /", 7], dispatched=False,
                       lastNotification={"text": "PRIVATE_MESSAGE_TEXT"},
@@ -828,6 +843,31 @@ class AreaAuditTests(unittest.TestCase):
         self.assertEqual(delta["baselineStatus"], "available")
         self.assertEqual(delta["changedSourcePaths"], ["scripts/openclaw/hermes-ops-worker.py"])
 
+    def test_full_review_records_deterministic_source_coverage(self):
+        def reader(covered):
+            def run(root, request, receipt, log):
+                observed = self.worker(root, request, receipt, log)
+                sources = json.loads(request.read_text())["sources"]
+                observed["read_metrics"] = {"sources": {
+                    path: {"unique_lines": len(entry["content"].splitlines()), "total_lines": 1}
+                    for path, entry in sources.items() if path in covered}}
+                return observed
+            return run
+        args = argparse.Namespace(**{**vars(self.args), "area": "hermes-worker"})
+        both = {"scripts/openclaw/hermes-ops-worker.py", "scripts/openclaw/test-hermes-ops-worker.py"}
+        result = ops.run_review(args, worker_runner=reader(both), evidence_collector=self.evidence,
+                                upstream_collector=lambda: [])
+        self.assertTrue(result["sourceReviewComplete"])
+        self.assertEqual(result["sourceCoverage"]["fullyRead"], 2)
+        self.assertFalse(result["attentionRequired"])
+        self.assertIn("전체 읽음 (2/2", Path(result["reportPath"]).read_text())
+        result = ops.run_review(args, worker_runner=reader({"scripts/openclaw/hermes-ops-worker.py"}),
+                                evidence_collector=self.evidence, upstream_collector=lambda: [])
+        self.assertFalse(result["sourceReviewComplete"])
+        self.assertEqual(result["sourceCoverage"]["unread"], ["scripts/openclaw/test-hermes-ops-worker.py"])
+        self.assertTrue(result["attentionRequired"])
+        self.assertIn("일부만 읽음 (1/2", Path(result["reportPath"]).read_text())
+
     def test_unmatched_new_file_is_reviewed_in_the_unassigned_area(self):
         self.review(area=ops.UNASSIGNED_AREA)
         self.assertEqual(list(self.calls[-1]["sources"]), ["scripts/openclaw/brand-new-tool.py"])
@@ -840,6 +880,8 @@ class AreaAuditTests(unittest.TestCase):
                          ["telegram-workflows", "hermes-worker", ops.UNASSIGNED_AREA])
         self.assertEqual(len(self.calls), 3)
         self.assertEqual(result["modelInferenceRequests"], 6)
+        # The stub worker reads nothing, so no area may claim a complete source review.
+        self.assertEqual(result["incompleteAreas"], ["telegram-workflows", "hermes-worker", ops.UNASSIGNED_AREA])
         self.assertFalse(result["telegramDelivered"])
         self.assertTrue((self.root / "operations/latest-area-audit.json").is_file())
 

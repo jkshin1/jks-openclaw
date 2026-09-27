@@ -606,6 +606,10 @@ def stable_fingerprint(evidence, upstream, snapshot_sha):
               "knowledgeProofState": (evidence.get("procedureKnowledge") or {}).get("proofStateSha256"),
               "releases": [{"name": r["name"], "ok": r["ok"], "tag": r.get("tag"),
                             "bodyHash": digest(r.get("body", ""))} for r in upstream]}
+    if isinstance(evidence.get("incident"), dict):
+        # A new observer incident with the same fault shape is a separate event and must reach the
+        # model; only a repeated dispatch of the same incident is deduplicated.
+        stable["incident"] = {key: evidence["incident"].get(key) for key in ("id", "startedAt")}
     return digest(stable)
 
 
@@ -639,9 +643,28 @@ def report_text(receipt, result):
         label = " (근거 불충분)" if finding.get("evidenceStatus") == "insufficient" else ""
         lines += ["- " + finding.get("severity", "info") + ": " + finding.get("title", finding.get("id", "finding")) + label,
                   "  " + finding.get("recommendation", "")]
+    coverage = receipt.get("sourceCoverage")
+    if isinstance(coverage, dict):
+        state = {True: "전체 읽음", False: "일부만 읽음", None: "증분 검토"}[receipt.get("sourceReviewComplete")]
+        lines += ["", "소스 읽기: {} ({}/{}개 끝까지 읽음)".format(state, coverage["fullyRead"], coverage["sourceCount"])]
     lines += ["", "코드 후보 검증: " + str(receipt.get("candidateVerification", {}).get("status", "none")),
               "운영 반영: 별도 배포 기록 필요", "Telegram 전송: 수행하지 않음", ""]
     return "\n".join(lines)
+
+
+def source_coverage(sources, read_metrics):
+    """Deterministic read coverage of the offered sources; a model's own claim is not evidence."""
+    read = (read_metrics or {}).get("sources") or {}
+    partial, unread = [], []
+    for path, entry in sources.items():
+        total = len(entry["content"].splitlines())
+        seen = read.get(path)
+        if not isinstance(seen, dict):
+            unread.append(path)
+        elif not isinstance(seen.get("unique_lines"), int) or seen["unique_lines"] < total:
+            partial.append(path)
+    return {"complete": not partial and not unread, "sourceCount": len(sources),
+            "fullyRead": len(sources) - len(partial) - len(unread), "partial": partial, "unread": unread}
 
 
 def retain_worker_evidence(receipt, worker, path):
@@ -698,10 +721,12 @@ def run_all_areas(args, root, repo, state, operations, worker_runner, upstream_c
                      "receiptPath": receipt["receiptPath"], "reportPath": receipt.get("reportPath"),
                      "sourceCount": len(areas[area]), "attentionRequired": bool(receipt.get("attentionRequired")),
                      "modelInferenceRequests": receipt.get("modelInferenceRequests"),
+                     "sourceReviewComplete": receipt.get("sourceReviewComplete"),
                      "finalizationReason": (receipt.get("model_input_metrics") or {}).get("finalization_reason")})
     summary = {"schemaVersion": 1, "status": "area-audit", "ok": bool(runs) and all(run["ok"] for run in runs),
                "startedAt": started, "finishedAt": now_iso(), "applied": False, "telegramDelivered": False,
                "areas": runs, "failedAreas": [run["area"] for run in runs if not run["ok"]],
+               "incompleteAreas": [run["area"] for run in runs if run["sourceReviewComplete"] is False],
                "modelInferenceRequests": sum(run["modelInferenceRequests"] or 0 for run in runs)}
     write_json(operations / "latest-area-audit.json", summary)
     return summary
@@ -843,6 +868,10 @@ def run_locked(args, root, repo, state, operations, worker_runner, upstream_coll
                 verification["status"] = "passed" if verification.get("ok") is True else "failed"
             else:
                 verification = {"status": "no-changes", "ok": True, "checks": [], "activated": False}
+            coverage = source_coverage(sources, receipt.get("read_metrics"))
+            receipt["sourceCoverage"] = coverage
+            # Only a full review promises every source; an incremental review reads its changes.
+            receipt["sourceReviewComplete"] = coverage["complete"] if delta["fullReview"] else None
             receipt.update(ok=True, status="reviewed",
                            candidateVerification=verification, analysisPath=str(directory / "analysis.json"),
                            reportPath=str(directory / "report.md"), workerReceiptPath=str(directory / "worker-receipt.json"))
@@ -853,6 +882,7 @@ def run_locked(args, root, repo, state, operations, worker_runner, upstream_coll
                                 or any(evidence.get(key, {}).get("available") is False
                                        for key in ("configuration", "openclaw", "hermes")))
             receipt["attentionRequired"] = (observed_problem or receipt["upstreamComplete"] is False
+                                            or receipt["sourceReviewComplete"] is False
                                             or bool(candidate.get("replacements"))
                                             or any(f.get("severity") in {"warning", "critical", "high", "medium", "error"}
                                                    for f in result.get("findings", [])))
@@ -880,6 +910,7 @@ def run_locked(args, root, repo, state, operations, worker_runner, upstream_coll
                 "runId": run_id, "mode": args.mode, "area": area, "status": receipt["status"],
                 "finishedAt": receipt["finishedAt"], "fingerprint": receipt.get("fingerprint"),
                 "attentionRequired": bool(receipt.get("attentionRequired")),
+                "sourceReviewComplete": receipt.get("sourceReviewComplete"),
                 "candidateStatus": (receipt.get("candidateVerification") or {}).get("status"),
                 "findingIds": receipt.get("findingIds", []),
                 "findingKinds": {f["id"]: f.get("kind", "unclassified")

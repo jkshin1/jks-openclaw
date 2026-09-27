@@ -89,7 +89,9 @@ rm -f -- "$audit_temp" "$audit_temp.err"
 if (( restart == 1 )); then
     openclaw_run gateway install --runtime node --wrapper "$openclaw_wrapper_path" --force
     openclaw_run gateway start
-    "$script_dir/verify-gateway.sh"
+    # --restart is the operator's explicit request to bring the lockdown back online; like a fresh
+    # install it takes full live verification, including the one transient incognito session.
+    "$script_dir/verify-gateway.sh" --acknowledge-transient-session-write
     "$script_dir/security-audit.sh" --deep
     echo "OK Gateway restarted in reviewed loopback/tool-free lockdown."
 else

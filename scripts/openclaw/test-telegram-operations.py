@@ -163,6 +163,12 @@ class OperationsTest(unittest.TestCase):
         self.assertIn('전송 대기 15분 초과',status.human(result))
         self.assertIn('KST',status.human(result))
 
+    def test_dead_letter_delivery_is_an_immediate_failure(self):
+        self.connection.execute('INSERT INTO delivery_queue_entries VALUES(?,?)',('dead_letter',NOW-1000))
+        result = self.collect()
+        self.assertEqual(result['queue']['failed'],1)
+        self.assertIn('delivery-failed',result['issues'])
+
     def test_lost_task_is_terminal_with_or_without_end_time_and_remains_in_failure_history(self):
         for ended_at in (None, NOW-7*3600000):
             with self.subTest(ended_at=ended_at):

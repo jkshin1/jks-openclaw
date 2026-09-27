@@ -275,7 +275,7 @@ def collect(state=DEFAULT_STATE, now=None, queue_stale_seconds=900, long_task_se
             counts = safe_counts(connection.execute("SELECT status, COUNT(*) FROM delivery_queue_entries "
                                                      "GROUP BY status"), QUEUE_STATUSES)
             queue = connection.execute("SELECT COUNT(*), MIN(enqueued_at), "
-                                       "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) "
+                                       "SUM(CASE WHEN status IN ('failed','dead_letter') THEN 1 ELSE 0 END) "
                                        "FROM delivery_queue_entries WHERE status!='completed'").fetchone()
             result["queue"] = {"statusCounts": counts, "pending": queue[0],
                                "oldestAgeSeconds": age_seconds(now, queue[1]), "failed": queue[2] or 0}

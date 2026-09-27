@@ -121,6 +121,11 @@ for acknowledgement_contract in \
     rg -F "$acknowledgement_contract" "$script_dir"/*.sh >/dev/null ||
         fail "transient-session acknowledgement contract missing: $acknowledgement_contract"
 done
+while IFS= read -r verifier_call; do
+    [[ "$verifier_call" == *--acknowledge-transient-session-write* || "$verifier_call" == *--observe-only* ||
+       "$verifier_call" == *--skip-live* ]] ||
+        fail "verify-gateway.sh caller omits the transient-session consent and would always fail: $verifier_call"
+done < <(rg -n -F '$script_dir/verify-gateway.sh"' "$script_dir" --glob '*.sh' --glob '!test-*.sh' --glob '!verify-gateway.sh')
 for soak_contract in \
     'PERSONAL_EDGE_SOAK_DEFAULT_DURATION_SECONDS=86400' \
     'PERSONAL_EDGE_SOAK_DEFAULT_INTERVAL_SECONDS=300' \

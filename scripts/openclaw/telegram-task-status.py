@@ -338,7 +338,8 @@ def inspect_workflow(record, state_dir, owner, session):
 def native_summary(row):
     native_status = row.get('status')
     mapped = {'queued': 'pending', 'running': 'running', 'waiting': 'running', 'succeeded': 'succeeded',
-              'failed': 'failed', 'cancelled': 'cancelled', 'canceled': 'cancelled', 'timed_out': 'failed'}
+              'failed': 'failed', 'lost': 'failed', 'cancelled': 'cancelled', 'canceled': 'cancelled',
+              'timed_out': 'failed'}
     execution_state = mapped.get(native_status, 'unknown')
     if native_status == 'succeeded' and row.get('ended_at') is None:
         execution_state = 'unknown'
